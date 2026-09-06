@@ -1,5 +1,6 @@
 program mousedemo;
 { Live INT 33h mouse demo  --  CH375Mouse, StevenC
+  Public domain (the Unlicense); see LICENSE.
 
   Shows the text-mode cursor and then sits reading the mouse, so the pointer
   can be watched moving on the real screen through the capture card while

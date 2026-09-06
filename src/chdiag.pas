@@ -1,5 +1,6 @@
 program chdiag;
 { CH375 host-mode diagnostic  --  CH375Mouse, StevenC
+  Public domain (the Unlicense); see LICENSE.
 
   What USBMOUSE.COM does at load time, but printing every step, so a failure
   says which step failed rather than just "no mouse".  It follows the order

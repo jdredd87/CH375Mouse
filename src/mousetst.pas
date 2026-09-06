@@ -1,5 +1,6 @@
 program mousetst;
 { INT 33h conformance test for USBMOUSE.COM  --  CH375Mouse, StevenC
+  Public domain (the Unlicense); see LICENSE.
 
   The USB half of this driver and its INT 33h half fail independently, so
   they are tested independently.  USBMOUSE exposes a private function 7F01h

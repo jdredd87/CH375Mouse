@@ -1,5 +1,6 @@
 program tickchk;
 { INT 08h chain-rate check  --  CH375Mouse, StevenC
+  Public domain (the Unlicense); see LICENSE.
 
   USBMOUSE speeds the PIT up by eight so it can poll the mouse at 145 Hz,
   and forwards only every eighth interrupt to the handler that was in the

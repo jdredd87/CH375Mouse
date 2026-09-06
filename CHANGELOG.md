@@ -36,3 +36,6 @@ CH375B rev B7 on an ISA card at `260h`, a low-speed Pixart optical mouse
   `PS2TEST` (25), plus `TICKCHK`, `CLKCHK`, `CLICKTST`, `MDEMO`, `CHDIAG`.
 * Assembles identically with `nasm` on a PC and with `MNASMFIX.COM -O9` on
   the DOS machine itself; `build.cmd dosbuild` checks that, byte for byte.
+* Released into the public domain under the Unlicense.  `tools/MNASMFIX.COM`
+  is third-party and keeps its own terms.
+* Built and tested over DOSBridge -- https://github.com/jdredd87/DOSBridge

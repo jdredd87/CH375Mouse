@@ -1,5 +1,6 @@
 program clicktst;
 { Button diagnostic for USBMOUSE  --  CH375Mouse, StevenC
+  Public domain (the Unlicense); see LICENSE.
 
   Movement working while clicks do not splits the problem cleanly in two,
   and this says which half it is.  It watches three things at once:

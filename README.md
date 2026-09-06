@@ -10,7 +10,7 @@ timer hook and presents the result to DOS as a standard **INT 33h** driver.
 
 It is written in assembly and assembles either with `nasm` on Windows or with
 `MNASMFIX.COM` on the DOS machine itself. Both produce a byte-identical
-6,966-byte image; that is checked, not assumed.
+7,029-byte image; that is checked, not assumed.
 
 **Working on the development machine**, against a low-speed Pixart optical
 mouse (VID `093A`, PID `2510`) on a CH375B rev B7:
@@ -40,7 +40,7 @@ actually want.
 
 | | |
 |---|---|
-| `src/usbmouse.asm` | the driver. Assembles to `USBMOUSE.COM`, 6,966 bytes, of which about 1.5 KB stays resident |
+| `src/usbmouse.asm` | the driver. Assembles to `USBMOUSE.COM`, 7,029 bytes, of which about 1.5 KB stays resident |
 | `src/chdiag.pas` | CH375 diagnostic: the same bring-up, printing every command, status and chip register |
 | `src/mousetst.pas` | INT 33h conformance test — 34 checks against a loaded driver |
 | `src/evtest.pas` | INT 33h function 0Ch test — 19 checks that the event callback fires for the right events and only those |
@@ -69,8 +69,8 @@ mode (`-Tmsdos -Pi8086`) and **nasm**, which ships with it. Nothing in the
 tree depends on anything but the RTL's `Dos` unit.
 
 The targets that run something on the DOS machine additionally need
-dosbridge to reach it; set `DOSBRIDGE` if it is
-not in `C:\dosbridge`. Everything here can equally well be copied to the DOS
+[DOSBridge](https://github.com/jdredd87/DOSBridge) to reach it; set
+`DOSBRIDGE` if it is not in `C:\dosbridge`. Everything here can equally well be copied to the DOS
 machine by any other means and run there by hand.
 
 ---
@@ -654,7 +654,8 @@ build.cmd dosbuild
 
 does the whole thing: sends `src\usbmouse.asm` and `tools\MNASMFIX.COM` to
 the DOS machine, assembles there, fetches the result back and compares it
-with `bin\USBMOUSE.COM` byte for byte. By hand it is:
+with `bin\USBMOUSE.COM` byte for byte. By hand, with
+[DOSBridge](https://github.com/jdredd87/DOSBridge)'s commands, it is:
 
 ```
 dosdeploy src\usbmouse.asm    C:\WORK
@@ -676,10 +677,27 @@ never converges.
 
 ---
 
+## Licence
+
+**Public domain**, under [the Unlicense](https://unlicense.org) — see
+`LICENSE`. Copy it, sell it, strip my name off it, do whatever you like. No
+attribution required, none expected.
+
+The one exception is `tools/MNASMFIX.COM`, which is somebody else's work and
+stays under their terms. Delete it if you would rather not carry it: nothing
+depends on it, and `nasm` builds the identical image.
+
+---
+
 ## Credits
 
 Written by **StevenC**. <https://github.com/jdredd87/CH375Mouse>
 
-`tools/MNASMFIX.COM` is not mine: it is [mininasm](https://github.com/pts/pts-mininasm)
-with the read-only-output bug patched out, bundled so the driver can be
-rebuilt on the DOS machine with nothing else present.
+Built and tested over [DOSBridge](https://github.com/jdredd87/DOSBridge),
+which is what put every one of these binaries on the real machine and
+brought the output back.
+
+`tools/MNASMFIX.COM` is not mine: it is
+[mininasm](https://github.com/pts/mininasm) with the read-only-output bug
+patched out, bundled so the driver can be rebuilt on the DOS machine with
+nothing else present.

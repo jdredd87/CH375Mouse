@@ -4,6 +4,7 @@
 ;
 ;   Version 1.0.0                                                  StevenC
 ;   https://github.com/jdredd87/CH375Mouse
+;   Public domain (the Unlicense).  Do anything you like with it.
 ;
 ; The version number is written down in exactly one place: ver_str, a few
 ; lines below the signature.  It is what every message prints and what a
@@ -2638,4 +2639,5 @@ msg_help:
         db 'Options may be combined, in any order:  USBMOUSE @260 /R=4 /V', 13, 10
         db 13, 10
         db 'StevenC   https://github.com/jdredd87/CH375Mouse', 13, 10
+        db 'Public domain (the Unlicense).  Do anything you like with it.', 13, 10
         db '$'

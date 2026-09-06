@@ -1,6 +1,7 @@
 @echo off
 REM  CH375Mouse -- build everything into bin\
 REM  StevenC -- https://github.com/jdredd87/CH375Mouse
+REM  Public domain (the Unlicense); see LICENSE.
 REM
 REM    build.cmd            build only
 REM    build.cmd test       ...then run the INT 33h and event-handler suites
@@ -19,8 +20,9 @@ REM    fpc    Free Pascal cross-compiling to MS-DOS real mode (-Tmsdos -Pi8086)
 REM    nasm   ships with Free Pascal; both must be on PATH
 REM
 REM  The build needs nothing else.  Every target that runs something on the
-REM  DOS machine additionally needs dosbridge to reach it -- set DOSBRIDGE if
+REM  DOS machine additionally needs DOSBridge to reach it -- set DOSBRIDGE if
 REM  it is not in C:\dosbridge.
+REM      https://github.com/jdredd87/DOSBridge
 REM
 REM  The driver also assembles on the DOS machine itself, byte for byte
 REM  identically, using the patched mininasm in tools\:
