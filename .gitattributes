@@ -1,0 +1,13 @@
+# DOS project: keep everything CRLF, including in a checkout on Linux, so the
+# sources are still readable with EDIT on the target machine and MNASMFIX
+# assembles them unchanged.
+*           text=auto eol=crlf
+*.asm       text eol=crlf
+*.pas       text eol=crlf
+*.cmd       text eol=crlf
+*.md        text eol=crlf
+
+# The built tools are committed deliberately: the DOS machine this targets has
+# no compiler for them, and USBMOUSE.COM is the thing most people want.
+*.COM       binary
+*.EXE       binary

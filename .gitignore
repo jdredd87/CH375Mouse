@@ -1,0 +1,11 @@
+# Free Pascal intermediates.  build.cmd deletes these, but a failed build
+# leaves them behind.
+*.a
+*.o
+*.ppu
+*.bak
+
+# Editor and OS litter
+*~
+Thumbs.db
+desktop.ini
