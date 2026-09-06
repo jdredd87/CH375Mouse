@@ -1,5 +1,5 @@
 program clkchk;
-{ DOS clock check  --  CH375Mouse
+{ DOS clock check  --  CH375Mouse, StevenC
 
   USBMOUSE divides the PIT by eight so it can poll the mouse at 145 Hz, and
   forwards every eighth tick to the original INT 08h.  If that arithmetic

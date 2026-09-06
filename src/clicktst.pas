@@ -1,5 +1,5 @@
 program clicktst;
-{ Button diagnostic for USBMOUSE  --  CH375Mouse
+{ Button diagnostic for USBMOUSE  --  CH375Mouse, StevenC
 
   Movement working while clicks do not splits the problem cleanly in two,
   and this says which half it is.  It watches three things at once:

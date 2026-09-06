@@ -1,5 +1,5 @@
 program ps2test;
-{ PS/2 BIOS mouse emulation test  --  CH375Mouse
+{ PS/2 BIOS mouse emulation test  --  CH375Mouse, StevenC
 
   USBMOUSE /W makes the USB mouse look like a PS/2 pointing device to the
   BIOS interface, which is the only thing Windows 3.x understands.  This

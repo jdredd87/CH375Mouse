@@ -1,5 +1,5 @@
 program evtest;
-{ INT 33h event-handler test  --  CH375Mouse
+{ INT 33h event-handler test  --  CH375Mouse, StevenC
 
   Function 0Ch installs a callback plus a mask of the events an application
   wants.  The driver must call it only for events in that mask, and must

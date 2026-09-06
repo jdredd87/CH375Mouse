@@ -1,5 +1,7 @@
 # CH375Mouse — a DOS mouse driver for a USB mouse on a CH375
 
+**Version 1.0.0** · StevenC · <https://github.com/jdredd87/CH375Mouse>
+
 `USBMOUSE.COM` is a resident DOS mouse driver that gets its input from a USB
 HID mouse plugged into the WCH **CH375** ISA card at I/O `260h`. It enumerates
 the mouse itself — bus reset, speed negotiation, descriptors, address,
@@ -8,15 +10,16 @@ timer hook and presents the result to DOS as a standard **INT 33h** driver.
 
 It is written in assembly and assembles either with `nasm` on Windows or with
 `MNASMFIX.COM` on the DOS machine itself. Both produce a byte-identical
-6,857-byte image; that is checked, not assumed.
+6,966-byte image; that is checked, not assumed.
 
 **Working on the development machine**, against a low-speed Pixart optical
 mouse (VID `093A`, PID `2510`) on a CH375B rev B7:
 
 ```
+USBMOUSE 1.0.0 -- StevenC
 Low-speed device; USB bus set to 1.5 Mbps.
 USB mouse on CH375: endpoint 1, HID interface 0, VID/PID 093A/2510
-USBMOUSE resident.  INT 33h installed.
+USBMOUSE 1.0.0 resident.  INT 33h installed.
 ```
 
 ```
@@ -37,15 +40,16 @@ actually want.
 
 | | |
 |---|---|
-| `src/usbmouse.asm` | the driver. Assembles to `USBMOUSE.COM`, 6,857 bytes, of which about 1.5 KB stays resident |
+| `src/usbmouse.asm` | the driver. Assembles to `USBMOUSE.COM`, 6,966 bytes, of which about 1.5 KB stays resident |
 | `src/chdiag.pas` | CH375 diagnostic: the same bring-up, printing every command, status and chip register |
-| `src/mousetst.pas` | INT 33h conformance test — 33 checks against a loaded driver |
+| `src/mousetst.pas` | INT 33h conformance test — 34 checks against a loaded driver |
 | `src/evtest.pas` | INT 33h function 0Ch test — 19 checks that the event callback fires for the right events and only those |
 | `src/ps2test.pas` | PS/2 BIOS emulation test — 25 checks, replicating the exact call sequence Windows 3.0's `MOUSE.DRV` makes |
 | `src/tickchk.pas` | measures the INT 08h and INT 1Ch rates a handler hooking *after* the driver sees |
 | `src/clicktst.pas` | button diagnostic: watches the raw report, the INT 33h mask and the press counters together, and beeps so you know when to click |
 | `src/mdemo.pas` | shows the cursor and reads the mouse for 25 s, so the pointer can be watched moving |
 | `src/clkchk.pas` | proves the DOS clock still keeps time with the driver's PIT change in place |
+| `CHANGELOG.md` | what changed in each version |
 | `tools/MNASMFIX.COM` | mininasm, patched so it does not create its output read-only. Assembles the driver on the DOS machine itself; not my work, included so the repository is self-contained |
 
 ## Building
@@ -68,6 +72,50 @@ The targets that run something on the DOS machine additionally need
 dosbridge to reach it; set `DOSBRIDGE` if it is
 not in `C:\dosbridge`. Everything here can equally well be copied to the DOS
 machine by any other means and run there by hand.
+
+---
+
+## Version
+
+The driver carries a version number from 1.0.0 onwards, and prints it on
+every run:
+
+```
+USBMOUSE 1.0.0 -- StevenC
+```
+
+It is written down in exactly one place — `ver_str` in `src/usbmouse.asm`,
+immediately after the resident signature:
+
+```asm
+signature:
+        db      'USBMOUS1'                      ; 0103
+ver_str:
+        db      '1.0.0$'                        ; 010B
+```
+
+That string is both what gets printed and what stays resident, so there is no
+second copy to forget. Releasing is: bump it, add a `CHANGELOG.md` entry,
+rebuild, `git tag -a v1.2.3`.
+
+Because it is resident, and at a fixed offset, `USBMOUSE /S` reports the
+version of the copy that is **already loaded** rather than its own — which is
+the number you want when you are not certain which build went resident:
+
+```
+Loaded: USBMOUSE 1.0.0.  live=1  endpoint=1  reports=0  timer divisor=8 ...
+```
+
+Any program can read it the same way: follow the `INT 33h` vector to the
+driver's segment, check for `USBMOUS1` at `0103h`, then read ASCII from
+`010Bh` up to the `$`. `MOUSETST` does exactly that, and checks it looks like
+a version rather than checking it against a fixed number, so the check keeps
+working across releases. Builds before 1.0.0 have nothing at `010Bh`.
+
+Do not confuse this with **INT 33h function `24h`**, which reports `7.00`.
+That is the API level — which interface the driver implements, so that
+applications know which calls they may make — and it has nothing to do with
+which build is answering.
 
 ---
 
@@ -102,7 +150,8 @@ Everything an ordinary DOS application asks for:
 counters · `0Ch` install event handler · `0Fh` mickeys per 8 pixels ·
 `14h` swap event handler · `15h` state buffer size · `1Ah`/`1Bh` sensitivity ·
 `1Fh`/`20h` disable/enable · `21h` software reset · `23h` language ·
-`24h` version and type (reports 7.00).
+`24h` API level and type (reports 7.00 — the interface level, not this
+driver's own version; see [Version](#version)).
 
 Two private functions exist for testing, outside the Microsoft numbering:
 
@@ -376,7 +425,7 @@ Movement and clicks fail independently, so they are diagnosed independently.
 `USBMOUSE /S` now reports what the button path has seen:
 
 ```
-USBMOUSE is loaded.  live=1  endpoint=1  reports=1043  buttons seen=01  button reports=4
+Loaded: USBMOUSE 1.0.0.  live=1  endpoint=1  reports=1043  buttons seen=01  button reports=4
 ```
 
 `buttons seen` is the OR of every button mask that has arrived in a report
@@ -529,9 +578,10 @@ building the moment the handler returned. The offset is `[bp+8]`.
 `build.cmd test` loads the driver, runs `MOUSETST` and unloads:
 
 ```
+USBMOUSE 1.0.0 -- StevenC
 Low-speed device; USB bus set to 1.5 Mbps.
 USB mouse on CH375: endpoint 1, HID interface 0, VID/PID 093A/2510
-USBMOUSE resident.  INT 33h installed.
+USBMOUSE 1.0.0 resident.  INT 33h installed.
 === USBMOUSE INT 33h test ===
   ok  function 00h reports a driver installed
   ok  button count = 3
@@ -540,16 +590,17 @@ watching for real USB reports for about 10 seconds
   reports delivered by the mouse: 838
   live position 325,0 buttons 0
 
-33/33 checks passed.
+34/34 checks passed.
+USBMOUSE 1.0.0 -- StevenC
 USBMOUSE unloaded.
 ```
 
 `EVTEST` then runs 19 more against the function 0Ch callback, and `PS2TEST`
-25 against the PS/2 BIOS emulation -- 77 in all, and the whole set has been
+25 against the PS/2 BIOS emulation -- 78 in all, and the whole set has been
 run green against a live mouse with the driver loaded `/W`:
 
 ```
-33/33 checks passed.                    MOUSETST
+34/34 checks passed.                    MOUSETST
 19/19 checks passed.                    EVTEST
 25/25 checks passed.                    PS2TEST
 INT 08h : 18 Hz     INT 1Ch : 18 Hz     TICKCHK
@@ -561,14 +612,18 @@ The last line is the driver's own view afterwards: still enumerated, back at
 the fast poll rate now that TICKCHK has let go of the timer, and having seen
 all three buttons.
 
-The 33 checks cover position setting and read-back, movement in both directions
+`PS2TEST`'s last check needs the mouse to actually be moving; with an idle
+mouse it is not asserted and the run reports `24/24` rather than failing.
+
+The 34 checks cover position setting and read-back, movement in both directions
 including negative deltas, clamping at both ends of the default and of a
 narrowed range, sub-unit accumulation at half sensitivity, motion counters and
 their clear-on-read, all three buttons' state, press and release counts and the
 positions they were recorded at, cursor show/move/hide, and reset. They are
 driven through the `7F01h` injection hook, with polling suspended via `7F02h`,
 so every case is exact and repeatable; polling is resumed for the last section
-and the real mouse then proves the USB path on top of that.
+and the real mouse then proves the USB path on top of that. The 34th reads the
+version string out of the resident image and checks it is one.
 
 Also verified on the machine:
 
@@ -618,3 +673,13 @@ natural size. If a displacement will not reach, **add a trampoline** — there
 are four in the option parser already — rather than widening the jump:
 mininasm re-shortens jumps on every pass, so a source that forces them long
 never converges.
+
+---
+
+## Credits
+
+Written by **StevenC**. <https://github.com/jdredd87/CH375Mouse>
+
+`tools/MNASMFIX.COM` is not mine: it is [mininasm](https://github.com/pts/pts-mininasm)
+with the read-only-output bug patched out, bundled so the driver can be
+rebuilt on the DOS machine with nothing else present.

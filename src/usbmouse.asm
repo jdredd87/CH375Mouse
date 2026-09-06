@@ -2,6 +2,14 @@
 ; USBMOUSE.COM -- a DOS INT 33h mouse driver fed by a USB HID mouse
 ;                 attached to a WCH CH375 in host mode.
 ;
+;   Version 1.0.0                                                  StevenC
+;   https://github.com/jdredd87/CH375Mouse
+;
+; The version number is written down in exactly one place: ver_str, a few
+; lines below the signature.  It is what every message prints and what a
+; resident copy carries in memory, so bumping it there is the whole job --
+; that, a CHANGELOG.md entry and a git tag.
+;
 ;   USBMOUSE [@260] [/S] [/U] [/F] [/V] [/R=n]
 ;       @nnn    CH375 I/O base in hex, default 260
 ;       /S      report status of an already-loaded copy
@@ -86,6 +94,16 @@ entry:
 ; interrupt vectors of the one underneath.
 signature:
         db      'USBMOUS1'                      ; 0103
+
+; The version, in ASCII, ending in '$' so it can be printed as it stands.
+; It is resident and it sits immediately after the signature, so /S can read
+; the version of the copy that is ALREADY LOADED rather than reporting its
+; own -- which is the interesting number when two builds are in play.  Keep
+; it at 010B: that offset is now part of what a resident copy promises, the
+; same way the signature at 0103 is.  Versions before 1.0.0 carry nothing
+; here, so /S against one of those prints rubbish; there is one such build.
+ver_str:
+        db      '1.0.0$'                        ; 010B
 
 ; ---- saved vectors ----
 old33:  dd      0
@@ -1240,6 +1258,9 @@ f_lang:
         jmp     near i33_out
 
 ; --- 24h version and type ---
+; This is the INT 33h API LEVEL, not this driver's version: applications
+; switch features on by it, so it says what the interface does, not which
+; build is answering.  The build's own version is ver_str, up at 010B.
 f_ver:
         mov     word [bp+6], 0x0700      ; report as 7.00
         mov     word [bp+4], 0x0400      ; CH=4 "other bus", CL=0 no IRQ
@@ -1406,6 +1427,9 @@ resident_end:
 init:
         mov     sp, 0xFFFE
         call    parse_args
+        call    print_id                 ; every run says what it is
+        mov     dx, msg_by
+        call    puts
         cmp     byte [op_help], 0
         je      short init_nohelp
         mov     dx, msg_help
@@ -1523,6 +1547,7 @@ init_nops2:
         mov     byte [on_top], 1
         call    pit_fast_cli
 
+        call    print_id
         mov     dx, msg_ok
         call    puts
 
@@ -1568,6 +1593,10 @@ do_status:
         jmp     near stat_none
 stat_have:
         mov     dx, msg_isres
+        call    puts
+        mov     dx, ver_str              ; the LOADED copy's version, read out
+        call    puts_es                  ; of its image, not ours
+        mov     dx, msg_isres2
         call    puts
         mov     al, [es:live]
         add     al, '0'
@@ -2182,6 +2211,24 @@ crlf:
         call    putc
         ret
 
+; Print "USBMOUSE 1.0.0".  Used by the identity line, by the resident banner
+; and by /?, so all three cannot drift apart.
+print_id:
+        mov     dx, msg_prog
+        call    puts
+        mov     dx, ver_str
+        call    puts
+        ret
+
+; puts, but for a string in the resident copy (ES) rather than in this one.
+puts_es:
+        push    ds
+        push    es
+        pop     ds
+        call    puts
+        pop     ds
+        ret
+
 puts:                                    ; DX -> '$'-terminated string
         push    ax
         mov     ah, 9
@@ -2524,7 +2571,9 @@ in_hid:     db  0
 got_if:     db  0
 got_ep:     db  0
 
-msg_ok:        db 'USBMOUSE resident.  INT 33h installed.', 13, 10, '$'
+msg_ok:        db ' resident.  INT 33h installed.', 13, 10, '$'
+msg_prog:      db 'USBMOUSE $'
+msg_by:        db ' -- StevenC', 13, 10, '$'
 msg_t_conn:    db '  connect          : $'
 msg_t_conn2:   db '  connect after reset: $'
 msg_t_rate:    db '  device rate reg 07 : $'
@@ -2537,7 +2586,8 @@ msg_found:     db 'USB mouse on CH375: endpoint $'
 msg_iface:     db ', HID interface $'
 msg_vidpid:    db ', VID/PID $'
 msg_already:   db 'USBMOUSE is already loaded.  /U unloads it.', 13, 10, '$'
-msg_isres:     db 'USBMOUSE is loaded.  live=$'
+msg_isres:     db 'Loaded: USBMOUSE $'
+msg_isres2:    db '.  live=$'
 msg_s_ep:      db '  endpoint=$'
 msg_s_rep:     db '  reports=$'
 msg_s_rate:    db '  timer divisor=$'
@@ -2568,7 +2618,7 @@ cfg_buf:    times 96 db 0
 ; The help text lives past the resident end, so however long it gets it costs
 ; nothing but disk.
 msg_help:
-        db 'USBMOUSE  -  DOS INT 33h mouse driver for a USB mouse on a CH375', 13, 10
+        db 'A DOS INT 33h mouse driver for a USB mouse on a CH375.', 13, 10
         db 13, 10
         db '  USBMOUSE            enumerate the mouse and install', 13, 10
         db '  USBMOUSE @nnn       CH375 I/O base in hex        (default 260)', 13, 10
@@ -2586,4 +2636,6 @@ msg_help:
         db '  USBMOUSE /?         this help', 13, 10
         db 13, 10
         db 'Options may be combined, in any order:  USBMOUSE @260 /R=4 /V', 13, 10
+        db 13, 10
+        db 'StevenC   https://github.com/jdredd87/CH375Mouse', 13, 10
         db '$'

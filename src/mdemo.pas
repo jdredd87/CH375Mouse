@@ -1,5 +1,5 @@
 program mousedemo;
-{ Live INT 33h mouse demo  --  CH375Mouse
+{ Live INT 33h mouse demo  --  CH375Mouse, StevenC
 
   Shows the text-mode cursor and then sits reading the mouse, so the pointer
   can be watched moving on the real screen through the capture card while

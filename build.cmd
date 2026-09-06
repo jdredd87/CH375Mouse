@@ -1,5 +1,6 @@
 @echo off
 REM  CH375Mouse -- build everything into bin\
+REM  StevenC -- https://github.com/jdredd87/CH375Mouse
 REM
 REM    build.cmd            build only
 REM    build.cmd test       ...then run the INT 33h and event-handler suites

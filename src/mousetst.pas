@@ -1,5 +1,5 @@
 program mousetst;
-{ INT 33h conformance test for USBMOUSE.COM  --  CH375Mouse
+{ INT 33h conformance test for USBMOUSE.COM  --  CH375Mouse, StevenC
 
   The USB half of this driver and its INT 33h half fail independently, so
   they are tested independently.  USBMOUSE exposes a private function 7F01h
@@ -91,6 +91,8 @@ var
   R: Registers;
   Btn, X, Y: Integer;
   I, Live, Ep, LastSt, NRep, NRep2: Integer;
+  DrvSeg: Word;
+  Ver: ShortString;
   T0: LongInt;
   H, Mn, Sc, Hu: Word;
 
@@ -112,8 +114,27 @@ begin
 
   R.AX := $24;
   M(R);
-  WriteLn('  driver version ', Hi(R.BX), '.', Lo(R.BX),
+  WriteLn('  INT 33h API level ', Hi(R.BX), '.', Lo(R.BX),
           '  type ', Hi(R.CX), '  irq ', Lo(R.CX));
+
+  { Function 24h reports which INT 33h API the driver implements, which is
+    deliberately 7.00 and says nothing about which build is loaded.  The
+    build's own version is ASCII at offset 010Bh in the resident image, just
+    past the 'USBMOUS1' signature, so it can be read straight out of memory
+    without the driver having to answer a call.  Do not check it against a
+    fixed number here: this passes for every version, which is the point. }
+  DrvSeg := MemW[0 : $33 * 4 + 2];
+  Ver := '';
+  I := 0;
+  while (I < 8) and (Mem[DrvSeg : $010B + I] <> Ord('$')) do
+  begin
+    Ver := Ver + Chr(Mem[DrvSeg : $010B + I]);
+    Inc(I);
+  end;
+  Check('resident copy carries a version string',
+        (Length(Ver) >= 3) and (Pos('.', Ver) > 1) and
+        (Ver[1] >= '0') and (Ver[1] <= '9'));
+  WriteLn('  USBMOUSE version ', Ver);
 
   R.AX := $7F00;
   M(R);
