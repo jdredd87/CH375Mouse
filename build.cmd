@@ -9,17 +9,20 @@ REM    build.cmd ps2        ...then run the PS/2 BIOS emulation test
 REM    build.cmd demo       ...then drive the on-screen cursor for 25 seconds
 REM    build.cmd click      ...then watch the button path for 30 seconds.
 REM                         Click the mouse while it runs; it beeps at you.
+REM    build.cmd dosbuild   ...then assemble the driver on the DOS machine as
+REM                         well, with tools\MNASMFIX.COM, and check the two
+REM                         images are identical
 REM
 REM  NEEDS
 REM    fpc    Free Pascal cross-compiling to MS-DOS real mode (-Tmsdos -Pi8086)
 REM    nasm   ships with Free Pascal; both must be on PATH
 REM
-REM  The build needs nothing else.  The "test", "diag", "ps2", "demo" and
-REM  "click" targets additionally need dosbridge to reach the DOS machine --
-REM  set DOSBRIDGE if it is not in C:\dosbridge.
+REM  The build needs nothing else.  Every target that runs something on the
+REM  DOS machine additionally needs dosbridge to reach it -- set DOSBRIDGE if
+REM  it is not in C:\dosbridge.
 REM
-REM  USBMOUSE.COM also assembles on the DOS machine itself, byte for byte
-REM  identically, with the patched mininasm:
+REM  The driver also assembles on the DOS machine itself, byte for byte
+REM  identically, using the patched mininasm in tools\:
 REM    MNASMFIX -O9 -f bin -o USBMOUSE.COM USBMOUSE.ASM
 REM  -O9 matters; without it some jumps stay in their long form.
 
@@ -45,11 +48,12 @@ echo.
 dir /b bin
 echo.
 
-if /I "%1"=="test"  goto runtest
-if /I "%1"=="diag"  goto rundiag
-if /I "%1"=="ps2"   goto runps2
-if /I "%1"=="demo"  goto rundemo
-if /I "%1"=="click" goto runclick
+if /I "%1"=="test"     goto runtest
+if /I "%1"=="diag"     goto rundiag
+if /I "%1"=="ps2"      goto runps2
+if /I "%1"=="demo"     goto rundemo
+if /I "%1"=="click"    goto runclick
+if /I "%1"=="dosbuild" goto rundosbuild
 echo Built.  "build.cmd test" runs the suites on the DOS machine.
 exit /b 0
 
@@ -83,6 +87,29 @@ echo.
 echo Click the mouse while this runs -- it beeps when it starts watching.
 python "%DOSBRIDGE%\dosctl.py" exec "C:\WORK\USBMOUSE.COM" "C:\WORK\CLICKTST.EXE 30" "C:\WORK\USBMOUSE.COM /U" --timeout 240
 exit /b %ERRORLEVEL%
+
+REM  Assemble the driver on the DOS machine with the patched mininasm and
+REM  prove the image matches the one nasm just built.  Two assemblers, two
+REM  machines, one binary -- the check is the point, not the build.
+:rundosbuild
+echo --- assembling on the DOS machine
+python "%DOSBRIDGE%\dosctl.py" deploy src\usbmouse.asm C:\WORK
+if errorlevel 1 exit /b 1
+python "%DOSBRIDGE%\dosctl.py" deploy tools\MNASMFIX.COM C:\WORK
+if errorlevel 1 exit /b 1
+python "%DOSBRIDGE%\dosctl.py" exec "C:\WORK\MNASMFIX.COM -O9 -f bin -o C:\WORK\UMDOS.COM C:\WORK\USBMOUSE.ASM"
+python "%DOSBRIDGE%\dosctl.py" pull C:\WORK\UMDOS.COM --out bin\UMDOS.COM
+if errorlevel 1 exit /b 1
+echo.
+fc /b bin\USBMOUSE.COM bin\UMDOS.COM >nul
+if errorlevel 1 goto dosdiff
+echo IDENTICAL: nasm and MNASMFIX -O9 produce the same image.
+del /q bin\UMDOS.COM
+exit /b 0
+:dosdiff
+echo DIFFERENT.  bin\UMDOS.COM kept for comparison.
+echo If mininasm was run without -O9 it leaves jumps in their long form.
+exit /b 1
 
 :push
 python "%DOSBRIDGE%\dosctl.py" deploy bin\%1 C:\WORK

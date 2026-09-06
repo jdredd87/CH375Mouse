@@ -46,6 +46,7 @@ actually want.
 | `src/clicktst.pas` | button diagnostic: watches the raw report, the INT 33h mask and the press counters together, and beeps so you know when to click |
 | `src/mdemo.pas` | shows the cursor and reads the mouse for 25 s, so the pointer can be watched moving |
 | `src/clkchk.pas` | proves the DOS clock still keeps time with the driver's PIT change in place |
+| `tools/MNASMFIX.COM` | mininasm, patched so it does not create its output read-only. Assembles the driver on the DOS machine itself; not my work, included so the repository is self-contained |
 
 ## Building
 
@@ -55,6 +56,8 @@ build.cmd diag            ...then run CHDIAG there
 build.cmd ps2             ...then run the PS/2 BIOS emulation test
 build.cmd demo            ...then drive the on-screen cursor for 25 s
 build.cmd click           ...then watch the button path for 30 s
+build.cmd dosbuild        ...then assemble the driver on the DOS machine
+                          too, and check the two images match exactly
 ```
 
 The build itself needs only **Free Pascal** cross-compiling to MS-DOS real
@@ -584,15 +587,28 @@ Also verified on the machine:
 
 ## Assembling on the DOS machine
 
-`MININASM.COM` lives in `C:\CH375` on the DOS box. Use the patched
-`MNASMFIX.COM` (in `C:\ch375` on the Windows side): stock `mininasm` creates
-its output read-only, so pass 2 fails and leaves a stale image.
+The driver needs no cross-compiler at all: it assembles on the target, byte
+for byte identically to the `nasm` build. `tools\MNASMFIX.COM` in this
+repository is the assembler to use -- a patched mininasm, because the stock
+one creates its output file read-only, so pass 2 fails and quietly leaves a
+stale image behind.
 
 ```
-dosdeploy usbmouse.asm C:\WORK
-dosdeploy C:\ch375\MNASMFIX.COM C:\WORK
+build.cmd dosbuild
+```
+
+does the whole thing: sends `src\usbmouse.asm` and `tools\MNASMFIX.COM` to
+the DOS machine, assembles there, fetches the result back and compares it
+with `bin\USBMOUSE.COM` byte for byte. By hand it is:
+
+```
+dosdeploy src\usbmouse.asm    C:\WORK
+dosdeploy tools\MNASMFIX.COM  C:\WORK
 dosexec "C:\WORK\MNASMFIX.COM -O9 -f bin -o C:\WORK\USBMOUSE.COM C:\WORK\USBMOUSE.ASM"
 ```
+
+or copy those two files to the machine by any other means and run the one
+command there. Nothing else is needed.
 
 `-O9` matters: without it mininasm leaves some jumps in their long form and the
 image comes out larger than nasm's. With it the two agree exactly.
