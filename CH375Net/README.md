@@ -409,47 +409,84 @@ milliseconds and that is not a cost worth paying inside a timer interrupt.
 | | |
 |---|---|
 | ARP | resolves both directions |
-| ICMP, local | 3/3 to the gateway, 3/3 to a host on the LAN |
+| ICMP, local | 3/3 to the gateway, 3/3 to a LAN host |
 | ICMP, routed | 3/3 to `8.8.8.8` at ttl=118, 2/2 to `1.1.1.1` |
-| DNS (UDP/53) | `ping example.com` resolved to `172.66.147.243`, 2/2 replies |
-| **TCP** | **a telnet session to a BBS in Rimini, Italy** |
-
-That last one is the one that matters, because it is a sustained byte
-stream rather than a packet exchange: DNS resolution, a three-way
-handshake, and a full 80x24 screen of ASCII art delivered and rendered.
+| DNS (UDP/53) | `example.com` resolved to `172.66.147.243` |
+| TCP | a telnet session to a BBS in Rimini, full 80x24 screen |
+| **HTTP** | **`example.com` fetched, 200 OK, 559 bytes** |
 
 ```
-Welcome to the Telnet version of 84-24.org, hosted in Rimini, Italy,
-on a Raspberry Pi Zero sitting just a few centimeters away from the story's
-main character.
-
-This reader is designed for an 80x24 black-and-white terminal and uses only
-7-bit ASCII characters - embracing the same hardware and software
-constraints of a 1984 Macintosh 128K.
-
-Press ANY KEY to continue...
+--- example.com over the CH375 USB adapter ---
+mTCP HTGet by M Brutman
+Server return code: 200 OK
 ```
 
-A reader built for the constraints of a 1984 Macintosh, read on a 1987 IBM
-PS/2 Model 30, over a USB network adapter it predates by nine years.
+559 bytes, byte for byte what a modern machine gets from the same URL. An
+IBM PS/2 Model 30 from 1987 pulling a web page over a USB network adapter
+it predates by nine years.
 
-### The HTTP clients on this machine are broken, and it is not the driver
+### An error of mine that cost hours, and the correction
 
-`HTGET` produces no output and no file. `NC` starts, opens its output file,
-and sends nothing. `DNSTEST` prints its banner and stops. All three fail
-identically whether pointed at this driver or at the machine's own working
-network, with 541 KB free.
+This file spent a long time claiming the HTTP clients on this machine were
+broken, because `HTGET`, `NC` and `DNSTEST` all failed identically over
+both network cards. That was wrong, and it was wrong because of damage I
+had done.
 
-Meanwhile `PING` and `TELNET` both work over this driver, and `PING`
-reaches the very host whose HTTP server `HTGET` cannot fetch from — 3/3 at
-ttl=128. So the network underneath those tools is fine and the tools are
-not.
+The test batches were generated with `printf`, and DOS paths went into the
+**format string** rather than through `%s`. `printf` reads a backslash-n as
+a newline, so the configured path became
 
-One control of mine was worthless and is worth writing down so it is not
-repeated: `dosctl exec` does not run its command through `COMMAND.COM`, so
-`<` and `>` in an exec argument reach the program as text rather than
-redirecting anything. Redirection inside a **batch file** does work,
-because that runs under `COMMAND.COM`.
+```
+MTCPCFG=c:
+etwork\mtcp\mtcp.cfg
+```
+
+which split the batch line in two and left `MTCPCFG=c:` in the machine's
+**persistent** environment. Every mTCP tool afterwards failed to find its
+config and exited quietly. `PING` appeared to work only because the batches
+running it set `MTCPCFG` to a path with no backslash-n in it.
+
+Two lessons, both worth more than the bug cost:
+
+* **Never put a DOS path in a `printf` format string.** Pass it as an
+  argument. A path is a string full of escape sequences waiting to happen.
+* **A tool failing on both the thing under test and the control does not
+  exonerate the thing under test.** It should have prompted the question
+  "what do those two runs have in common?" -- and the answer was me.
+
+`HTGET` was never broken. Against the local test server it correctly says
+`Not an HTTP 1.0 or 1.1 server`, because that server emits a `GREETINGS`
+banner ahead of the HTTP status line; PowerShell rejects it for the same
+reason.
+
+## Which adapters can this drive?
+
+`NETID` says, for whatever is plugged in:
+
+```
+device   : 0B95:1790  ASIX
+chip     : ASIX AX88179
+family   : ASIX AX88179/178A
+SUPPORTED.
+```
+
+Recognition works two ways, and they are not equally good. **By class** is
+the right way: CDC-ECM and CDC-NCM are standards, and an adapter declaring
+interface class 02 can be driven without knowing who made it. **By
+VID/PID** is the way that actually gets you online, because most cheap
+adapters are vendor-specific -- the AX88179 here reports class `FF/FF/00`,
+which means "ask the manufacturer".
+
+`netchip.pas` holds both: 24 entries across ASIX, Realtek,
+SMSC/Microchip, Davicom, Moschip and common rebadges, plus class-based
+detection for anything not tabulated. "Recognised" and "supported" are
+deliberately separate -- an adapter it knows but cannot drive says so in
+one line, which is far more use than a bring-up that fails halfway and
+leaves you wondering about the cable.
+
+**Only the AX88179 is implemented today.** The most valuable one to add
+next is CDC-ECM, because that is a standard: one driver, every adapter that
+speaks it, instead of another entry in a table of vendor quirks.
 
 ## What is not done
 
