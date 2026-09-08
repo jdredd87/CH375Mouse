@@ -38,8 +38,12 @@ const
   DEF_BASE = $260;
 
 { The first line of output from every tool:
-    USBINFO 1.0.0  --  dump everything a USB device will tell you
-  Prog is upper case because that is how it is typed at the DOS prompt. }
+    USBINFO 1.0.0 -- dump everything a USB device will tell you -- StevenC
+  Prog is upper case because that is how it is typed at the DOS prompt, and
+  the author is on this line rather than only in the /? footer so that a
+  program run WITHOUT /? still says who wrote it -- which is how the three
+  assembly drivers have always announced themselves.  The longest purpose
+  in the repository puts this at 75 columns, inside the 79 a DOS line has. }
 procedure Banner(const Prog, Ver, Purpose: ShortString);
 
 { True when the command line is asking for the help screen rather than for
@@ -61,7 +65,7 @@ implementation
 
 procedure Banner(const Prog, Ver, Purpose: ShortString);
 begin
-  WriteLn(Prog, ' ', Ver, '  --  ', Purpose);
+  WriteLn(Prog, ' ', Ver, ' -- ', Purpose, ' -- ', AUTHOR);
 end;
 
 function UpStr(const S: ShortString): ShortString;
