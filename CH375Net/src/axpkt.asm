@@ -159,6 +159,11 @@ old08:      dd  0
 mac:        times 6 db 0
 rx_tog:     db  0x80
 tx_tog:     db  0x80
+; How many bytes the current OUT packet carries.  It cannot be kept in AX
+; across the call: bulk_out uses AX for command bytes, so `sub cx, ax`
+; afterwards was subtracting a leftover CH375 opcode from the bytes
+; remaining.
+tx_chunk:   dw  0
 cfg_val:    db  1
 
 ; ---- state ----
@@ -183,12 +188,20 @@ h_typelen:  times MAXHANDLE db 0
 h_type:     times MAXHANDLE*8 db 0
 h_rcv:      times MAXHANDLE dd 0
 
-; ---- statistics, as get_statistics reports them ----
-st_in:      dd  0
-st_out:     dd  0
-st_inerr:   dd  0
-st_outerr:  dd  0
-st_indrop:  dd  0
+; ---- statistics ----
+; SEVEN consecutive 32-bit counters in exactly this order, because
+; get_statistics hands the caller a pointer to the block and the caller
+; reads it as a struct.  Getting the order or the count wrong is not a
+; cosmetic fault: mTCP's pkttool reported "Errors out: 65557" off a driver
+; that had sent nothing, because the previous layout had five counters in
+; a different order and pkttool read two variables past the end of it.
+st_pkts_in:   dd  0
+st_pkts_out:  dd  0
+st_bytes_in:  dd  0
+st_bytes_out: dd  0
+st_err_in:    dd  0
+st_err_out:   dd  0
+st_lost:      dd  0
 
 ; ---- counters of our own, for /S ----
 n_ticks:    dw  0
@@ -346,7 +359,22 @@ bulk_in_bad:
 ; One OUT token.  DS:SI = data, CL = length (0..64).
 ; CF set unless the chip reported success.
 ; --------------------------------------------------------------------------
+; A NAK on an OUT means "busy, ask again", exactly as it does on an IN, and
+; the chip is deliberately set to report NAKs rather than retry them itself
+; -- see read_mac for why.  So the patience has to live here.  Without it
+; every single send failed: 25 errors out, 0 packets out, and mTCP timing
+; out waiting for an ARP reply to a request that never left the machine.
+;
+; A retry has to rewind SI, because LODSB has already walked it through the
+; data on the attempt that got NAKed.
 bulk_out:
+        push    cx
+        push    bp
+        push    si
+        mov     bp, 256
+bo_retry:
+        pop     si
+        push    si
         push    cx
         mov     al, CMD_WR_USB_DATA7
         call    ch_cmd
@@ -370,15 +398,26 @@ bulk_out_sent:
         call    ch_wr
         mov     cx, 0x3000
         call    ch_wait
-        pop     cx
-        jc      short bulk_out_bad
+        pop     cx                       ; the caller's length
+        jc      short bo_bad
         cmp     al, INT_SUCCESS
-        jne     short bulk_out_bad
-        xor     byte [cs:tx_tog], 0x40
-        clc
-        ret
-bulk_out_bad:
+        je      short bo_good
+        cmp     al, INT_RET_NAK
+        jne     short bo_bad
+        dec     bp
+        jnz     short bo_retry           ; busy; rewind and ask again
+bo_bad:
+        pop     si
+        pop     bp
+        pop     cx
         stc
+        ret
+bo_good:
+        xor     byte [cs:tx_tog], 0x40
+        pop     si
+        pop     bp
+        pop     cx
+        clc
         ret
 
 ; ==========================================================================
@@ -604,8 +643,8 @@ rx_findnext:
         cmp     si, MAXHANDLE
         jb      short rx_find
         inc     word [n_nohandle]
-        add     word [st_indrop], 1
-        adc     word [st_indrop+2], 0
+        add     word [st_lost], 1
+        adc     word [st_lost+2], 0
         ret
 
 ; --------------------------------------------------------------------------
@@ -646,8 +685,8 @@ rx_found:
         or      ax, di
         jne     short rx_wanted
         inc     word [n_nohandle]        ; declined, and that is allowed
-        add     word [st_indrop], 1
-        adc     word [st_indrop+2], 0
+        add     word [st_lost], 1
+        adc     word [st_lost+2], 0
         ret
 rx_wanted:
         push    es
@@ -670,8 +709,11 @@ rx_wanted:
 
         push    cs
         pop     ds
-        add     word [st_in], 1
-        adc     word [st_in+2], 0
+        add     word [st_pkts_in], 1
+        adc     word [st_pkts_in+2], 0
+        mov     ax, [rx_frlen]
+        add     word [st_bytes_in], ax
+        adc     word [st_bytes_in+2], 0
         ret
 
 ; ==========================================================================
@@ -793,7 +835,7 @@ pkt_reset:
 pkt_stats:
         push    cs
         pop     ds
-        mov     si, st_in
+        mov     si, st_pkts_in
         clc
         retf    2
 
@@ -967,12 +1009,13 @@ psend_loop:
         jbe     short psend_last
         mov     ax, 64
 psend_last:
+        mov     [cs:tx_chunk], ax
         push    cx
         mov     cl, al
         call    bulk_out
         pop     cx
         jc      short psend_fail
-        sub     cx, ax
+        sub     cx, [cs:tx_chunk]
         jnz     short psend_loop
 
         ; the terminating zero-length packet, when it is needed
@@ -982,8 +1025,11 @@ psend_last:
         call    bulk_out
         jc      short psend_fail
 psend_ok:
-        add     word [cs:st_out], 1
-        adc     word [cs:st_out+2], 0
+        add     word [cs:st_pkts_out], 1
+        adc     word [cs:st_pkts_out+2], 0
+        sub     bx, 8                    ; BX was length + header
+        add     word [cs:st_bytes_out], bx
+        adc     word [cs:st_bytes_out+2], 0
         pop     es
         pop     ds
         pop     bp
@@ -996,8 +1042,8 @@ psend_ok:
         clc
         retf    2
 psend_fail:
-        add     word [cs:st_outerr], 1
-        adc     word [cs:st_outerr+2], 0
+        add     word [cs:st_err_out], 1
+        adc     word [cs:st_err_out+2], 0
 psend_bad:
         pop     es
         pop     ds

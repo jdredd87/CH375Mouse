@@ -290,9 +290,67 @@ right: it makes the broken case look like a different bug.
   stopped answering still has a screen, and a capture card can photograph
   it. Two stores, and the only channel that reports from a dead machine.
 
+## mTCP talks to it
+
+mTCP's own `pkttool` finds the driver and reads everything off it — code
+none of which is mine:
+
+```
+Details for driver at software interrupt: 0x65
+  Name: AX88179/CH375
+  Version: 1   Class: 1   Type: 0   Interface Number: 0
+  Function flag: 2  (basic and extended functions)
+  Current receive mode: packets for this MAC and broadcast packets
+  MAC address: 40:AE:30:6D:00:34
+```
+
+And `PKTCAP` — DOSBridge's own capture tool, also not mine — registers a
+real handle through `access_type` and gets clean frames out of it:
+
+```
+frames captured: 16      bytes: 2320      dropped (busy): 0
+first frame    : 64 bytes
+  destination  : FF:FF:FF:FF:FF:FF
+  source       : 24:F5:A2:5F:61:A5
+  ethertype    : 0806  (ARP)
+```
+
+So `driver_info`, `get_address`, `get_rcv_mode`, `get_statistics`,
+`access_type`, `release_type` and the two-call receive handshake are all
+exercised by third-party software and all correct.
+
+`send_pkt` moves frames too: 11 out, 660 bytes — exactly 11 × 60, the right
+size for an ARP request.
+
+**What does not work yet is a round trip.** `PING` still reports "Timeout
+waiting for ARP response": our requests leave and other traffic arrives,
+but the replies to our own requests are not coming back up. Since `AXSEND`
+gets a reply to a hand-built ARP through the same chip, the difference is
+somewhere in the resident path rather than in the wire or the header
+format. The receive filter is the current suspect.
+
+### Two transmit bugs found on the way
+
+* **`bulk_out` did not retry a NAK.** A NAK on an OUT means "busy, ask
+  again", exactly as on an IN, and the chip is deliberately set to report
+  NAKs rather than retry them itself. Every single send failed before this:
+  25 errors out, 0 packets out. The retry has to rewind `SI`, because
+  `LODSB` has already walked it through the data.
+* **The chunk length was read back out of a clobbered `AX`.** `sub cx, ax`
+  after `bulk_out` was subtracting a leftover CH375 opcode from the bytes
+  remaining.
+
+### And one the statistics block exposed
+
+`pkttool` reported `Errors out: 65557` from a driver that had sent nothing.
+`get_statistics` hands the caller a pointer to a struct of **seven**
+consecutive 32-bit counters in a fixed order; mine had five, in a different
+order, so `pkttool` was reading two variables past the end of it. Fixed,
+including the `bytes_in` / `bytes_out` that were simply missing.
+
 ## What is not done
 
-- **mTCP over it.** When it loads, point a *copy* of `MTCP.CFG` at the new
+- **The ARP round trip.** When it loads, point a *copy* of `MTCP.CFG` at the new
   vector. Never the one the working network uses. The goal is a Crynwr driver at INT 60h, because
   that is what `mTCP`, `WATTCP` and NCSA Telnet all speak — get it right
   and the whole DOS networking ecosystem works, with no TCP stack written

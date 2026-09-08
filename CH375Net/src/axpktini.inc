@@ -877,7 +877,7 @@ stat_macskip:
 
         mov     dx, msg_s_sent
         call    puts
-        mov     ax, [es:st_out]
+        mov     ax, [es:st_pkts_out]
         call    putdecw
         call    crlf
 
