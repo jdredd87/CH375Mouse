@@ -98,6 +98,15 @@ ci_setup:
         call    ch_wr
         mov     cx, 0xFFFF
         call    ch_wait
+        pushf
+        push    ax
+        mov     al, 'S'
+        call    mark
+        pop     ax
+        push    ax
+        call    markhex
+        pop     ax
+        popf
         jnc     short __iovr1
         jmp     near ci_fail
 __iovr1:
@@ -121,6 +130,15 @@ ci_data:
         call    ch_wr
         mov     cx, 0xFFFF
         call    ch_wait
+        pushf
+        push    ax
+        mov     al, 'I'
+        call    mark
+        pop     ax
+        push    ax
+        call    markhex
+        pop     ax
+        popf
         jc      short ci_fail
         cmp     al, INT_SUCCESS
         jne     short ci_fail
@@ -128,6 +146,13 @@ ci_data:
         mov     cl, bl
         sub     cl, bh                   ; room left
         call    ch_read                  ; AL = stored, AH = reported
+        push    ax
+        mov     al, 'n'
+        call    mark
+        pop     ax
+        push    ax
+        call    markhex
+        pop     ax
         mov     dl, al
         pop     bx
         add     bh, dl
@@ -179,27 +204,44 @@ setup_mac:
 read_mac:
         push    cs
         pop     ds
+
+        ; Retry in software, with the chip set to report a NAK rather than
+        ; keep asking.  The obvious way round is to set retry to 8F and let
+        ; the CH375 be patient for us, and that is what this did first --
+        ; but when our own wait then expires we walk away from a chip that
+        ; is still retrying in the background, and the NEXT program to open
+        ; it finds a transaction in flight that its bring-up does not
+        ; expect.  That did not hang AXPKT.  It hung AXPROBE, afterwards,
+        ; which is a far more confusing thing to debug.
+        ;
+        ; With 00 the chip answers immediately and is idle between tries,
+        ; so eight attempts here cost the same patience and leave nothing
+        ; outstanding when they run out.  Every attempt starts with
+        ; clr_ep0 inside ctrl_in, which resets the endpoint toggle.
+        xor     al, al
+        call    set_retry
+        mov     bp, 8
+rm_try:
         push    cs
         pop     es
-        mov     al, 0x8F                 ; see set_retry: control transfers
-        call    set_retry                ; need the chip to keep asking
         mov     si, setup_mac
         mov     di, mac
         mov     bl, 6
         call    ctrl_in
-        pushf
-        push    bx
-        xor     al, al                   ; and back to no-retry, which is
-        call    set_retry                ; what the polling loop needs
-        pop     bx
-        popf
-        jc      short rm_bad
+        jc      short rm_again
         cmp     bh, 6
-        jne     short rm_bad
-        clc
-        ret
-rm_bad:
+        je      short rm_good
+rm_again:
+        dec     bp
+        jnz     short rm_try
+
+        ; Out of tries.  Leave the endpoint clear so whatever runs next
+        ; opens a quiet chip.
+        call    clr_ep0
         stc
+        ret
+rm_good:
+        clc
         ret
 
 ; --------------------------------------------------------------------------
@@ -208,6 +250,13 @@ rm_bad:
 ; invisible from outside -- the machine simply stops answering -- and the
 ; last letter to reach the screen is the only evidence of where it stopped.
 ; --------------------------------------------------------------------------
+markhex:                                 ; AL in hex, only under /V
+        cmp     byte [cs:op_verb], 0
+        je      short markhex_out
+        call    puthex
+markhex_out:
+        ret
+
 mark:                                    ; AL = the letter
         cmp     byte [cs:op_verb], 0
         je      short mark_out
@@ -243,15 +292,17 @@ crlf:
         ret
 
 puthex:                                  ; AL
-        push    ax
-        push    ax
-        mov     cl, 4
-        shr     al, cl
+        push    cx                       ; CL is a shift count here and a
+        push    ax                       ; live byte count in ctrl_in; not
+        push    ax                       ; saving it is the sort of thing
+        mov     cl, 4                    ; that only bites once tracing is
+        shr     al, cl                   ; added to a working routine
         call    puthex1
         pop     ax
         and     al, 0x0F
         call    puthex1
         pop     ax
+        pop     cx
         ret
 puthex1:
         add     al, '0'
