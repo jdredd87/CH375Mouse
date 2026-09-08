@@ -34,7 +34,7 @@ echo --- AXPKT.COM
 nasm -f bin -Isrc\ src\axpkt.asm -o bin\AXPKT.COM
 if errorlevel 1 goto failed
 
-for %%T in (axprobe axrecv axsend pktscan) do (
+for %%T in (netid axprobe axrecv axsend pktscan) do (
   echo --- %%T
   fpc -Tmsdos -Pi8086 -WmLarge -Fu"%TOOLS%" -FEbin -FUbin src\%%T.pas >nul
   if errorlevel 1 goto failed

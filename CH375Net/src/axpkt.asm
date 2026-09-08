@@ -564,23 +564,12 @@ rmw_bad:
 isr08:
         push    ax
 
-        ; A heartbeat, poked straight into the top-left character cell of
-        ; both possible video buffers -- this machine's card varies between
-        ; mono and colour from boot to boot, and writing to the wrong one is
-        ; harmless.  A DOS box that has stopped answering the bridge still
-        ; has a screen, and a capture card can photograph it, so this is the
-        ; only channel that reports whether the handler is still being
-        ; entered at all.  Two stores; it costs nothing worth counting.
-        push    ds
-        push    bx
-        mov     bx, 0xB800
-        mov     ds, bx
-        inc     byte [0]
-        mov     bx, 0xB000
-        mov     ds, bx
-        inc     byte [0]
-        pop     bx
-        pop     ds
+        ; A heartbeat used to live here, poking the top-left character cell
+        ; of both video buffers so a machine that had stopped answering the
+        ; bridge could still be seen to be running.  It did its job -- and
+        ; it is gone, because a resident driver that scribbles on somebody
+        ; else's screen forever is not a diagnostic, it is a defect.  If it
+        ; is ever needed again it belongs behind a switch that is off.
 
         ; Re-entry guard.  A tick that finds data can spend milliseconds
         ; draining it, and the next one will arrive on top.  Without this
