@@ -404,6 +404,38 @@ minimal resident version — one register, one 16-bit value — reached only
 from the INT 65h handler and never from the ISR, because it takes
 milliseconds and that is not a cost worth paying inside a timer interrupt.
 
+## What has and has not been proved over it
+
+| | |
+|---|---|
+| ICMP, local | 3/3 to the gateway |
+| ICMP, routed | 3/3 to `8.8.8.8` at ttl=118, 2/2 to `1.1.1.1` |
+| DNS (UDP/53) | `ping example.com` resolved to `172.66.147.243` and got 2/2 |
+| ARP | resolves both directions |
+| TCP | **not proved, and not for want of trying** |
+
+**No HTTP client on this machine runs.** `HTGET` produces no output and no
+file; `NC` starts, opens its output file, and sends nothing; `DNSTEST`
+prints its banner and stops. All three fail the same way whether they are
+pointed at this driver or at the machine's own working network, and there
+is 541 KB free, so it is not memory. `PING` is the only mTCP tool here that
+works at all — over either card.
+
+That control matters: **the failure is not in this driver.** But it does
+mean TCP over `CH375Net` is untested rather than working, and the honest
+statement is that nobody has yet made a byte stream go through it.
+
+One of my own controls was worthless and is worth writing down so it is not
+repeated: `dosctl exec` does not run its command through `COMMAND.COM`, so
+`<` and `>` in an exec argument are passed to the program as text rather
+than performing redirection. Every "control" that relied on a shell
+redirect tested nothing. Redirection inside a **batch file** does work,
+because that runs under `COMMAND.COM`.
+
+The next thing to try is `HTTPSERV`, which comes at TCP from the other
+side: run it on the DOS machine and fetch from elsewhere. Inbound is a
+different code path and does not depend on any of the broken clients.
+
 ## What is not done
 
 - **The ARP round trip.** When it loads, point a *copy* of `MTCP.CFG` at the new
