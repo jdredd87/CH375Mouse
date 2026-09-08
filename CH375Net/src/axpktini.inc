@@ -203,6 +203,19 @@ rm_bad:
         ret
 
 ; --------------------------------------------------------------------------
+; /V prints one letter as each stage of the bring-up is passed.  Crude on
+; purpose: a hang inside a DOS program that has not installed anything is
+; invisible from outside -- the machine simply stops answering -- and the
+; last letter to reach the screen is the only evidence of where it stopped.
+; --------------------------------------------------------------------------
+mark:                                    ; AL = the letter
+        cmp     byte [cs:op_verb], 0
+        je      short mark_out
+        call    putc
+mark_out:
+        ret
+
+; --------------------------------------------------------------------------
 ; Output helpers.
 ; --------------------------------------------------------------------------
 puts:                                    ; DX -> '$'-terminated
@@ -575,6 +588,8 @@ init:
 init_nohelp:
 
         call    find_resident
+        mov     al, 'a'
+        call    mark
         cmp     byte [op_status], 0
         je      short init_nostat
         jmp     near do_status
@@ -614,6 +629,8 @@ init_not60:
         mov     al, 5
         jmp     near die
 init_vecfree:
+        mov     al, 'b'
+        call    mark
 
         ; ---- is the chip there ----
         mov     al, CMD_CHECK_EXIST
@@ -628,6 +645,8 @@ init_vecfree:
         mov     al, 1
         jmp     near die
 init_chip:
+        mov     al, 'c'
+        call    mark
 
         ; ---- who are we ----
         call    read_mac
@@ -637,6 +656,8 @@ init_chip:
         mov     al, 6
         jmp     near die
 init_gotmac:
+        mov     al, 'd'
+        call    mark
 
         mov     dx, msg_mac
         call    puts

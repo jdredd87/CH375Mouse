@@ -257,10 +257,33 @@ and `PKTSCAN` before and after a failed load shows 60h exactly as it was.
 **Where it stands.** The Crynwr entry point, the two-call receive handshake,
 `send_pkt` with its 8-byte header, the INT 08h poll with an adaptive budget
 and a re-entry guard, install, unload with out-of-order hook detection, and
-`/S` are all written. What fails is `read_mac`: the control transfer in
-`axpktini.inc` returns an error where the identical request from Pascal
-returns the MAC four times out of four. That is a bug in new assembly, not
-in the chip or the register map, both of which are proven.
+`/S` are all written. `/S`, `/T`, the vector refusals and the option parser
+all run correctly on the hardware.
+
+The remaining fault is **state left behind between programs**. Run on its
+own, `AXPKT /T /V` completes in 7.3 seconds and prints `abc` — its three
+stage markers — before failing cleanly at the MAC read, which is right,
+because nothing has brought the adapter up. Run *after* `AXPROBE`, the
+machine hangs; and the screen capture shows the hang is not in `AXPKT` at
+all but in **`AXPROBE` on the next invocation**, which produces no output
+whatsoever.
+
+So the sequence that breaks is: `AXPKT` touches the chip, exits, and the
+next program to open the chip wedges. The prime suspect is the retry
+setting and a control transfer abandoned part-way — `read_mac` sets retry
+to `8F`, and if `ctrl_in` gives up mid-transaction the chip is left with a
+token outstanding that the next program's bring-up does not expect.
+
+**How that was found is the point.** A hung DOS box returns nothing at all
+through the bridge, so from the outside every fault looks identical. The
+capture card photographs the real screen, and that is what showed the last
+line was `exec 2 cmd(s): C:\WORK\AXPROBE.EXE` with nothing after it. Two
+hours of blaming the wrong program ended with one screenshot.
+
+The same capture also settled a question worth writing down: the machine's
+working NIC is at **I/O 300h, IRQ 3**, MAC `28:CD:C1:11:6B:27`. That is
+clear of the CH375 at 260h, and 300h is already on `USBSCAN`'s reserved
+list, so neither card can be probed into the other by accident.
 
 **It is also split wrong.** `AXPKT` requires `AXPROBE` to have run first,
 because the bring-up is a page of control transfers that already existed
