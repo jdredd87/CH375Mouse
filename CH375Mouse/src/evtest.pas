@@ -24,7 +24,10 @@ program evtest;
 
 {$MODE OBJFPC}{$H-}{$ASMMODE INTEL}
 
-uses Dos;
+uses Dos, chtool;
+
+const
+  VER = '1.0.0';
 
 var
   Fails, Checks: Integer;
@@ -106,9 +109,40 @@ end;
 var
   R: Registers;
 
+procedure Usage;
 begin
+  Banner('EVTEST', VER, 'INT 33h function 0Ch event-handler test');
+  WriteLn;
+  WriteLn('  EVTEST');
+  WriteLn;
+  WriteLn('  /?       this screen');
+  WriteLn;
+  WriteLn('It takes no other switches, and needs USBMOUSE loaded.');
+  WriteLn;
+  WriteLn('Function 0Ch installs a callback plus a mask of the events an');
+  WriteLn('application wants.  The driver must call it only for events in');
+  WriteLn('that mask, and must say in AX which ones happened:');
+  WriteLn('  bit0 moved   bit1/2 left press/release');
+  WriteLn('  bit3/4 right press/release   bit5/6 middle press/release');
+  WriteLn;
+  WriteLn('The first version of this driver passed AX=1 -- "the pointer');
+  WriteLn('moved" -- for every report whatever the mask said, so an');
+  WriteLn('application subscribed to button presses alone was called');
+  WriteLn('constantly and never once told a button had been pressed.');
+  WriteLn('Movement worked; clicks did not.  This is the test that would');
+  WriteLn('have caught it.');
+  WriteLn;
+  WriteLn('Everything is driven through the driver''s report-injection');
+  WriteLn('hook with polling suspended, so each case is exact.');
+  WriteLn;
+  WriteLn('Exit code is the number of failed checks.');
+  HelpTail;
+end;
+
+begin
+  if HelpWanted then begin Usage; Halt(0); end;
   Fails := 0; Checks := 0;
-  WriteLn('=== USBMOUSE INT 33h event-handler test ===');
+  Banner('EVTEST', VER, 'USBMOUSE INT 33h event-handler test');
 
   R.AX := 0; M(R);
   if R.AX <> $FFFF then

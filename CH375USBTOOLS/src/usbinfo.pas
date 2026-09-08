@@ -30,7 +30,10 @@ program usbinfo;
 
 {$MODE OBJFPC}{$H-}
 
-uses ch375;
+uses ch375, chtool;
+
+const
+  VER = '1.0.0';
 
 var
   Big:      array[0..1023] of Byte;   { a configuration, in full }
@@ -468,15 +471,41 @@ begin
   end;
 end;
 
+procedure Usage;
+begin
+  Banner('USBINFO', VER, 'dump everything a USB device will tell you');
+  WriteLn;
+  WriteLn('  USBINFO [/P=260] [/N] [/X] [/1] [/V]');
+  WriteLn;
+  HelpBaseLine;
+  WriteLn('  /N       skip string descriptors; some devices are slow');
+  WriteLn('  /X       raw hex only, no decode');
+  WriteLn('  /1       configuration 1 only; normally every one is fetched');
+  WriteLn('  /V       narrate the bring-up as it happens');
+  WriteLn('  /?       this screen');
+  WriteLn;
+  WriteLn('Prints, in order: the device descriptor, every string the');
+  WriteLn('device names an index for, every configuration in full with its');
+  WriteLn('interfaces and endpoints, the device qualifier if it is USB 2.0,');
+  WriteLn('and the raw HID report descriptor of each HID interface.');
+  WriteLn('HIDREP decodes those.  It does not care what class the device');
+  WriteLn('is -- that is the whole point of it.');
+  WriteLn;
+  WriteLn('Exit: 0 ok, 1 no chip, 2 chip too old, 3 nothing attached,');
+  WriteLn('      4 attached but silent, 5 device stopped answering');
+  HelpTail;
+end;
+
 var
   Rc: Integer;
   NCfg, C: Byte;
 
 begin
+  if HelpWanted then begin Usage; Halt(0); end;
   ParseArgs;
   if Verbose then Trace := @Narrate;
 
-  WriteLn('=== USBINFO -- CH375 USB device probe ===');
+  Banner('USBINFO', VER, 'CH375 USB device probe');
   WriteLn('I/O base ', Hex4(Base), 'h  (data ', Hex4(Base),
           ', command ', Hex4(Base + 1), ')');
   WriteLn;

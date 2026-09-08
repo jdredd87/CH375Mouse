@@ -245,7 +245,7 @@ signature:
 ; the version of the copy ALREADY LOADED rather than its own -- which is
 ; the interesting number when two builds are in play.
 ver_str:
-        db      '1.0.0$'                        ; 010B
+        db      '1.1.0$'                        ; 010B
 
 ; Where the translation tables are, so KBDTST can read them straight out of
 ; the resident image and check them against hidkey.pas key by key.  Two
@@ -4853,12 +4853,32 @@ stat_ok:
         pop     ds
         mov     dx, msg_isres2
         call    puts
+        ; The I/O base the RESIDENT copy is using -- read out of its image,
+        ; not this program's default.  Without it there is no way to
+        ; confirm which address a driver loaded with @nnn actually took,
+        ; which is exactly when you want to know.
+        mov     dx, msg_s_base
+        call    puts
+        mov     ds, [cs:res_seg]
+        mov     ax, [io_dat]
+        push    cs
+        pop     ds
+        push    ax
+        mov     al, ah                   ; no puthexw here: two byte prints
+        call    puthex
+        pop     ax
+        call    puthex
+        mov     dx, msg_s_baseh
+        call    puts
+        mov     dx, msg_khalf
+        call    puts
         mov     ds, [cs:res_seg]
         mov     al, [live]
         push    cs
         pop     ds
         call    putdecw_al
         call    crlf
+
 
         mov     dx, msg_s_ep
         call    puts
@@ -5827,7 +5847,10 @@ msg_vidpid:    db 'Device VID/PID $'
 msg_lowspd:    db 'Low-speed device; USB bus set to 1.5 Mbps.', 13, 10, '$'
 msg_already:   db 'USBCOMBO is already loaded.  /U unloads it.', 13, 10, '$'
 msg_isres:     db 'Loaded: USBCOMBO $'
-msg_isres2:    db '.', 13, 10, 'Keyboard half:', 13, 10, '  live=$'
+msg_isres2:    db '.', 13, 10, '$'
+msg_khalf:     db 'Keyboard half:', 13, 10, '  live=$'
+msg_s_base:    db '  I/O base=$'
+msg_s_baseh:   db 'h  (data, command+1)', 13, 10, '$'
 msg_s_ep:      db '  endpoint=$'
 msg_s_poll:    db '  polls=$'
 msg_s_rep:     db '  reports=$'
@@ -5959,7 +5982,7 @@ msg_help:
         db '       /D=n repeat delay 144  /T=n period 10  /N no lock LEDs', 13, 10
         db '       /E   claim a 101/102-key keyboard', 13, 10
         db '       /NK  ignore the keyboard, drive the mouse only', 13, 10
-        db 'OTHER  @nnn CH375 I/O base in hex, default 260', 13, 10
+        db 'OTHER  @nnn CH375 I/O base in hex; /S shows the one in use', 13, 10
         db '       /F   load with nothing plugged in, and keep looking', 13, 10
         db '       /V   trace the bring-up    /T  self-test, then exit', 13, 10
         db 13, 10

@@ -40,7 +40,10 @@ program chdiag;
 
 {$MODE OBJFPC}{$H-}{$ASMMODE INTEL}
 
+uses chtool;
+
 const
+  VER             = '1.0.0';
   CMD_GET_IC_VER  = $01;
   CMD_SET_SPEED   = $04;
   CMD_RESET_ALL   = $05;
@@ -297,8 +300,29 @@ var
   NGot, NNak, NErr, Shown: Word;
   MX, MY: LongInt;
 
+procedure Usage;
 begin
-  Base := $260; NPoll := 200; WantRegs := False;
+  Banner('CHDIAG', VER, 'CH375 host-mode diagnostic');
+  WriteLn;
+  WriteLn('  CHDIAG [/P=260] [/N=count] [/R]');
+  WriteLn;
+  HelpBaseLine;
+  WriteLn('  /N=dec   polls of the interrupt endpoint, default 200');
+  WriteLn('  /R       dump the chip register map at each step');
+  WriteLn('  /?       this screen');
+  WriteLn;
+  WriteLn('The same bring-up USBMOUSE.COM does, printing every command,');
+  WriteLn('status and chip register on the way through, and nothing goes');
+  WriteLn('resident.  It stops at "this is not a mouse" -- which is the');
+  WriteLn('right thing for a mouse diagnostic and a useless one for');
+  WriteLn('finding out what an unknown dongle is.  USBINFO, in');
+  WriteLn('CH375USBTOOLS, does not care what class the device is.');
+  HelpTail;
+end;
+
+begin
+  if HelpWanted then begin Usage; Halt(0); end;
+  Base := DEF_BASE; NPoll := 200; WantRegs := False;
   for I := 1 to ParamCount do
   begin
     A := ParamStr(I);
@@ -317,7 +341,7 @@ begin
   end;
   PortDat := Base; PortCmd := Base + 1;
 
-  WriteLn('=== CH375 host-mode diagnostic ===');
+  Banner('CHDIAG', VER, 'CH375 host-mode diagnostic');
   WriteLn('I/O base ', Hex2(Hi(Base)) + Hex2(Lo(Base)), 'h  ',
           '(data ', Hex2(Hi(PortDat)) + Hex2(Lo(PortDat)),
           ', command ', Hex2(Hi(PortCmd)) + Hex2(Lo(PortCmd)), ')');

@@ -27,7 +27,10 @@ program kbcinj;
 
 {$MODE OBJFPC}{$H-}{$ASMMODE INTEL}
 
+uses chtool;
+
 const
+  VER    = '1.0.0';
   SCAN_A = $1E;         { the 'a' key -- make code }
   WANT   = $1E61;       { what INT 16h should return for it }
 
@@ -118,7 +121,38 @@ var
   Got: Boolean;
   N: Integer;
 
+procedure Usage;
 begin
+  Banner('KBCINJ', VER, 'prove 8042 command D2h works on this machine');
+  WriteLn;
+  WriteLn('  KBCINJ [/Q]');
+  WriteLn;
+  WriteLn('  /Q       only the verdict');
+  WriteLn('  /?       this screen');
+  WriteLn;
+  WriteLn('USBKBD /K and USBCOMBO /K deliver keys by handing scancodes to');
+  WriteLn('the keyboard controller with command D2h, so they arrive as');
+  WriteLn('real IRQ1 interrupts.  That is the only way to reach a program');
+  WriteLn('that hooks INT 09h -- DOS EDIT''s menus, and most games.');
+  WriteLn;
+  WriteLn('It needs an AT-class 8042.  An XT-class machine has no D2h, and');
+  WriteLn('writing it there can leave the controller confused with no');
+  WriteLn('keyboard at all until the machine is power-cycled.  So before');
+  WriteLn('trusting /K it is worth ten seconds proving the mechanism,');
+  WriteLn('which is all this does: inject a known scancode, then see');
+  WriteLn('whether INT 16h hands back the character the BIOS made of it.');
+  WriteLn;
+  WriteLn('No CH375, no USB keyboard and no driver are needed, so there is');
+  WriteLn('no I/O base to set.  Nothing is left resident.');
+  WriteLn;
+  WriteLn('Exit: 0 injection works, 1 no controller answers, 2 the');
+  WriteLn('      controller took the byte but nothing came back,');
+  WriteLn('      3 something came back but not what was injected');
+  HelpTail;
+end;
+
+begin
+  if HelpWanted then begin Usage; Halt(0); end;
   for I := 1 to ParamCount do
   begin
     A := ParamStr(I);
@@ -126,7 +160,7 @@ begin
     if (A = '/Q') or (A = '-Q') then Quiet := True;
   end;
 
-  Say('=== KBCINJ -- does 8042 command D2h work here? ===');
+  if not Quiet then Banner('KBCINJ', VER, 'does 8042 command D2h work here?');
   Say('');
 
   St := InB($64);

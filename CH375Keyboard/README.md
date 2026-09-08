@@ -55,11 +55,12 @@ AT-class 8042; `KBCINJ` says in ten seconds whether a machine has one.
 ## Command line
 
     USBKBD [@260] [/S] [/U] [/F] [/V] [/N] [/E] [/K]
-           [/R=n] [/D=n] [/T=n]
+           [/R=n] [/D=n] [/T=n] [/?]
 
 | | |
 |---|---|
-| `@nnn` | CH375 I/O base in hex, default `260` |
+| `@nnn` | CH375 I/O base in hex, default `260`. `/S` prints the base the loaded copy actually took |
+| `/?` | the full help screen. This did not work before 1.8.0 — see the changelog |
 | `/S` | status of the copy already loaded — including its version, which is the interesting number when two builds are in play |
 | `/U` | unload. Refuses if something else hooked `INT 08h` after us, and refuses a resident copy whose version differs from its own |
 | `/F` | load even with no keyboard attached, and keep looking for one |

@@ -25,7 +25,10 @@ program chreg;
 
 {$MODE OBJFPC}{$H-}
 
-uses ch375;
+uses ch375, chtool;
+
+const
+  VER = '1.0.0';
 
 var
   Cur, Old: array[0..255] of Byte;
@@ -134,13 +137,40 @@ begin
   end;
 end;
 
+procedure Usage;
+begin
+  Banner('CHREG', VER, 'dump the CH375 internal register map');
+  WriteLn;
+  WriteLn('  CHREG [/P=260] [/U] [/W=n] [/D=ms] [/A]');
+  WriteLn;
+  HelpBaseLine;
+  WriteLn('  /U       bring the USB bus up first.  Without it the chip is');
+  WriteLn('           read exactly as found, which is what you want when');
+  WriteLn('           another program has left it somewhere interesting');
+  WriteLn('  /W=n     watch: re-read n times and print only what changed');
+  WriteLn('  /D=ms    delay between watch passes, default 250');
+  WriteLn('  /A       annotate every known register, not just interesting');
+  WriteLn('  /?       this screen');
+  WriteLn;
+  WriteLn('Command 0Ah is documented only as GET_MAX_LUN.  WCH''s own DOS');
+  WriteLn('driver uses it as a general "read one internal byte", and it is');
+  WriteLn('the only view there is of what the chip believes the USB bus is');
+  WriteLn('doing.  Registers C0-FF are the chip''s 64-byte data buffer:');
+  WriteLn('run CHREG after a transfer and the descriptor is still in it.');
+  WriteLn;
+  WriteLn('Reading a register has no side effects, so this is safe against');
+  WriteLn('a chip another program is using -- which is the point of /W.');
+  HelpTail;
+end;
+
 var
   Rc, I, N: Integer;
   Changed: Integer;
 
 begin
+  if HelpWanted then begin Usage; Halt(0); end;
   ParseArgs;
-  WriteLn('=== CHREG -- CH375 internal register map ===');
+  Banner('CHREG', VER, 'CH375 internal register map');
 
   if DoUp then
   begin

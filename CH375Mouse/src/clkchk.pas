@@ -15,7 +15,10 @@ program clkchk;
 
 {$MODE OBJFPC}{$H-}
 
-uses Dos;
+uses Dos, chtool;
+
+const
+  VER = '1.0.0';
 
 function Now100: LongInt;
 var H, M, S, C: Word;
@@ -29,7 +32,30 @@ var
   N, Code: Integer;
   H, M, S, C: Word;
 
+procedure Usage;
 begin
+  Banner('CLKCHK', VER, 'DOS clock check');
+  WriteLn;
+  WriteLn('  CLKCHK [seconds]');
+  WriteLn;
+  WriteLn('  seconds  how long to wait for, default 20');
+  WriteLn('  /?       this screen');
+  WriteLn;
+  WriteLn('USBMOUSE divides the PIT so it can poll the mouse fast, and');
+  WriteLn('forwards every nth tick to the original INT 08h.  If that');
+  WriteLn('arithmetic were wrong the DOS clock would run fast or slow and');
+  WriteLn('nothing else in the driver would look any different.');
+  WriteLn;
+  WriteLn('So: wait until the DOS clock says N seconds have passed, and');
+  WriteLn('let the caller time the run from outside.  Real elapsed time');
+  WriteLn('equal to N means the chain is intact; N/8 or 8N means it is');
+  WriteLn('not.');
+  HelpTail;
+end;
+
+begin
+  if HelpWanted then begin Usage; Halt(0); end;
+  Banner('CLKCHK', VER, 'DOS clock check');
   N := 20;
   if ParamCount >= 1 then
   begin

@@ -12,7 +12,10 @@ program mousedemo;
 
 {$MODE OBJFPC}{$H-}
 
-uses Dos;
+uses Dos, chtool;
+
+const
+  VER = '1.0.0';
 
 procedure M(var R: Registers);
 begin
@@ -32,7 +35,31 @@ var
   N, Code: Integer;
   Rep0, Rep1: Word;
 
+procedure Usage;
 begin
+  Banner('MDEMO', VER, 'live INT 33h mouse demo');
+  WriteLn;
+  WriteLn('  MDEMO [seconds]');
+  WriteLn;
+  WriteLn('  seconds  how long to run, default 25');
+  WriteLn('  /?       this screen');
+  WriteLn;
+  WriteLn('Needs USBMOUSE or USBCOMBO loaded.  Shows the text-mode cursor');
+  WriteLn('and then sits reading the mouse, so the pointer can be watched');
+  WriteLn('moving on the real screen.  The numbers come back over the');
+  WriteLn('bridge; the cursor itself only exists in video memory, so');
+  WriteLn('seeing it is the one part that needs a photograph.');
+  WriteLn;
+  WriteLn('There is no pointer at the DOS prompt otherwise -- only a');
+  WriteLn('program that asks for one gets one, which is why a mouse that');
+  WriteLn('seems dead at the prompt is usually working.  This is the');
+  WriteLn('quickest program to ask.');
+  HelpTail;
+end;
+
+begin
+  if HelpWanted then begin Usage; Halt(0); end;
+  Banner('MDEMO', VER, 'live INT 33h mouse demo');
   N := 25;
   if ParamCount >= 1 then
   begin

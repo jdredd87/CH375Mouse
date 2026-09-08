@@ -11,14 +11,15 @@ and why. If you only read one file, read this one.
 4. [First run](#first-run)
 5. [The drivers](#the-drivers)
 6. [The tools](#the-tools)
-7. [What works and what does not](#what-works-and-what-does-not)
-8. [The 8042 problem](#the-8042-problem)
-9. [Windows](#windows)
-10. [Things the hardware does that are not in the datasheet](#things-the-hardware-does-that-are-not-in-the-datasheet)
-11. [Troubleshooting](#troubleshooting)
-12. [Building from source](#building-from-source)
-13. [What a 386 would unlock](#what-a-386-would-unlock)
-14. [Related work](#related-work)
+7. [If your card is not at 260h](#if-your-card-is-not-at-260h)
+8. [What works and what does not](#what-works-and-what-does-not)
+9. [The 8042 problem](#the-8042-problem)
+10. [Windows](#windows)
+11. [Things the hardware does that are not in the datasheet](#things-the-hardware-does-that-are-not-in-the-datasheet)
+12. [Troubleshooting](#troubleshooting)
+13. [Building from source](#building-from-source)
+14. [What a 386 would unlock](#what-a-386-would-unlock)
+15. [Related work](#related-work)
 
 ---
 
@@ -215,6 +216,96 @@ That last cue exists because a driver once discarded 100% of real mouse data
 while every automated check passed — they all inject their own reports and
 never touch the USB read.
 
+### Every program takes /?
+
+Every program in every project prints its own full help with `/?`, and
+`-?`, `?`, `/HELP` and `--HELP` all do the same thing. That screen is the
+authority on what a tool accepts — this guide summarises, `/?` is complete.
+
+Bare `/H` is deliberately *not* a help switch: `USBKBD` and `USBCOMBO`
+already use `/H` for the INT 16h delivery hook, and a switch that means
+"help" in one program and something else in the next is worse than no
+shorthand at all.
+
+Every program also prints its name, its version and who wrote it on the
+first line, so a capture from a machine you are not sitting at says which
+build produced it:
+
+```
+USBSCAN 1.0.0  --  find CH375 boards in the ISA I/O space
+```
+
+---
+
+## If your card is not at 260h
+
+`260h` is the CH375's own default and the address this was developed
+against, but the board's address is set by **jumpers** and yours may be
+somewhere else. Nothing in this repository is hardwired to `260h`.
+
+**The three drivers take `@hex`:**
+
+```
+USBCOMBO @300           load the combo driver against a card at 300h
+USBKBD @2A0
+USBMOUSE @240
+```
+
+**Every tool that touches the chip takes `/P=hex`:**
+
+```
+USBINFO /P=300
+USBPOLL /P=300 /E=1
+HIDREP  /P=300
+USBCTL  /P=300
+CHREG   /P=300
+USBMON  /P=300
+KBDRAW  /P=300
+CHDIAG  /P=300
+```
+
+**`USBSCAN` finds it for you**, and takes `/P=hex` to mean *test only this
+one address*:
+
+```
+USBSCAN                 try the eight addresses a board is normally at
+USBSCAN /P=340          test 340h and nothing else
+USBSCAN /A              sweep every 16-byte boundary -- read /? first
+```
+
+The plain scan tries `260 250 240 230 220 210 200 290` and nothing else,
+so a board jumpered outside that list reports *"No CH375 found"* while
+being perfectly healthy. `/A` sweeps everything, but probing an address
+means **writing** to it, so it skips a reserved list and you should read
+`USBSCAN /?` before using it.
+
+**Confirming what a loaded driver took.** `/S` prints the base the resident
+copy is actually using, read out of its image rather than assumed:
+
+```
+C:\>USBCOMBO /S
+USBCOMBO 1.1.0 -- StevenC
+Loaded: USBCOMBO 1.1.0.
+  I/O base=0260h  (data, command+1)
+Keyboard half:
+  live=1
+  ...
+```
+
+**The tools that do not take a base do not need one.** `MOUSETST`,
+`EVTEST`, `PS2TEST`, `CLICKTST`, `MDEMO`, `TICKCHK`, `CLKCHK`, `KBDTST`,
+`KBDBIOS`, `KBD16`, `KBCINJ` and `COMBOTST` reach the driver through
+`INT 33h`, the BIOS, or the resident image's published pointer block. None
+of them opens the card, so there is no address for them to get wrong.
+
+**Two cautions, neither of them measured here.** The drivers' `@nnn`
+parser shifts left four bits per hex digit with no digit cap, so more than
+four digits wraps silently rather than complaining. And on this machine's
+8-bit bus, addresses above `3FF` are likely to alias — that is ordinary
+XT-bus behaviour rather than anything specific to the CH375, but it means
+`@400` and up are not worth trying. `260h` is the only base this has ever
+actually run at; the rest is correct by inspection.
+
 ---
 
 ## What works and what does not
@@ -381,6 +472,21 @@ interrupt" impossible.
 ---
 
 ## Troubleshooting
+
+### "No CH375 found", or the driver says there is no card
+
+The board's address is jumpered, and every program here assumes `260h`
+until told otherwise. Check what you actually have:
+
+```
+USBSCAN             the eight addresses a board is normally jumpered to
+USBSCAN /P=340      test one you already know about
+USBSCAN /A          sweep -- read USBSCAN /? first, it writes to ports
+```
+
+Then give the address to whatever you are running: `@hex` for the three
+drivers, `/P=hex` for the tools. See
+[If your card is not at 260h](#if-your-card-is-not-at-260h).
 
 ### The keyboard is completely dead
 

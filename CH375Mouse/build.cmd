@@ -1,6 +1,6 @@
 @echo off
 REM  CH375Mouse -- build everything into bin\
-REM  StevenC -- https://github.com/jdredd87/CH375USBToolsTools
+REM  StevenC -- https://github.com/jdredd87/CH375USBTools
 REM  Public domain (the Unlicense); see LICENSE.
 REM
 REM    build.cmd            build only
@@ -32,6 +32,11 @@ REM  -O9 matters; without it some jumps stay in their long form.
 setlocal
 cd /d "%~dp0"
 if "%DOSBRIDGE%"=="" set DOSBRIDGE=C:\dosbridge
+REM  chtool.pas -- the shared banner, version and /? convention -- lives in
+REM  CH375USBTOOLS\src and is found with -Fu.  Its .ppu is compiled into
+REM  THIS project's bin\, so the projects share source and never a
+REM  compiled unit.
+set TOOLS=%~dp0..\CH375USBTOOLS\src
 if not exist bin mkdir bin
 
 echo --- USBMOUSE.COM
@@ -40,7 +45,7 @@ if errorlevel 1 goto failed
 
 for %%T in (chdiag mousetst evtest ps2test tickchk clkchk mdemo clicktst) do (
   echo --- %%T
-  fpc -Tmsdos -Pi8086 -WmLarge -FEbin -FUbin src\%%T.pas >nul
+  fpc -Tmsdos -Pi8086 -WmLarge -Fu"%TOOLS%" -FEbin -FUbin src\%%T.pas >nul
   if errorlevel 1 goto failed
 )
 if exist bin\*.a   del /q bin\*.a

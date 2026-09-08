@@ -4,6 +4,35 @@ CH375USBTOOLS -- StevenC -- https://github.com/jdredd87/CH375USBTools
 
 ## Unreleased
 
+* **Every program now prints its name, version and author on its first
+  line, and answers `/?` with a full help screen.** `-?`, `?`, `/HELP` and
+  `--HELP` do the same thing. Bare `/H` deliberately does not: `USBKBD` and
+  `USBCOMBO` already use `/H` for the INT 16h delivery hook, and a switch
+  that means "help" in one program and something else in the next is worse
+  than no shorthand at all.
+* The banner, the help footer and the `/P=` help line come from one shared
+  unit, `chtool.pas` in `CH375USBTOOLS/src`, compiled into each project's
+  own `bin\` with `-Fu`. Twenty-odd separate copies of the same three lines
+  is exactly the kind of thing that drifts.
+* Each program carries its own `VER` constant rather than sharing one.
+  They are released together but they do not change together, and a tool
+  reporting 1.4.0 because something else in the repository moved tells you
+  nothing.
+* **`USBSCAN /P=hex` tests one named address and stops.** The default scan
+  tries eight addresses and nothing else, so a board jumpered outside that
+  list reported "No CH375 found" while being perfectly healthy. When the
+  jumpers are already known there is no reason to sweep at all -- and no
+  reason to write to seven addresses that belong to something else.
+* `USBSCAN`'s not-found advice now points at `/P=` rather than only at the
+  `/A` sweep, which is the dangerous option of the two.
+* All seven tools now report their version, and all seven answer `/?`.
+  Each help screen is the tool's own header block, so `/?` is complete
+  where the guide only summarises.
+* New `src/chtool.pas`: the shared banner, `/?` detection, help footer and
+  the `DEF_BASE` constant. It is compiled into each project's `bin\` from
+  this one source, so the four projects share source and never a compiled
+  unit -- the same arrangement `ch375.pas` already had.
+
 * Documented the PS2-to-USB adapter (`0E8F:0020`): one low-speed device with
   two boot HID interfaces, keyboard on EP 81 and mouse on EP 82, and a mouse
   interface that declares report IDs so its native reports are 5 bytes with

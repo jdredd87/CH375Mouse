@@ -26,7 +26,10 @@ program usbmon;
 
 {$MODE OBJFPC}{$H-}
 
-uses ch375;
+uses ch375, chtool;
+
+const
+  VER = '1.0.0';
 
 var
   Secs:  Word = 60;
@@ -57,7 +60,33 @@ var
   V: LongInt;
   Stamp: ShortString;
 
+procedure Usage;
 begin
+  Banner('USBMON', VER, 'watch the USB port for plug and unplug');
+  WriteLn;
+  WriteLn('  USBMON [/P=260] [/S=secs] [/E] [/Q]');
+  WriteLn;
+  HelpBaseLine;
+  WriteLn('  /S=dec   how long to watch, in seconds.  Default 60,');
+  WriteLn('           0 = until a key is pressed');
+  WriteLn('  /E       enumerate each device as it arrives and say what it');
+  WriteLn('           is.  Without it only attach and detach are reported,');
+  WriteLn('           which is lighter and does not disturb the device');
+  WriteLn('  /Q       quiet: only the events, no periodic status line');
+  WriteLn('  /?       this screen');
+  WriteLn;
+  WriteLn('Press a key to stop early.');
+  WriteLn;
+  WriteLn('Everything else in the suite takes one look at whatever is');
+  WriteLn('attached.  This sits on the port, so hot-plug behaviour can be');
+  WriteLn('watched: how long a device takes to settle, whether it');
+  WriteLn('enumerates the same way twice, and which devices announce a');
+  WriteLn('disconnect rather than just going quiet.');
+  HelpTail;
+end;
+
+begin
+  if HelpWanted then begin Usage; Halt(0); end;
   for I := 1 to ParamCount do
   begin
     A := ParamStr(I);
@@ -72,7 +101,7 @@ begin
     end;
   end;
 
-  WriteLn('=== USBMON -- USB port monitor ===');
+  Banner('USBMON', VER, 'USB port monitor');
   if not ChipHere(Base) then
   begin
     WriteLn('No CH375 responds at ', Hex4(Base), 'h.');

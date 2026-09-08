@@ -28,7 +28,10 @@ program clicktst;
 
 {$MODE OBJFPC}{$H-}{$ASMMODE INTEL}
 
-uses Dos;
+uses Dos, chtool;
+
+const
+  VER = '1.0.0';
 
 var
   Quiet: Boolean;
@@ -106,7 +109,40 @@ var
   PL, PR, PM: Word;
   AnyRaw, AnyInt: Boolean;
 
+procedure Usage;
 begin
+  Banner('CLICKTST', VER, 'button diagnostic for USBMOUSE');
+  WriteLn;
+  WriteLn('  CLICKTST [seconds] [/Q]');
+  WriteLn;
+  WriteLn('  seconds  how long to watch, default 30');
+  WriteLn('  /Q       no sound');
+  WriteLn('  /?       this screen');
+  WriteLn;
+  WriteLn('Movement working while clicks do not splits the problem cleanly');
+  WriteLn('in two, and this says which half it is.  It watches three');
+  WriteLn('things at once:');
+  WriteLn('  the raw HID report the driver last received  (fn 7F03h)');
+  WriteLn('  the button mask INT 33h reports              (fn 03h)');
+  WriteLn('  the press and release counters               (fn 05h/06h)');
+  WriteLn;
+  WriteLn('If the raw report''s byte 0 never goes non-zero, the press is');
+  WriteLn('not reaching the driver -- the mouse is not sending it, or not');
+  WriteLn('in the format expected.  If it does but the INT 33h mask stays');
+  WriteLn('0, the fault is in the driver.  If both move and an application');
+  WriteLn('still ignores clicks, that application is reading the mouse');
+  WriteLn('some other way, most likely the function 0Ch event handler.');
+  WriteLn;
+  WriteLn('It beeps when it starts watching, chirps once per press so you');
+  WriteLn('get confirmation without looking at the screen, and beeps twice');
+  WriteLn('when done.  The speaker runs off PIT channel 2, nothing to do');
+  WriteLn('with channel 0 that the driver reprograms, so it cannot disturb');
+  WriteLn('the poll rate or the DOS clock.');
+  HelpTail;
+end;
+
+begin
+  if HelpWanted then begin Usage; Halt(0); end;
   N := 30;
   Quiet := False;
   for Code := 1 to ParamCount do

@@ -19,6 +19,22 @@ this driver and recorded in the README:
   operation in `usbmouse.asm` is after `resident_end`, in transient code.
   Checked rather than assumed.
 
+## 1.1.0 -- 2026-09-08
+
+* **`/S` reports the I/O base the resident copy is using**, read out of its
+  image rather than assumed. Without it there was no way to confirm which
+  address a driver loaded with `@nnn` actually took.
+* The help screen says so too.
+* `CHDIAG`, `MOUSETST`, `EVTEST`, `PS2TEST`, `TICKCHK`, `CLKCHK`, `MDEMO`
+  and `CLICKTST` all report a version and answer `/?`. The five that take a
+  positional `[seconds]` argument check for `/?` before parsing it as a
+  number, so `/?` does not silently become "use the default".
+* `MOUSETST`'s local `Ver` -- which holds the *driver's* version string --
+  is now `DrvVer`, so it cannot be confused with the program's own.
+* `build.cmd` picks up `chtool.pas` from `..\CH375USBTOOLS\src` with `-Fu`,
+  the same arrangement the keyboard and combo projects already used, and
+  the repository URL in its header had `Tools` twice.
+
 ## 1.0.0 -- 2026-09-06
 
 First numbered release. Everything below has been run on the hardware: a

@@ -22,6 +22,11 @@ program kbdbios;
 
 {$MODE OBJFPC}{$H-}{$ASMMODE INTEL}
 
+uses chtool;
+
+const
+  VER = '1.0.0';
+
 var
   SaveTo: ShortString = '';
 
@@ -94,7 +99,37 @@ var
   Code: Integer;
   A, K: ShortString;
 
+procedure Usage;
 begin
+  Banner('KBDBIOS', VER, 'dump the BIOS keyboard data area');
+  WriteLn;
+  WriteLn('  KBDBIOS [/S=file]');
+  WriteLn;
+  WriteLn('  /S=file  also write the dump to a file, so two runs can be');
+  WriteLn('           compared with FC on the DOS side or diffed on a host');
+  WriteLn('  /?       this screen');
+  WriteLn;
+  WriteLn('A resident keyboard driver does not own the keyboard state; it');
+  WriteLn('borrows it.  The three shift bytes, the buffer head and tail,');
+  WriteLn('the LED shadow -- all belong to the BIOS and have to be handed');
+  WriteLn('back in a condition its own INT 09h can still work with.');
+  WriteLn;
+  WriteLn('This exists because USBKBD 1.1.0 got that wrong: after /U the');
+  WriteLn('machine''s own keyboard stopped working and nothing in the');
+  WriteLn('driver''s status output could show why.  The way to find a bug');
+  WriteLn('like that is to photograph the data area before and after and');
+  WriteLn('subtract.');
+  WriteLn;
+  WriteLn('Nothing here writes to the data area.  It is safe to run at any');
+  WriteLn('time, including with a driver loaded.  It reads the BIOS, not');
+  WriteLn('the card, so there is no I/O base to set.');
+  HelpTail;
+end;
+
+begin
+  if HelpWanted then begin Usage; Halt(0); end;
+  Banner('KBDBIOS', VER, 'BIOS keyboard data area');
+  WriteLn;
   for I := 1 to ParamCount do
   begin
     A := ParamStr(I);

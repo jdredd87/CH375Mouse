@@ -104,7 +104,7 @@ signature:
 ; same way the signature at 0103 is.  Versions before 1.0.0 carry nothing
 ; here, so /S against one of those prints rubbish; there is one such build.
 ver_str:
-        db      '1.0.0$'                        ; 010B
+        db      '1.1.0$'                        ; 010B
 
 ; ---- saved vectors ----
 old33:  dd      0
@@ -1602,6 +1602,15 @@ stat_have:
         mov     al, [es:live]
         add     al, '0'
         call    putc
+        ; The I/O base the RESIDENT copy is using -- ES points at its
+        ; image, so this is the address it really took, not this program's
+        ; default.  Without it there is no way to confirm what @nnn did.
+        mov     dx, msg_s_base
+        call    puts
+        mov     ax, [es:io_dat]
+        call    puthexw
+        mov     al, 'h'
+        call    putc
         mov     dx, msg_s_ep
         call    puts
         mov     al, [es:ep_in]
@@ -2589,6 +2598,7 @@ msg_vidpid:    db ', VID/PID $'
 msg_already:   db 'USBMOUSE is already loaded.  /U unloads it.', 13, 10, '$'
 msg_isres:     db 'Loaded: USBMOUSE $'
 msg_isres2:    db '.  live=$'
+msg_s_base:    db '  I/O base=$'
 msg_s_ep:      db '  endpoint=$'
 msg_s_rep:     db '  reports=$'
 msg_s_rate:    db '  timer divisor=$'
@@ -2623,6 +2633,7 @@ msg_help:
         db 13, 10
         db '  USBMOUSE            enumerate the mouse and install', 13, 10
         db '  USBMOUSE @nnn       CH375 I/O base in hex        (default 260)', 13, 10
+        db '                      /S prints the base the loaded copy took', 13, 10
         db '  USBMOUSE /R=n       PIT divisor, poll rate is 18.2*n Hz  (1-16, default 8)', 13, 10
         db '  USBMOUSE /V         trace every bring-up step and the status it returned', 13, 10
         db '  USBMOUSE /F         install with nothing attached, and keep looking', 13, 10

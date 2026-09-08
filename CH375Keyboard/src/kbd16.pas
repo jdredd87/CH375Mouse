@@ -30,7 +30,10 @@ program kbd16;
 
 {$MODE OBJFPC}{$H-}{$ASMMODE INTEL}
 
+uses chtool;
+
 const
+  VER      = '1.0.0';
   PROBEKEY = $1E61;        { the 'a' key: scancode 1E, ascii 61 }
 
 function PeekW(Seg, Ofs: Word): Word;
@@ -173,8 +176,40 @@ var
   R00, R10: Word;
   Legacy, Enhanced: Boolean;
 
+procedure Usage;
 begin
-  WriteLn('=== KBD16 -- which INT 16h calls does this BIOS have? ===');
+  Banner('KBD16', VER, 'which INT 16h calls does this BIOS have?');
+  WriteLn;
+  WriteLn('  KBD16');
+  WriteLn;
+  WriteLn('  /?       this screen');
+  WriteLn;
+  WriteLn('It takes no other switches, and needs no keyboard and no card.');
+  WriteLn;
+  WriteLn('There are two generations of INT 16h.  The original PC/XT BIOS');
+  WriteLn('has AH=00h (read), 01h (peek) and 02h (shift state).  The AT');
+  WriteLn('and later "enhanced keyboard" BIOS adds AH=10h, 11h and 12h,');
+  WriteLn('which do the same three jobs but can report the keys a 101-key');
+  WriteLn('keyboard has and an 83-key one has not.');
+  WriteLn;
+  WriteLn('Software written after about 1986 often prefers the enhanced');
+  WriteLn('calls.  A program reading ordinary typing through AH=00h but');
+  WriteLn('driving its menu bar through AH=10h would, on a BIOS lacking');
+  WriteLn('the second set, be a program you can type into whose menus');
+  WriteLn('ignore you -- which looks exactly like a driver fault.');
+  WriteLn;
+  WriteLn('A word is written straight into the BIOS keyboard buffer, the');
+  WriteLn('way a keyboard interrupt would, and each function is then asked');
+  WriteLn('whether it can see it.');
+  WriteLn;
+  WriteLn('Exit: 0 the enhanced calls work, 1 they do not, 2 not even the');
+  WriteLn('      legacy calls work (the buffer write itself failed)');
+  HelpTail;
+end;
+
+begin
+  if HelpWanted then begin Usage; Halt(0); end;
+  Banner('KBD16', VER, 'which INT 16h calls does this BIOS have?');
   WriteLn;
 
   Drain;

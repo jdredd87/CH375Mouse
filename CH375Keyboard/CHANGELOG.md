@@ -32,6 +32,25 @@ endpoint, and that is the only reason it is safe to do so as directly as it
 does. Polling a second interrupt endpoint on the same CH375 makes the chip
 answer with packets no device sent; see `CH375Combo/README.md`.
 
+## 1.8.0 -- 2026-09-08
+
+* **`/?` never worked, and now does.** The option parser folded each switch
+  letter to upper case with `AND 0DFh` *before* testing it, which is right
+  for letters and wrong for everything else: it turns `?` (3Fh) into 1Fh,
+  so the comparison further down could never match. `USBKBD /?` silently
+  loaded the driver instead of printing help. `USBCOMBO` found and fixed
+  this in its own copy of the same parser; this one kept the bug until now.
+  `?` is now tested before the upper-casing, and the unreachable second
+  test further down the chain is gone.
+* **`/S` reports the I/O base the resident copy is using**, read out of its
+  image rather than assumed. There was previously no way to confirm which
+  address a driver loaded with `@nnn` actually took -- which is precisely
+  the situation in which you want to know.
+* The help screen says that `/S` shows the base in use. No net lines were
+  added: the screen is 23 lines and that is all there is room for.
+* `KBDRAW`, `KBDTST`, `KBDBIOS`, `KBCINJ` and `KBD16` all report a version
+  and answer `/?`.
+
 ## 1.7.1 -- 2026-09-07
 
 * **`/W` withdrawn.** It locked the machine solid, needing a power cycle,

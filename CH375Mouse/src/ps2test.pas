@@ -30,7 +30,10 @@ program ps2test;
 
 {$MODE OBJFPC}{$H-}{$ASMMODE INTEL}
 
-uses Dos;
+uses Dos, chtool;
+
+const
+  VER = '1.0.0';
 
 var
   Fails, Checks: Integer;
@@ -133,7 +136,41 @@ var
   T0: LongInt;
   Before, RepBefore: Word;
 
+procedure Usage;
 begin
+  Banner('PS2TEST', VER, 'PS/2 BIOS mouse emulation test');
+  WriteLn;
+  WriteLn('  PS2TEST [seconds]');
+  WriteLn;
+  WriteLn('  seconds  how long to watch for real packets, default 8');
+  WriteLn('  /?       this screen');
+  WriteLn;
+  WriteLn('Needs USBMOUSE /W or USBCOMBO /W loaded.  /W makes the USB');
+  WriteLn('mouse look like a PS/2 pointing device to the BIOS interface,');
+  WriteLn('which is the only thing Windows 3.x understands.  This makes');
+  WriteLn('exactly the calls the Windows 3.0 MOUSE.DRV makes, in the same');
+  WriteLn('order, and checks the answers -- so the emulation can be proved');
+  WriteLn('without starting Windows, which on this machine cannot be');
+  WriteLn('exited remotely.');
+  WriteLn;
+  WriteLn('Taken from a disassembly of that driver:');
+  WriteLn('  INT 15h AH=C0h   configuration table, model F8/FA/FC');
+  WriteLn('  INT 11h          bit 2 set, "pointing device installed"');
+  WriteLn('  INT 15h AX=C205h BH=3   initialise, 3-byte packets');
+  WriteLn('          AX=C201h        reset');
+  WriteLn('          AX=C203h BH=3   resolution');
+  WriteLn('          AX=C207h ES:BX  set the callback');
+  WriteLn('          AX=C206h BH=1   scaling 1:1');
+  WriteLn('          AX=C202h BH=2   sample rate');
+  WriteLn('          AX=C200h BH=1   enable');
+  WriteLn;
+  WriteLn('It reaches the driver through the BIOS, never the card, so');
+  WriteLn('there is no I/O base to set here.');
+  HelpTail;
+end;
+
+begin
+  if HelpWanted then begin Usage; Halt(0); end;
   Fails := 0; Checks := 0;
   N := 8;
   if ParamCount >= 1 then
@@ -142,7 +179,7 @@ begin
     if (Code <> 0) or (N < 1) or (N > 60) then N := 8;
   end;
 
-  WriteLn('=== USBMOUSE PS/2 BIOS emulation test ===');
+  Banner('PS2TEST', VER, 'USBMOUSE PS/2 BIOS emulation test');
   R.AX := 0; M33(R);
   if R.AX <> $FFFF then
   begin

@@ -45,10 +45,13 @@ program combotst;
 
 {$MODE OBJFPC}{$H-}
 
-uses Dos, ch375;   { ch375 gives InB/OutB/Ticks/KeyWaiting -- and NOT crt,
+uses Dos, ch375, chtool;
+                   { ch375 gives InB/OutB/Ticks/KeyWaiting, chtool the
+                     banner and /? every tool here shares -- and NOT crt,
                      which would paint the screen and print nothing }
 
 const
+  VER   = '1.0.0';
   SIG   = 'USBCMB01';
   { offsets inside the resident image -- see the pointer block in the .asm }
   O_SIG = $0103;
@@ -908,8 +911,63 @@ var
   Secs, Code: Word;
   V: LongInt;
 
+procedure Usage;
 begin
-  WriteLn('=== COMBOTST -- USBCOMBO.COM conformance and diagnostics ===');
+  Banner('COMBOTST', VER, 'conformance and diagnostics for USBCOMBO.COM');
+  WriteLn;
+  WriteLn('  COMBOTST [/W[=secs]] [/KB[=secs]] [/BEEP] [/BIOS] [/FLUSH]');
+  WriteLn;
+  WriteLn('  (none)   run the conformance checks');
+  WriteLn('  /W       watch raw packets instead of running the checks');
+  WriteLn('  /W=20    ...for 20 seconds');
+  WriteLn('  /KB=20   watch the KEYBOARD reports only.  The mouse makes far');
+  WriteLn('           more traffic, so with both traced the key reports');
+  WriteLn('           scroll away before they can be read');
+  WriteLn('  /BIOS    dump the BIOS keyboard buffer state');
+  WriteLn('  /FLUSH   print the INT 33h vector before and after');
+  WriteLn('  /BEEP    play every cue and exit, to check you can hear them');
+  WriteLn('  /?       this screen');
+  WriteLn;
+  WriteLn('Run it with the driver already loaded:');
+  WriteLn('  USBCOMBO');
+  WriteLn('  COMBOTST');
+  WriteLn('  USBCOMBO /U');
+  WriteLn;
+  WriteLn('USBCOMBO has three things that can fail independently: the USB');
+  WriteLn('half, the keyboard delivery path, and the INT 33h mouse');
+  WriteLn('interface.  The driver''s own /T covers the second and the');
+  WriteLn('arithmetic of the third with no hardware attached.  This covers');
+  WriteLn('what /T cannot reach: the INT 33h API as an application really');
+  WriteLn('calls it, and what the device is really putting on the wire.');
+  WriteLn;
+  WriteLn('THE POINT OF /W.  This adapter answers SET_PROTOCOL 0 with');
+  WriteLn('success and then sends its native report-ID format anyway, so');
+  WriteLn('the driver decides the format from the packet rather than from');
+  WriteLn('the request.  /W prints both the bytes as they arrived and the');
+  WriteLn('boot-shaped report the driver made of them.');
+  WriteLn;
+  WriteLn('It also beeps.  The one thing no automated check can do is move');
+  WriteLn('the mouse, so /W asks a human to: two rising notes mean start');
+  WriteLn('moving and clicking, two falling notes mean stop.  Three high');
+  WriteLn('notes mean packets arrived and the driver threw them all away.');
+  WriteLn;
+  WriteLn('That last case is not hypothetical.  An earlier build decided a');
+  WriteLn('5-byte packet could not be real, on the grounds that the device');
+  WriteLn('had agreed to a 3-byte boot protocol -- and it rejected 100% of');
+  WriteLn('real mouse data while every injected-report check still passed.');
+  WriteLn('What caught it was moving the mouse and watching this output.');
+  WriteLn;
+  WriteLn('Everything here reads the resident driver through its published');
+  WriteLn('pointer block, never the card, so there is no I/O base to set.');
+  WriteLn('USBCOMBO @hex sets it and USBCOMBO /S prints it back.');
+  WriteLn;
+  WriteLn('Exit code is the number of failed checks, capped at 20.');
+  HelpTail;
+end;
+
+begin
+  if HelpWanted then begin Usage; Halt(0); end;
+  Banner('COMBOTST', VER, 'USBCOMBO.COM conformance and diagnostics');
   WriteLn;
 
   DoWatch := False;

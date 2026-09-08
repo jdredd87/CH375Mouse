@@ -25,7 +25,10 @@ program mousetst;
 
 {$MODE OBJFPC}{$H-}
 
-uses Dos;
+uses Dos, chtool;
+
+const
+  VER = '1.0.0';
 
 var
   Fails: Integer;
@@ -93,13 +96,50 @@ var
   Btn, X, Y: Integer;
   I, Live, Ep, LastSt, NRep, NRep2: Integer;
   DrvSeg: Word;
-  Ver: ShortString;
+  DrvVer: ShortString;
   T0: LongInt;
   H, Mn, Sc, Hu: Word;
 
+procedure Usage;
 begin
+  Banner('MOUSETST', VER, 'INT 33h conformance test for USBMOUSE.COM');
+  WriteLn;
+  WriteLn('  MOUSETST');
+  WriteLn;
+  WriteLn('  /?       this screen');
+  WriteLn;
+  WriteLn('It takes no other switches.  Run it with the driver loaded:');
+  WriteLn('  USBMOUSE');
+  WriteLn('  MOUSETST');
+  WriteLn('  USBMOUSE /U');
+  WriteLn;
+  WriteLn('The USB half of the driver and its INT 33h half fail');
+  WriteLn('independently, so they are tested independently.  USBMOUSE');
+  WriteLn('exposes a private function 7F01h that pushes a fabricated');
+  WriteLn('three-byte HID boot report through exactly the code a real one');
+  WriteLn('would take -- scaling, clamping, button edges, the text cursor,');
+  WriteLn('the event callback.  Every case is then exact and repeatable,');
+  WriteLn('which waving a real mouse can never be, and the checks still');
+  WriteLn('work with no mouse attached at all.');
+  WriteLn;
+  WriteLn('Function 7F02h suspends the driver''s polling while that runs.');
+  WriteLn('It has to: with a live mouse the real reports land between an');
+  WriteLn('injection and the read-back, and the deterministic checks turn');
+  WriteLn('into a race.  Polling is restored before the last section,');
+  WriteLn('which watches for real reports.');
+  WriteLn;
+  WriteLn('This talks to the resident driver through INT 33h, never to the');
+  WriteLn('card, so there is no I/O base to set here -- USBMOUSE @hex sets');
+  WriteLn('it, and USBMOUSE /S prints it back.');
+  WriteLn;
+  WriteLn('Exit code is the number of failed checks, capped at 20.');
+  HelpTail;
+end;
+
+begin
+  if HelpWanted then begin Usage; Halt(0); end;
   Fails := 0; Checks := 0; InjCount := 0;
-  WriteLn('=== USBMOUSE INT 33h test ===');
+  Banner('MOUSETST', VER, 'USBMOUSE INT 33h test');
 
   { ---- is the driver there at all? ---- }
   R.AX := 0;
@@ -125,17 +165,17 @@ begin
     without the driver having to answer a call.  Do not check it against a
     fixed number here: this passes for every version, which is the point. }
   DrvSeg := MemW[0 : $33 * 4 + 2];
-  Ver := '';
+  DrvVer := '';
   I := 0;
   while (I < 8) and (Mem[DrvSeg : $010B + I] <> Ord('$')) do
   begin
-    Ver := Ver + Chr(Mem[DrvSeg : $010B + I]);
+    DrvVer := DrvVer + Chr(Mem[DrvSeg : $010B + I]);
     Inc(I);
   end;
   Check('resident copy carries a version string',
-        (Length(Ver) >= 3) and (Pos('.', Ver) > 1) and
-        (Ver[1] >= '0') and (Ver[1] <= '9'));
-  WriteLn('  USBMOUSE version ', Ver);
+        (Length(DrvVer) >= 3) and (Pos('.', DrvVer) > 1) and
+        (DrvVer[1] >= '0') and (DrvVer[1] <= '9'));
+  WriteLn('  USBMOUSE version ', DrvVer);
 
   R.AX := $7F00;
   M(R);

@@ -34,7 +34,16 @@ committed: the machine this targets has no compiler for them.
 | `USBSCAN.EXE` | finds CH375 boards. Answers "what address is the card at", which every other tool assumes you already know |
 | `USBMON.EXE` | watches the port for things being plugged in and pulled out, optionally enumerating each arrival |
 
-Every tool takes `/P=hex` for the I/O base and defaults to `260h`.
+Every tool takes `/P=hex` for the I/O base and defaults to `260h`. The
+board's address is set by jumpers; if yours is not at `260h`, `USBSCAN`
+finds it and `USBSCAN /P=hex` tests one named address on its own.
+
+Every program here prints its own full help with **`/?`** — `-?`, `?`,
+`/HELP` and `--HELP` all do the same thing — and prints its name, version
+and author on its first line, so a captured log says which build produced
+it. Bare `/H` is not a help switch: `USBKBD` and `USBCOMBO` already use it
+for the INT 16h delivery hook.
+
 
 ## Worked example
 

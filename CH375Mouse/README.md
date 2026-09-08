@@ -135,7 +135,9 @@ which build is answering.
 
 ```
 USBMOUSE                  enumerate and install
-USBMOUSE @260             CH375 I/O base in hex (default 260)
+USBMOUSE @260             CH375 I/O base in hex (default 260).  /S prints
+                          the base the loaded copy actually took
+USBMOUSE /?               the full help screen
 USBMOUSE /V               trace each bring-up step and the status it returned
 USBMOUSE /F               install even with nothing attached, and keep looking
 USBMOUSE /E=n             skip enumeration, poll endpoint n regardless

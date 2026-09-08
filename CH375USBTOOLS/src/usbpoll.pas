@@ -42,7 +42,10 @@ program usbpoll;
 
 {$MODE OBJFPC}{$H-}
 
-uses ch375;
+uses ch375, chtool;
+
+const
+  VER = '1.0.0';
 
 var
   Cfg:     array[0..1023] of Byte;
@@ -252,10 +255,47 @@ var
   T0, Elapsed: LongInt;
   Stopped: ShortString;
 
+procedure Usage;
 begin
+  Banner('USBPOLL', VER, 'poll an endpoint and show what comes back');
+  WriteLn;
+  WriteLn('  USBPOLL [/P=260] [/E=n] [/I=n] [/N=count] [/S=secs] [/W=ms]');
+  WriteLn('          [/R=n] [/A] [/B] [/K] [/M]');
+  WriteLn;
+  HelpBaseLine;
+  WriteLn('  /E=n     endpoint number.  Default: the first interrupt IN');
+  WriteLn('  /I=n     interface to put in boot protocol, default the HID');
+  WriteLn('  /N=dec   packets to wait for, default 40.  Counts real');
+  WriteLn('           packets, not poll attempts');
+  WriteLn('  /S=dec   give up after this many seconds, default 20.  An');
+  WriteLn('           idle device NAKs forever and would otherwise hold');
+  WriteLn('           the machine for as long as /N asked for -- which,');
+  WriteLn('           run from a test harness, looks exactly like a hang');
+  WriteLn('  /W=dec   ms between polls, default 8');
+  WriteLn('  /A       print every poll, NAKs included.  Very noisy; it is');
+  WriteLn('           how you tell a silent device from a program that is');
+  WriteLn('           not polling');
+  WriteLn('  /R=dec   HID idle rate in 4 ms units, default 0 = report only');
+  WriteLn('           on change.  A nonzero rate makes the device repeat');
+  WriteLn('           its state, which is how you see a key that was');
+  WriteLn('           ALREADY held when polling started.  /R=25 is 100 ms');
+  WriteLn('  /B       ask for HID boot protocol (default for a HID iface)');
+  WriteLn('  /K       decode packets as HID boot keyboard reports');
+  WriteLn('  /M       decode packets as HID boot mouse reports');
+  WriteLn('           Without /K or /M the interface protocol decides');
+  WriteLn('  /?       this screen');
+  WriteLn;
+  WriteLn('Nothing here is mouse- or keyboard-specific underneath: an');
+  WriteLn('unrecognised endpoint is polled just the same and its bytes');
+  WriteLn('printed as bytes.');
+  HelpTail;
+end;
+
+begin
+  if HelpWanted then begin Usage; Halt(0); end;
   ParseArgs;
   UserEp := EpWant >= 0;
-  WriteLn('=== USBPOLL -- CH375 endpoint poll ===');
+  Banner('USBPOLL', VER, 'CH375 endpoint poll');
 
   Rc := BusUp;
   if Rc <> BU_OK then

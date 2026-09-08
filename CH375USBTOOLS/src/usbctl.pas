@@ -43,7 +43,10 @@ program usbctl;
 
 {$MODE OBJFPC}{$H-}
 
-uses ch375;
+uses ch375, chtool;
+
+const
+  VER = '1.0.0';
 
 var
   Buf:    array[0..1023] of Byte;
@@ -209,9 +212,50 @@ var
   NOk, NFail: Word;
   Tally: ShortString;
 
+procedure Usage;
 begin
+  Banner('USBCTL', VER, 'issue an arbitrary USB control transfer');
+  WriteLn;
+  WriteLn('  USBCTL [/P=260] [/R=bm] [/Q=req] [/V=val] [/I=idx] [/L=len]');
+  WriteLn('         [/D=hh,hh,...] [/N=count] [/G=ms] [/K=hex] [/T]');
+  WriteLn;
+  HelpBaseLine;
+  WriteLn('  /R=hex   bmRequestType, default 80 (IN, standard, device)');
+  WriteLn('  /Q=hex   bRequest, default 06 (GET_DESCRIPTOR)');
+  WriteLn('  /V=hex   wValue, default 0100 (device descriptor)');
+  WriteLn('  /I=hex   wIndex, default 0');
+  WriteLn('  /L=dec   wLength, default 18');
+  WriteLn('  /D=list  data for an OUT transfer, comma-separated hex bytes.');
+  WriteLn('           Supplying it makes the transfer a control-OUT');
+  WriteLn('           whatever the direction bit in /R says');
+  WriteLn('  /N=dec   repeat the transfer this many times and tally the');
+  WriteLn('           results.  A device that answers every other request');
+  WriteLn('           -- and they exist -- shows up here and nowhere else');
+  WriteLn('  /G=dec   settle delay in ms after each transfer, default 0');
+  WriteLn('  /K=hex   first data-stage toggle, default C0 (DATA1, which is');
+  WriteLn('           what the spec says).  A knob, not a setting');
+  WriteLn('  /T       trace every stage: SETUP, each IN packet, the status');
+  WriteLn('  /?       this screen');
+  WriteLn;
+  WriteLn('Examples');
+  WriteLn('  USBCTL                                device descriptor');
+  WriteLn('  USBCTL /V=0300 /L=255                 the LANGID list');
+  WriteLn('  USBCTL /V=0301 /I=0409 /L=255         string 1 in English');
+  WriteLn('  USBCTL /R=81 /V=2200 /I=0 /L=65       HID report descr iface 0');
+  WriteLn('  USBCTL /R=21 /Q=0A /V=0000 /I=0 /L=0  HID SET_IDLE, no data');
+  WriteLn('  USBCTL /R=21 /Q=09 /V=0200 /I=0 /D=02 HID SET_REPORT: NumLock');
+  WriteLn('  USBCTL /L=255 /N=10 /T                ten identical reads');
+  WriteLn;
+  WriteLn('The poking tool.  Everything else in the suite decides for you');
+  WriteLn('what to ask a device; this asks exactly what you type and shows');
+  WriteLn('every stage of what came back.');
+  HelpTail;
+end;
+
+begin
+  if HelpWanted then begin Usage; Halt(0); end;
   ParseArgs;
-  WriteLn('=== USBCTL -- CH375 control transfer ===');
+  Banner('USBCTL', VER, 'CH375 control transfer');
 
   Rc := BusUp;
   if Rc <> BU_OK then

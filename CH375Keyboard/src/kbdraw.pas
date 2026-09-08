@@ -31,7 +31,10 @@ program kbdraw;
 
 {$MODE OBJFPC}{$H-}
 
-uses ch375, hidkey;
+uses ch375, hidkey, chtool;
+
+const
+  VER = '1.0.0';
 
 var
   Cfg:     array[0..1023] of Byte;
@@ -170,9 +173,41 @@ var
   Mods, OldMods: Byte;
   Changed: Boolean;
 
+procedure Usage;
 begin
+  Banner('KBDRAW', VER, 'watch a USB keyboard and what it translates to');
+  WriteLn;
+  WriteLn('  KBDRAW [/P=260] [/S=secs] [/R=n] [/L] [/X]');
+  WriteLn;
+  HelpBaseLine;
+  WriteLn('  /S=dec   how long to run, default 30 seconds');
+  WriteLn('  /R=dec   HID idle rate in 4 ms units, default 0 = report on');
+  WriteLn('           change.  A nonzero rate repeats the current state,');
+  WriteLn('           which is the only way to see a key that was already');
+  WriteLn('           held down when this began');
+  WriteLn('  /L       drive the lock LEDs.  Caps, Num and Scroll toggle on');
+  WriteLn('           press and the keyboard lights follow, which proves');
+  WriteLn('           the OUTPUT path before the resident driver needs it');
+  WriteLn('  /X       show every report, not just the ones that changed');
+  WriteLn('  /?       this screen');
+  WriteLn;
+  WriteLn('The non-resident half of this project, and the one to run');
+  WriteLn('first.  It does everything USBKBD.COM does except go resident.');
+  WriteLn('If a key comes out wrong here it will come out wrong in the');
+  WriteLn('driver, and this is much the easier of the two to debug --');
+  WriteLn('nothing is hooked, so a mistake prints a wrong line instead of');
+  WriteLn('wedging the machine.');
+  WriteLn;
+  WriteLn('Exit: 0 saw a keypress, 1 no chip, 2 chip too old, 3 nothing');
+  WriteLn('      attached, 4 attached but silent, 5 not a keyboard,');
+  WriteLn('      6 could not configure, 7 nothing was ever typed');
+  HelpTail;
+end;
+
+begin
+  if HelpWanted then begin Usage; Halt(0); end;
   ParseArgs;
-  WriteLn('=== KBDRAW -- USB keyboard report viewer ===');
+  Banner('KBDRAW', VER, 'USB keyboard report viewer');
 
   Rc := BusUp;
   if Rc <> BU_OK then

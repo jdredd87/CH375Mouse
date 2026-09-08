@@ -26,7 +26,10 @@ program hidrep;
 
 {$MODE OBJFPC}{$H-}
 
-uses ch375;
+uses ch375, chtool;
+
+const
+  VER = '1.0.0';
 
 const
   MAXFIELD = 96;
@@ -654,14 +657,44 @@ begin
   end;
 end;
 
+procedure Usage;
+begin
+  Banner('HIDREP', VER, 'fetch and decode a HID report descriptor');
+  WriteLn;
+  WriteLn('  HIDREP [/P=260] [/I=n] [/X] [/L=n] [/F=hh,hh,...]');
+  WriteLn;
+  HelpBaseLine;
+  WriteLn('  /I=n     interface number, default 0');
+  WriteLn('  /X       also dump the raw bytes');
+  WriteLn('  /L=n     ask for n bytes rather than the length the HID');
+  WriteLn('           descriptor claims.  For a device that lies about it');
+  WriteLn('  /F=list  decode this comma-separated hex byte list instead of');
+  WriteLn('           asking a device at all.  No CH375 needed -- for a');
+  WriteLn('           descriptor captured elsewhere, and it is how the');
+  WriteLn('           decoder gets tested without hardware');
+  WriteLn('  /?       this screen');
+  WriteLn;
+  WriteLn('USBINFO prints a report descriptor as bytes.  This reads it as');
+  WriteLn('what it is -- a little stack program describing a bit layout --');
+  WriteLn('and ends with the field map each report actually has: which');
+  WriteLn('byte, which bit, how many, and what the device calls it.  That');
+  WriteLn('map is the thing you need in order to write a driver.');
+  WriteLn;
+  WriteLn('Exit: 0 ok, 1 no chip, 2 chip too old, 3 nothing attached,');
+  WriteLn('      4 attached but silent, 5 no HID descriptor on that');
+  WriteLn('      interface, 6 the report descriptor would not read');
+  HelpTail;
+end;
+
 var
   Rc, St: Integer;
   Got, Want, Total: Word;
   QLen: Byte;
 
 begin
+  if HelpWanted then begin Usage; Halt(0); end;
   ParseArgs;
-  WriteLn('=== HIDREP -- HID report descriptor decoder ===');
+  Banner('HIDREP', VER, 'HID report descriptor decoder');
 
   if FromFile then
   begin

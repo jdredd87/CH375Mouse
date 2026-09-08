@@ -7,8 +7,11 @@ program usbscan;
   CH375 answers with the ones-complement, AAh; nothing else does, so the
   test is specific enough to sweep with.
 
-    USBSCAN [/D] [/A] [/F=hex] [/T=hex] [/S=hex] [/FORCE]
+    USBSCAN [/P=hex] [/D] [/A] [/F=hex] [/T=hex] [/S=hex] [/FORCE]
 
+      /P=hex   test ONLY this address and stop.  For when the jumpers are
+               already known, or the board sits somewhere the default list
+               does not cover
       /D       also say what is attached to each card found
       /A       try every 16-byte boundary in the sweep range, not just the
                addresses a CH375 board is normally jumpered to
@@ -42,7 +45,10 @@ program usbscan;
 
 {$MODE OBJFPC}{$H-}
 
-uses ch375;
+uses ch375, chtool;
+
+const
+  VER = '1.0.0';
 
 const
   { Where a CH375 ISA board is normally jumpered.  Short, and every one of
@@ -61,6 +67,10 @@ var
   First: Word = $200;
   Last:  Word = $380;
   Step:  Word = $10;
+  { /P=hex: test this one address instead of sweeping anything.  Zero means
+    no /P was given -- 0000h is not a base a board can sit at, so it makes
+    a safe "unset". }
+  Only:  Word = 0;
   Deep:  Boolean = False;
   Sweep: Boolean = False;
   Force: Boolean = False;
@@ -94,12 +104,49 @@ begin
       K := Copy(A, 1, 3); A := Copy(A, 4, 250);
       Val('$' + A, V, Code);
       if Code <> 0 then Continue;
-      if      K = '/F=' then First := Word(V)
+      if      K = '/P=' then Only  := Word(V)
+      else if K = '/F=' then First := Word(V)
       else if K = '/T=' then Last  := Word(V)
       else if K = '/S=' then Step  := Word(V);
     end;
   end;
   if Step = 0 then Step := $10;
+end;
+
+procedure Usage;
+begin
+  Banner('USBSCAN', VER, 'find CH375 boards in the ISA I/O space');
+  WriteLn;
+  WriteLn('  USBSCAN [/P=hex] [/D] [/A] [/F=hex] [/T=hex] [/S=hex] [/FORCE]');
+  WriteLn;
+  WriteLn('  /P=hex   test ONLY this address and stop.  For when the');
+  WriteLn('           jumpers are already known, or the board sits');
+  WriteLn('           somewhere the default list does not cover');
+  WriteLn('  /D       also say what is attached to each card found');
+  WriteLn('  /A       try every 16-byte boundary in the sweep range, not');
+  WriteLn('           just the addresses a board is normally jumpered to');
+  WriteLn('  /F=hex   first base of the /A sweep, default 200');
+  WriteLn('  /T=hex   last base, default 380');
+  WriteLn('  /S=hex   step, default 10');
+  WriteLn('  /FORCE   do not skip the reserved addresses.  Read below');
+  WriteLn('  /?       this screen');
+  WriteLn;
+  WriteLn('READ THIS BEFORE WIDENING THE SWEEP.  Probing an address means');
+  WriteLn('WRITING to it: CHECK_EXIST sends 55h to base+1 and reads base.');
+  WriteLn('On a real ISA machine most addresses belong to something, and a');
+  WriteLn('stray write does not politely return an error -- it hangs the');
+  WriteLn('machine.  That is not hypothetical: it is what the first version');
+  WriteLn('of this program did, writing into the floppy controller at 3F0h.');
+  WriteLn;
+  WriteLn('So the default is a short list of addresses a CH375 board is');
+  WriteLn('actually jumpered to, and even /A skips a reserved list:');
+  WriteLn('  1F0 170 IDE   2F8 3F8 COM   278 378 LPT   3F0 floppy');
+  WriteLn('  320 330 disk, MPU-401       300 310 network');
+  WriteLn;
+  WriteLn('Every other tool in the suite takes /P=hex for the base, and');
+  WriteLn('the three drivers take @hex.  This is the program that tells');
+  WriteLn('you what to put there.');
+  HelpTail;
 end;
 
 var
@@ -111,9 +158,12 @@ var
   AtPort: Word;
 
 begin
+  if HelpWanted then begin Usage; Halt(0); end;
   ParseArgs;
-  WriteLn('=== USBSCAN -- looking for CH375 boards ===');
-  if Sweep then
+  Banner('USBSCAN', VER, 'looking for CH375 boards');
+  if Only <> 0 then
+    WriteLn('testing ', Hex4(Only), 'h only')
+  else if Sweep then
     WriteLn('sweeping ', Hex4(First), 'h to ', Hex4(Last), 'h step ',
             Hex4(Step), 'h')
   else
@@ -126,7 +176,15 @@ begin
   P := First;
   while True do
   begin
-    if Sweep then
+    { /P= is one address and then done.  Idx doubles as the "have I already
+      done it" flag, which is why it is still incremented here. }
+    if Only <> 0 then
+    begin
+      if Idx > 0 then Break;
+      AtPort := Only;
+      Inc(Idx);
+    end
+    else if Sweep then
     begin
       if P > LongInt(Last) then Break;
       AtPort := Word(P);
@@ -181,12 +239,21 @@ begin
     WriteLn(Skipped, ' address(es) skipped as reserved.');
   if Found = 0 then
   begin
-    WriteLn('No CH375 found.');
-    WriteLn('The board''s address is set by jumpers, and 260h is only the');
-    WriteLn('usual choice.  /A sweeps every 16-byte boundary instead -- but');
-    WriteLn('read the note in this program''s header first: probing an');
-    WriteLn('address means writing to it, and most addresses on an ISA bus');
-    WriteLn('belong to something that will not enjoy it.');
+    if Only <> 0 then
+    begin
+      WriteLn('No CH375 at ', Hex4(Only), 'h.');
+      WriteLn('Run USBSCAN with no switches to try the usual addresses.');
+    end
+    else
+    begin
+      WriteLn('No CH375 found.');
+      WriteLn('The board''s address is set by jumpers, and 260h is only');
+      WriteLn('the usual choice.  If you know where yours is, USBSCAN');
+      WriteLn('/P=hex tests just that one address.  /A sweeps every');
+      WriteLn('16-byte boundary instead -- but read /? first: probing an');
+      WriteLn('address means writing to it, and most addresses on an ISA');
+      WriteLn('bus belong to something that will not enjoy it.');
+    end;
     Halt(1);
   end;
   WriteLn(Found, ' board(s) found.  Every other tool takes /P=hex.');

@@ -53,11 +53,13 @@ run, and `/S` says which.
 ## Options
 
     USBCOMBO [@260] [/S] [/U] [/F] [/V] [/NK] [/NM] [/C] [/N] [/E] [/K]
-             [/T] [/Q] [/R=n] [/M=n] [/D=n] [/T=n] [/Y=n] [/X=hh] [/H]
+             [/T] [/Q] [/R=n] [/M=n] [/G=n] [/D=n] [/T=n] [/Y=n] [/X=hh]
+             [/H] [/?]
 
 | | |
 |---|---|
-| `@nnn` | CH375 I/O base in hex, default `260` |
+| `@nnn` | CH375 I/O base in hex, default `260`. `/S` prints the base the loaded copy actually took |
+| `/?` | the full help screen |
 | `/S` | status of the loaded copy — both halves, in full |
 | `/U` | unload |
 | `/F` | install even with nothing attached, and keep looking. **Keeps the whole image resident**, about 14 KB instead of 5 KB — see "What `/F` costs" below |
@@ -67,7 +69,7 @@ run, and `/S` says which.
 | `/C` | do not ask the mouse for boot protocol. A diagnostic — see "The report-ID wrinkle" |
 | `/N` | do not drive the lock LEDs |
 | `/E` | claim a 101/102-key keyboard in `40:96` bit 4 |
-| `/K` | inject keys through the 8042 (command `D2h`) instead of writing the BIOS buffer. Needs an AT-class controller; **this machine has none** and says so at load time |
+| `/K` | inject keys through the 8042 (command `D2h`) instead of writing the BIOS buffer. Needs an AT-class controller; **the PS/2 Model 30 this was built on has none** and says so at load time |
 | `/T` | self-test both halves and exit without going resident |
 | `/R=n` | timer divisor; PIT rate = 18.2 × *n* Hz. **Default 16 (291 Hz)**, *n* = 1..16. Lower it and the keyboard starts dropping characters — see "Poll rate is the keyboard's ceiling" |
 | `/M=n` | poll the mouse every *n*th tick. Default 2, giving it 145 Hz |

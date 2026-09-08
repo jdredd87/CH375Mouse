@@ -207,6 +207,12 @@ init:
         mov     dx, msg_prog
         call    puts
 
+        cmp     byte [op_help], 0
+        je      short not_help
+        mov     dx, msg_help
+        call    puts
+        jmp     near quit
+not_help:
         call    find_res
         cmp     byte [op_stat], 0
         je      short not_stat
@@ -372,6 +378,13 @@ parse:
 pa_loop:
         lodsb
         dec     cx
+        ; '?' before the upper-casing: AND 0DFh clears bit 5, which folds
+        ; letters and mangles everything else -- it turns '?' (3Fh) into
+        ; 1Fh.  USBKBD had exactly this bug and /? never worked there.
+        cmp     al, '?'
+        jne     short pa_nq
+        mov     byte [op_help], 1
+pa_nq:
         and     al, 0xDF
         cmp     al, 'U'
         jne     short pa_ns
@@ -443,8 +456,24 @@ quit:
 
 op_unl:  db 0
 op_stat: db 0
+op_help: db 0
 
-msg_prog:     db 'I16SPY -- INT 16h call counter', 13, 10, '$'
+msg_prog:     db 'I16SPY 1.0.0 -- INT 16h call counter -- StevenC', 13, 10, '$'
+msg_help:     db 13, 10
+        db 'Counts INT 16h calls by function and paints the totals on', 13, 10
+        db 'row 0 of the screen, so an interactive program can be watched', 13, 10
+        db 'from a machine you cannot type at.', 13, 10, 13, 10
+        db '  I16SPY        go resident and start counting', 13, 10
+        db '  I16SPY /S     print the counters', 13, 10
+        db '  I16SPY /U     unhook and free', 13, 10
+        db '  I16SPY /?     this screen', 13, 10, 13, 10
+        db 'Row 0 shows AH= 00 01 10 11 02 12 and everything else.  If the', 13, 10
+        db 'counters climb while a program looks stuck, it IS asking for', 13, 10
+        db 'keys and rejecting what it gets.  If they freeze, it is not', 13, 10
+        db 'asking at all and is reading the hardware itself -- which on a', 13, 10
+        db 'machine with no 8042 cannot be reached by any software driver.', 13, 10
+        db 13, 10
+        db 'github.com/jdredd87/CH375USBTools -- public domain', 13, 10, '$'
 msg_ok:       db 'Resident.  Counts on row 0: 00 01 10 11 02 12 other.', 13, 10, '$'
 msg_already:  db 'Already loaded.  /U unloads it.', 13, 10, '$'
 msg_notres:   db 'Not loaded.', 13, 10, '$'

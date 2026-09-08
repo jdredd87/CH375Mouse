@@ -28,7 +28,10 @@ program kbdtst;
 
 {$MODE OBJFPC}{$H-}{$ASMMODE INTEL}
 
-uses hidkey;
+uses hidkey, chtool;
+
+const
+  VER = '1.0.0';
 
 const
   SIG_OFS = $0103;      { 'USBKBD01'        }
@@ -474,9 +477,43 @@ begin
   end;
 end;
 
+procedure Usage;
 begin
+  Banner('KBDTST', VER, 'check a loaded USBKBD.COM');
+  WriteLn;
+  WriteLn('  KBDTST [/W=secs] [/Q]');
+  WriteLn;
+  WriteLn('  /W=dec   after the checks, wait this long for keys and print');
+  WriteLn('           what arrives through INT 16h.  Needs somebody to type');
+  WriteLn('  /Q       only failures');
+  WriteLn('  /?       this screen');
+  WriteLn;
+  WriteLn('Two jobs, and the first is the interesting one.');
+  WriteLn;
+  WriteLn('THE TABLE CHECK.  USBKBD carries its HID-usage translation as');
+  WriteLn('assembly tables; hidkey.pas carries the same mapping as case');
+  WriteLn('statements, and KBDRAW uses that one.  Two hand-written copies');
+  WriteLn('of one mapping drift silently -- somebody fixes a key in one');
+  WriteLn('and not the other.  So the resident image publishes where its');
+  WriteLn('tables are, at 0111h, and this walks all 256 usages comparing');
+  WriteLn('byte for byte.  It needs no keyboard and no human.');
+  WriteLn;
+  WriteLn('THE DRIVER CHECK.  That the resident copy is there, that it');
+  WriteLn('enumerated something, that its counters move, and that the BIOS');
+  WriteLn('keyboard buffer it writes into is where it should be.');
+  WriteLn;
+  WriteLn('This talks to the resident driver, never to the card, so it');
+  WriteLn('needs no /P= -- the driver already knows its own I/O base, and');
+  WriteLn('USBKBD /S prints it.');
+  WriteLn;
+  WriteLn('Exit code is the number of failed checks, capped at 20.');
+  HelpTail;
+end;
+
+begin
+  if HelpWanted then begin Usage; Halt(0); end;
   ParseArgs;
-  WriteLn('=== KBDTST -- USBKBD conformance ===');
+  Banner('KBDTST', VER, 'USBKBD conformance');
   Pass := 0; Fail := 0;
 
   ResSeg := FindResident;

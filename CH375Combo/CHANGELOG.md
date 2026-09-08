@@ -2,6 +2,17 @@
 
 All notable changes to `USBCOMBO.COM` and its test program.
 
+## 1.1.0 -- 2026-09-08
+
+* **`/S` reports the I/O base the resident copy is using**, printed above
+  the two halves because it belongs to the card rather than to either one.
+  Without it there was no way to confirm which address a driver loaded with
+  `@nnn` actually took.
+* The help screen's `@nnn` line says that `/S` shows the base in use. The
+  screen is full at 23 lines, so the words were traded rather than added.
+* `COMBOTST` reports a version and answers `/?`, with the whole of its
+  header block -- including what the beeps mean and why `/W` exists.
+
 ## 1.0.0 -- 2026-09-07
 
 First release. One driver for a USB keyboard and a USB mouse sharing a

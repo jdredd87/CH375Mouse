@@ -29,7 +29,10 @@ program tickchk;
 
 {$MODE OBJFPC}{$H-}{$ASMMODE INTEL}
 
-uses Dos;
+uses Dos, chtool;
+
+const
+  VER = '1.0.0';
 
 var
   Count: Word;
@@ -70,7 +73,42 @@ var
   Rate: LongInt;
   R: Registers;
 
+procedure Usage;
 begin
+  Banner('TICKCHK', VER, 'INT 08h chain-rate check');
+  WriteLn;
+  WriteLn('  TICKCHK [seconds]');
+  WriteLn;
+  WriteLn('  seconds  how long to measure, default 10');
+  WriteLn('  /?       this screen');
+  WriteLn;
+  WriteLn('Run it with and without the driver loaded.  Both should say');
+  WriteLn('about 18.');
+  WriteLn;
+  WriteLn('USBMOUSE speeds the PIT up so it can poll the mouse fast, and');
+  WriteLn('forwards only every nth interrupt to whatever was in the vector');
+  WriteLn('when it installed.  That keeps the BIOS tick, and everything');
+  WriteLn('that hooked INT 08h BEFORE the driver, at the 18.2 Hz they');
+  WriteLn('expect.');
+  WriteLn;
+  WriteLn('Anything hooking INT 08h AFTER the driver is a different');
+  WriteLn('matter: it sits above us in the chain and sees every interrupt.');
+  WriteLn('Windows is exactly that case -- it has to be started after the');
+  WriteLn('driver -- and a Windows whose tick runs eight times fast has a');
+  WriteLn('double-click window eight times too short, which looks exactly');
+  WriteLn('like "clicks work, double-clicks do not".');
+  WriteLn;
+  WriteLn('INT 1Ch is measured alongside it, because that one is');
+  WriteLn('different: the BIOS INT 08h handler is what issues INT 1Ch, and');
+  WriteLn('the driver calls the BIOS handler only every nth interrupt -- so');
+  WriteLn('anything hooking INT 1Ch already sees the correct rate.  Which');
+  WriteLn('of the two a program uses decides whether the driver''s timer');
+  WriteLn('multiplication is visible to it at all.');
+  HelpTail;
+end;
+
+begin
+  if HelpWanted then begin Usage; Halt(0); end;
   N := 10;
   if ParamCount >= 1 then
   begin
@@ -78,7 +116,7 @@ begin
     if (Code <> 0) or (N < 2) or (N > 60) then N := 10;
   end;
 
-  WriteLn('=== INT 08h chain rate ===');
+  Banner('TICKCHK', VER, 'INT 08h chain rate');
   R.AX := 0;
   Intr($33, R);
   if R.AX = $FFFF then

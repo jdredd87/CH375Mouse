@@ -72,6 +72,19 @@ support it; saying otherwise would be a guess.
 [`davidegat/CH375USB`](https://github.com/davidegat/CH375USB) does support
 Windows 95 — use theirs if that is what you need.
 
+## Two conventions
+
+**Every program answers `/?`** with its own full help — `-?`, `?`, `/HELP`
+and `--HELP` too — and prints its name, version and author on the first
+line, so a captured log says which build produced it. Bare `/H` is not a
+help switch: `USBKBD` and `USBCOMBO` already use it for the INT 16h hook.
+
+**Nothing is hardwired to `260h`.** The board's address is set by jumpers.
+The three drivers take `@hex`, every tool that opens the chip takes
+`/P=hex`, `USBSCAN` finds the card for you, and `/S` prints the base the
+loaded driver actually took. GUIDE.md has
+[the whole story](GUIDE.md#if-your-card-is-not-at-260h).
+
 ## Start here
 
 If you have the card and something plugged into it and no idea what:
