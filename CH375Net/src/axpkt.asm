@@ -166,6 +166,14 @@ in_isr:     db  0                ; re-entry guard: the ISR can take
                                  ; milliseconds and the next tick will
                                  ; arrive on top of it
 rcv_mode:   dw  3                ; 3 = our address + broadcast
+
+; RESIDENT, and it has to be: /U reads this out of the loaded copy to decide
+; whether to put INT 08h back.  It started life in the transient half, where
+; the offset /U reads lands in memory DOS has already taken back -- so the
+; answer was whatever happened to be lying there.  In the /N case that
+; garbage was non-zero and skipped a restore that was correctly skippable,
+; which is the worst kind of wrong: right by accident.
+op_nopoll:  db  0
 n_handles:  db  0
 
 ; ---- one row per handle: in use, packet type length, the type bytes, and
@@ -378,6 +386,25 @@ bulk_out_bad:
 ; ==========================================================================
 isr08:
         push    ax
+
+        ; A heartbeat, poked straight into the top-left character cell of
+        ; both possible video buffers -- this machine's card varies between
+        ; mono and colour from boot to boot, and writing to the wrong one is
+        ; harmless.  A DOS box that has stopped answering the bridge still
+        ; has a screen, and a capture card can photograph it, so this is the
+        ; only channel that reports whether the handler is still being
+        ; entered at all.  Two stores; it costs nothing worth counting.
+        push    ds
+        push    bx
+        mov     bx, 0xB800
+        mov     ds, bx
+        inc     byte [0]
+        mov     bx, 0xB000
+        mov     ds, bx
+        inc     byte [0]
+        pop     bx
+        pop     ds
+
         ; Re-entry guard.  A tick that finds data can spend milliseconds
         ; draining it, and the next one will arrive on top.  Without this
         ; the second entry would use the same buffer and the same toggle as

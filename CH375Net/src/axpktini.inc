@@ -379,7 +379,6 @@ op_verb:    db 0
 op_help:    db 0
 op_giga:    db 0
 op_test:    db 0
-op_nopoll:  db 0
 
 ; Set the moment this program first speaks to the chip.  Any exit that does
 ; NOT go resident has to hand the chip back in a state the next program's

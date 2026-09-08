@@ -236,76 +236,62 @@ which is the distinction that matters when picking a vector.
 
 ## The packet driver
 
-`AXPKT.COM` — **written, assembles at 8,221 bytes, and does not work yet.**
-What it does do is refuse to hurt anything, which was the first thing worth
-getting right:
+`AXPKT.COM` **installs, runs and unloads cleanly.** Proven on the hardware,
+with the working network at 60h untouched throughout:
 
 ```
-C:\>AXPKT /I=60
-Refusing vector 60h.
-That is where a packet driver normally lives, and on this
-machine it is the network everything else depends on.
+=== part one: /N, no timer hook ===
+Resident at vector 65h.
+  60h  15A2:03CE   PACKET DRIVER      <- the machine's own network
+  65h  16DD:1245   PACKET DRIVER      <- this one
+AXPKT unloaded.
 
-C:\>AXPKT
-The adapter did not return its MAC address.
-Run AXPROBE first -- it brings the chip up.
+=== part two: full, timer hooked ===
+Resident at vector 65h.
+  vector=65   I/O base=0260
+  MAC=40:AE:30:6D:00:34
+  open handles=0
+  timer ticks=10
+AXPKT unloaded.
+=== done ===
 ```
 
-Both refusals are enforced in code, neither can be overridden by a switch,
-and `PKTSCAN` before and after a failed load shows 60h exactly as it was.
+`timer ticks=10` is the INT 08h hook firing ten times between install and
+status. `PKTSCAN` afterwards shows 60h alone, exactly as before.
 
-**Where it stands.** The Crynwr entry point, the two-call receive handshake,
-`send_pkt` with its 8-byte header, the INT 08h poll with an adaptive budget
-and a re-entry guard, install, unload with out-of-order hook detection, and
-`/S` are all written. `/S`, `/T`, the vector refusals and the option parser
-all run correctly on the hardware.
+### The bug that made this look impossible for hours
 
-`AXPKT /T` now runs correctly end to end. Under `/V` the chip reports each
-stage in its own words:
+`op_nopoll` — the flag saying whether the timer was hooked — lived in the
+transient half of the image. `/U` reads it out of the *resident* copy to
+decide whether to restore INT 08h, and that offset lands past
+`resident_end`, in memory DOS has already taken back. So the answer was
+whatever happened to be lying there.
 
-```
-abcS14I14n06dMAC address: 40:AE:30:6D:00:34
-```
+When the garbage read non-zero, `/U` skipped a restore that was mandatory,
+leaving our handler in the interrupt vector pointing at memory now issued to
+something else. The machine died on some later timer tick — which is why the
+fault never appeared in the program that caused it, and why the next
+unrelated program looked guilty.
 
-`S14` is the setup token answering success, `I14` the IN token, `n06` the
-six bytes that came out, `d` the stage past the MAC read.
+In the `/N` case the same garbage skipped a restore that genuinely *was*
+skippable, so that path passed. Right by accident is the worst kind of
+right: it makes the broken case look like a different bug.
 
-**What is still wrong is intermittent, and honesty about that matters more
-than a tidy story.** `AXPROBE` sometimes hangs on the invocation *after*
-`AXPKT` has touched the chip — producing no output at all, which is a worse
-thing to debug than a program failing in its own right. Every exit that
-does not go resident now issues `RESET_ALL` and waits, on the principle
-that a program leaving shared hardware half-set-up breaks the *next*
-program. That demonstrably fixed it within a single command chain —
-`AXPROBE`, `AXPKT /T`, `AXPROBE`, `AXPKT /T` runs clean — and did not fix
-it across separate ones.
+### Three instruments earned their keep
 
-So the cause is not yet established. It is being attributed to whatever
-changed last, which is the position you are in when a fault is intermittent
-and you have not yet found a way to reproduce it on demand. The next step
-is a loop that runs the pair fifty times and counts, rather than another
-plausible fix.
-
-**How that was found is the point.** A hung DOS box returns nothing at all
-through the bridge, so from the outside every fault looks identical. The
-capture card photographs the real screen, and that is what showed the last
-line was `exec 2 cmd(s): C:\WORK\AXPROBE.EXE` with nothing after it. Two
-hours of blaming the wrong program ended with one screenshot.
-
-The same capture also settled a question worth writing down: the machine's
-working NIC is at **I/O 300h, IRQ 3**, MAC `28:CD:C1:11:6B:27`. That is
-clear of the CH375 at 260h, and 300h is already on `USBSCAN`'s reserved
-list, so neither card can be probed into the other by accident.
-
-**It is also split wrong.** `AXPKT` requires `AXPROBE` to have run first,
-because the bring-up is a page of control transfers that already existed
-and worked in Pascal. A driver you have to prepare with a second program is
-a driver somebody will forget to prepare; folding the bring-up in is the
-next job after the control transfer works.
+* **`/N`** — install the vector but do not hook the timer. It is what
+  separated "going resident is broken" from "the ISR is broken", and the
+  answer was neither: it was unloading.
+* **A batch file writing to a log.** `dosctl exec` does not echo program
+  output to the screen and its result never arrives if the job outlives the
+  timeout, so a file on disk is the only evidence that survives either. Both
+  of those cost real time before being understood.
+* **A heartbeat poked into video memory from the ISR.** A DOS box that has
+  stopped answering still has a screen, and a capture card can photograph
+  it. Two stores, and the only channel that reports from a dead machine.
 
 ## What is not done
 
-- **Finishing AXPKT** — see above.
 - **mTCP over it.** When it loads, point a *copy* of `MTCP.CFG` at the new
   vector. Never the one the working network uses. The goal is a Crynwr driver at INT 60h, because
   that is what `mTCP`, `WATTCP` and NCSA Telnet all speak — get it right
