@@ -49,6 +49,7 @@ C0 A8 32 08         from 192.168.50.8
 | `src/axprobe.pas` | `AXPROBE.EXE` — runs the bring-up and reports every stage. Step one, and the one that decided the rest was worth writing |
 | `src/axrecv.pas` | `AXRECV.EXE` — reads the bulk endpoint and makes sense of what comes back. Deliberately an **investigation**, not a parser |
 | `src/axsend.pas` | `AXSEND.EXE` — sends an ARP request and waits for a real machine to answer it |
+| `src/pktscan.pas` | `PKTSCAN.EXE` — which interrupt vectors hold a packet driver and which are free. Read-only, and the safety net for everything below |
 
 All take `/?`. `/P=hex` sets the CH375 I/O base.
 
@@ -188,6 +189,50 @@ Burst size matters and not in the obvious direction. `/B=02` gives
 1650 B/s; `/B=08` gives **302 B/s** — five times worse, because a larger
 threshold makes the chip wait longer and drop more while it waits. The
 default is 2 for that measured reason and not a guessed one.
+
+## Not losing the machine
+
+This box is administered over its own network. The working path is a packet
+driver at **INT 60h**, `pm2000.com`, loaded from `AUTOEXEC.BAT` at boot,
+with mTCP configured `packetint 0x60`. Break that and the machine goes
+silent with no way in to undo it.
+
+`AI.BAT` already states the principle, and it is the right one:
+
+> *TZ lives here and not in AUTOEXEC.BAT: a mistake in AUTOEXEC.BAT breaks
+> the network before the agent runs and needs hands on the keyboard, while
+> a mistake here is fixable over the wire.*
+
+So the rules for anything in this project that goes resident:
+
+1. **The recovery mechanism already exists: power-cycle.** `pm2000.com`
+   loads at boot, so a hard reset always comes back with working
+   networking — *provided `AUTOEXEC.BAT` is never touched.*
+2. **Never add anything from this project to `AUTOEXEC.BAT`.** A TSR that
+   hangs at boot is not recoverable remotely at any price.
+3. **Never install on INT 60h.** `PKTSCAN` says what is free; on this
+   machine that is `61-66`, `68-6C`, `6E-6F` and `78-7E`. The driver here
+   defaults to **65h** and refuses 60h outright.
+4. **Refuse to install over an existing packet driver.** The signature is
+   there to be checked, so check it.
+5. **Always unloadable**, and every test runs load → check → unload as a
+   single command, so a failure part-way through cannot leave a TSR
+   resident.
+6. **`PKTSCAN` before and after.** If 60h still answers, the way back is
+   still there.
+
+```
+PKTSCAN 1.0.0 -- packet drivers in the interrupt table -- StevenC
+
+  60h  15A2:03CE   PACKET DRIVER
+
+1 packet driver(s) between 60h and 80h.
+Vectors reading 0000:0000: 61 62 63 64 65 66 68 69 6A 6B 6C 6E 6F 78 79 7A 7B 7C 7D 7E
+```
+
+Note that `67h` and `6Dh` are in use but are *not* packet drivers — EMS and
+video respectively. `PKTSCAN` reports them as occupied rather than free,
+which is the distinction that matters when picking a vector.
 
 ## What is not done
 
