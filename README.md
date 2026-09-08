@@ -8,8 +8,11 @@ repository is what the chip can do *instead*: talk to arbitrary USB devices
 from real-mode DOS, and present them — a mouse, a keyboard, or both at
 once — to DOS as though they had always been there.
 
-Everything here has been run on the hardware: a CH375B rev B7 on an ISA
-card at `260h`, in an 8086-class machine running MS-DOS 6.22.
+Everything here has been written for, and run on, one specific computer: an
+**IBM PS/2 Model 30** — the original 8086 model, not one of the 286 or 386
+ones — running MS-DOS 6.22, with a **CH375B rev B7** on an 8-bit ISA card at
+I/O base `260h`. That machine is from 1987, nine years before USB existed,
+which is rather the point.
 
 > **[Read GUIDE.md](GUIDE.md)** — the complete guide: every tool, what works
 > and what does not, the hardware limits and why they are limits, and
@@ -35,19 +38,39 @@ they actually want.
 | USB keyboard | **yes**, BIOS buffer | **no** | **untested** |
 | USB storage, hubs | no — out of scope | no | no |
 
-Two limits are worth knowing before you start, because neither is a missing
-feature and both are permanent on this hardware:
+Two limits are worth knowing before you start. Neither is a missing feature,
+and neither can be fixed in software — both are facts about the Model 30, and
+on a later machine they largely go away.
 
-* **This machine has no 8042.** Port 64h reads `FF`. Keys can be written
-  into the BIOS buffer, so everything reading `INT 16h` or DOS sees them —
-  but they cannot be made to look like IRQ1, so any program that reads the
-  keyboard hardware itself is unreachable. DOS EDIT's menus, QBASIC and most
-  games are in that category. The 8042 injection path (`/K`) is written and
-  works where a controller exists; there simply isn't one here.
-* **Windows 95 is untested and unsupported.** It needs a 386 and this is an
-  8086. Nothing here has ever run under it, and claiming otherwise would be
-  guessing. [`davidegat/CH375USB`](https://github.com/davidegat/CH375USB)
-  does support Windows 95 — use theirs if that is what you need.
+### The Model 30 has no 8042 keyboard controller
+
+On an IBM AT and everything descended from it, an Intel 8042 sits between the
+keyboard and the CPU, and its command `D2h` means *"pretend this scancode just
+arrived from the keyboard."* That raises a genuine IRQ1 which no program can
+tell from a real keypress, and it is the clean way to feed a synthetic
+keyboard into DOS.
+
+The Model 30 8086 predates that arrangement — it is XT-class inside, whatever
+the PS/2 badge suggests — and there is nothing listening at the AT controller
+ports: **`64h` reads `FF`.** So `USBKBD.COM` and `USBCOMBO.COM` write keys
+directly into the BIOS keyboard buffer instead, and that decides what they can
+and cannot reach:
+
+* **Reached:** anything going through `INT 16h` or DOS — the command line,
+  batch files, `EDLIN`, and most text-mode utilities.
+* **Not reached:** anything that reads the keyboard hardware for itself. DOS
+  EDIT's menus, QBASIC and most games are in this group.
+
+The 8042 path is written — it is `/K` — and it works on a machine that has a
+controller. This one does not. `KBCINJ`, in the keyboard project, reports
+which kind of machine you are on.
+
+### Windows 95 needs a 386, and this is an 8086
+
+Nothing here has ever been run under Windows 95, so nothing here claims to
+support it; saying otherwise would be a guess.
+[`davidegat/CH375USB`](https://github.com/davidegat/CH375USB) does support
+Windows 95 — use theirs if that is what you need.
 
 ## Start here
 
@@ -139,7 +162,7 @@ Two lessons outlast the bug:
   mouse — not to reason about what the bytes ought to look like. The tooling
   that mattered in the end was a live view that beeps at a human.
 
-## Two rules for resident code on this machine
+## Two rules for resident code in real-mode DOS
 
 Both cost real debugging time, and both are worth knowing before writing a
 fourth driver.
@@ -160,16 +183,6 @@ interrupt" impossible. Calling `INT 09h` to wake a program that owns the
 keyboard interrupt looks obvious, works in principle, and locks the machine
 — the nested handler's EOI lands on top of the driver's own and the 8259's
 in-service state is corrupted. `CH375Keyboard/README.md` has the details.
-
-## What this machine cannot do
-
-It has **no 8042.** Port 64h reads `FF`, because an XT-class box has an 8255
-keyboard latch and no controller command to inject a scancode with. So
-software here cannot raise IRQ1 or fake one, and a program that drives its
-input from the keyboard *interrupt* rather than from the BIOS cannot be
-reached by any software-only keyboard driver. DOS EDIT and QBASIC are both
-such programs; `KBCINJ` in the keyboard project reports whether a given
-machine is better off.
 
 ## Building
 

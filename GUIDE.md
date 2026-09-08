@@ -46,12 +46,18 @@ this guide says so rather than implying otherwise.
 
 ## The machine it was built on
 
+An **IBM PS/2 Model 30** — the original 8086 model, not one of the 286 or 386
+ones. It is a 1987 machine, nine years older than USB, and almost every
+limitation in this guide is a fact about it rather than a shortcoming of the
+code.
+
 ```
-CPU        8088/8086, ISA bus            <- this matters more than anything else
+Machine    IBM PS/2 Model 30 (8086)
+CPU        8086, 8-bit ISA bus           <- this matters more than anything else
 DOS        MS-DOS 6.22
 USB        CH375B rev B7 on an ISA card, I/O base 260h
 Windows    Windows 3.0 (real mode)
-Keyboard   XT-class, 8255 latch -- NO 8042 CONTROLLER
+Keyboard   XT-class internally -- NO 8042 CONTROLLER, port 64h reads FF
 ```
 
 Two consequences run through everything:
@@ -61,9 +67,11 @@ Two consequences run through everything:
   over an unconditional `jmp near`, or a trampoline is added. There are
   several in the sources and they are commented as such — they are not
   stylistic.
-* **No 8042.** Port 64h reads `FF`. Nothing can inject a scancode at the
-  hardware level, which is the single biggest limitation in this
-  repository. [See below](#the-8042-problem).
+* **No 8042.** Whatever the PS/2 badge suggests, the Model 30 8086 is
+  XT-class inside and nothing answers at the AT keyboard-controller ports:
+  port 64h reads `FF`. Nothing can inject a scancode at the hardware level,
+  which is the single biggest limitation in this repository.
+  [See below](#the-8042-problem).
 
 Devices exercised:
 
@@ -241,11 +249,11 @@ IRQ1, indistinguishable from a keypress. That is the clean way to feed a
 synthetic keyboard into DOS, and it reaches everything, including programs
 that hook `INT 09h`.
 
-**This machine has no 8042.** Port 64h reads `FF`, because an XT-class box
-uses an 8255 latch with no controller command to inject with. `KBCINJ`
-reports whether a given machine is better off; `USBKBD /K` and
-`USBCOMBO /K` will use the 8042 where one exists and say so and fall back
-where one does not.
+**The Model 30 has no 8042.** It predates that arrangement — XT-class
+internally, PS/2 only on the outside — and port 64h reads `FF`. There is no
+controller to send `D2h` to. `KBCINJ` reports whether a given machine is
+better off; `USBKBD /K` and `USBCOMBO /K` will use the 8042 where one
+exists and say so, and fall back where one does not.
 
 So on this hardware:
 
@@ -302,7 +310,7 @@ starting Windows**.
 
 ### Windows 95 — untested, and honestly so
 
-Windows 95 needs a 386 or better. This machine is an 8086. Nothing here has
+Windows 95 needs a 386 or better. The Model 30 here is an 8086. Nothing here has
 ever been run under Windows 95, and none of it is written with Windows 95 in
 mind:
 
