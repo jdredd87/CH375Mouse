@@ -101,6 +101,23 @@ type
 var
   Mac:      TMac;              { filled by AxInit }
   AxTrace:  Boolean = False;   { print every register access }
+
+  { AX_RX_BULK_QCTRL, the five bytes that decide how much the chip piles
+    into one bulk transfer.  Getting these wrong is not subtle: with the
+    control byte at zero NO limit is enabled, so the chip keeps appending
+    frames for as long as traffic arrives and the transfer simply never
+    ends.  One capture ran to 55,680 bytes before the buffer gave up.
+
+    Control 7 enables all three limits -- size, timer and inter-frame gap.
+    AxBulkSize is what makes a transfer small enough for a machine that
+    drains it 64 bytes at a time; Linux uses 0x18 here because it has 20 KB
+    of URB to fill and can absorb it. }
+  AxBulkCtrl: Byte = $07;
+  AxBulkSize: Byte = $02;
+  AxBulkTimer: Word = $0080;   { flush early rather than wait for a full
+                                 burst -- latency matters more than
+                                 efficiency at these speeds }
+  AxBulkIfg:  Byte = $08;
   AxStep:   procedure(const What: ShortString; St: Integer) = nil;
                                { set it and AxInit narrates itself }
 
@@ -292,15 +309,18 @@ begin
 
   Do1('read MAC address',     AxMacRd(AX_NODE_ID, 6, Mac));
 
-  { The bulk-in queue is where this parts company with the Linux driver.
-    Linux sets the aggregation fields so the chip packs many frames into
-    one 20 KB transfer, which is right when you can absorb 20 KB.  Here
-    it would mean the chip hands us a burst we can only drain 64 bytes at
-    a time while more arrives behind it.  All zero disables aggregation,
-    so one bulk transfer is one frame and we stay in control of how much
-    is in flight.  On a 486 you would want Linux's values back. }
-  Q[0] := 0; Q[1] := 0; Q[2] := 0; Q[3] := 0; Q[4] := 0;
-  Do1('bulk-in queue (no aggregation)', AxMacWr(AX_RX_BULK_QCTRL, 5, Q));
+  { The bulk-in queue is where this parts company with the Linux driver:
+    same register, opposite goal.  Linux wants big transfers because it
+    can absorb them; this wants small ones because it cannot.  See the
+    note by AxBulkCtrl -- zeroing the register does NOT mean "no
+    aggregation", it means "no limit", which is the opposite. }
+  Q[0] := AxBulkCtrl;
+  Q[1] := Byte(AxBulkTimer and $FF);
+  Q[2] := Byte(AxBulkTimer shr 8);
+  Q[3] := AxBulkSize;
+  Q[4] := AxBulkIfg;
+  Do1('bulk-in queue, size ' + Hex2(AxBulkSize),
+      AxMacWr(AX_RX_BULK_QCTRL, 5, Q));
 
   Do1('pause watermark low',  AxMacWr8(AX_PAUSE_LOW,  $34));
   Do1('pause watermark high', AxMacWr8(AX_PAUSE_HIGH, $52));
@@ -389,12 +409,15 @@ var
   P: PByte;
   Got: Byte;
   St: Integer;
+  Waits: Word;
   Scratch: array[0..63] of Byte;
 begin
   P := @Buf;
   Len := 0;
   AxRxOver := 0;
-  repeat
+  Waits := 0;
+  while True do
+  begin
     if Len + 64 > Max then
     begin
       { The buffer is full and the transfer is not finished.  Leaving it
@@ -412,19 +435,32 @@ begin
     St := EpIn(AX_EP_BULK_IN, RxTog, P[Len], 64, Got);
     if St <> INT_SUCCESS then
     begin
-      { A NAK on the FIRST read is the idle case: nothing was waiting, and
-        the caller wants to know that rather than see an error.  A NAK
-        after we have already collected something is different -- it means
-        the chip has run out of data mid-transfer, so what we hold is a
-        complete burst and the NAK is just how it ended.  Reporting that
-        as a failure produced one error line per poll on a busy network,
-        which drowned the tool in its own output. }
-      if (St = INT_RET_NAK) and (Len > 0) then Break;
+      { A NAK on the FIRST read is the idle case: nothing was waiting,
+        and the caller wants to know that rather than see an error.
+
+        A NAK is not the end of anything.  In USB a bulk transfer ends
+        with a SHORT packet -- fewer than 64 bytes, possibly zero -- and a
+        NAK in the middle only means "not ready yet, ask again".  Ending
+        the burst here truncated every multi-frame transfer: the first
+        capture stopped at 256 bytes with a second frame cut in half and
+        the trailer nowhere in it, which is what sent this looking for a
+        layout that was not the problem.
+
+        So mid-burst NAKs are retried, and only run out of patience after
+        a bounded number of them -- a device that has genuinely stopped
+        mid-transfer would otherwise hang the loop for ever. }
+      if (St = INT_RET_NAK) and (Len > 0) then
+      begin
+        Inc(Waits);
+        if Waits < 2000 then Continue;
+      end;
       AxRxBurst := St;
       Exit;
     end;
     Len := Len + Got;
-  until Got < 64;                        { a short packet ends a transfer }
+    Waits := 0;                          { progress: patience resets }
+    if Got < 64 then Break;              { a short packet ends a transfer }
+  end;
   AxRxBurst := INT_SUCCESS;
 end;
 

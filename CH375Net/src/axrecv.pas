@@ -243,6 +243,11 @@ begin
   WriteLn('  /G       leave the PHY in gigabit mode -- see AXPROBE /?');
   WriteLn('  /V       print every register access');
   WriteLn('  /R       raw: do not try to interpret the buffer at all');
+  WriteLn('  /B=hex   bulk-in burst size, default 02.  How much the chip');
+  WriteLn('           piles into one transfer before ending it');
+  WriteLn('  /C=hex   bulk-in queue control, default 07 = all three limits');
+  WriteLn('           enabled.  00 means NO limit, not no aggregation --');
+  WriteLn('           the transfer then never ends while traffic arrives');
   WriteLn('  /?       this screen');
   WriteLn;
   WriteLn('The AX88179 does not put a bare frame on its bulk endpoint.  A');
@@ -280,7 +285,9 @@ begin
       K := Copy(A, 1, 3); A := Copy(A, 4, 250);
       if      K = '/P=' then begin Val('$' + A, V, Code); if Code = 0 then Base := Word(V); end
       else if K = '/S=' then begin Val(A, V, Code); if Code = 0 then Secs := Word(V); end
-      else if K = '/N=' then begin Val(A, V, Code); if Code = 0 then MaxN := Word(V); end;
+      else if K = '/N=' then begin Val(A, V, Code); if Code = 0 then MaxN := Word(V); end
+      else if K = '/B=' then begin Val('$' + A, V, Code); if Code = 0 then AxBulkSize := Byte(V); end
+      else if K = '/C=' then begin Val('$' + A, V, Code); if Code = 0 then AxBulkCtrl := Byte(V); end;
     end;
   end;
 end;

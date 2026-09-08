@@ -53,21 +53,59 @@ released; the project is in progress.
   `AxRxOver`. Leaving a transfer half-read desynchronises the endpoint and
   every burst after it is garbage -- which is what the first 2 KB buffer
   did before it was enlarged to 16 KB.
-* A NAK part-way through a burst ends the transfer with what has been
-  collected, instead of being reported as an error. On a busy network the
-  old behaviour printed one error line per poll and the program spent all
-  its time on output.
+* Error reporting from the poll loop is capped at eight lines. An error
+  that repeats every poll otherwise printed thousands of identical lines
+  and the run spent all its time on output rather than on the wire.
+
+### The receive buffer layout, solved and verified
+
+    [frame 1][pad to 8][frame 2][pad to 8]...[entry 1][entry 2]...[trailer]
+
+* trailer: last 4 bytes LE, low word = packet count, high word = offset of
+  the entry array.
+* entry: 4 bytes per packet, `(entry >> 16) and $1FFF` = frame length.
+* frames: from offset 0, each padded to an 8-byte boundary. With IP_ALIGN
+  clear there is no leading pad, so byte 0 is the destination MAC.
+
+It matches what the Linux driver describes after all. Every earlier reading
+that said otherwise was a truncated transfer, not a different format --
+see the two bugs below. `AXRECV` checks each invariant and prints a tick or
+a cross beside it rather than assuming any of them.
+
+### Two more bugs, both mine, both in AxRxBurst
+
+* **A NAK was being treated as the end of a transfer.** In USB a bulk
+  transfer ends with a SHORT packet; a NAK part-way through only means "not
+  ready yet, ask again". Every multi-frame transfer was being truncated --
+  the capture that started this hunt stopped at 256 bytes with a second
+  frame cut in half and no trailer in it at all. Mid-burst NAKs are now
+  retried, bounded, and only a short packet ends a burst.
+* **Zeroing `AX_RX_BULK_QCTRL` does not mean "no aggregation".** It means
+  *no limit*, which is the opposite: the chip appends frames for as long as
+  traffic arrives and the transfer never ends. One capture reached 55,680
+  bytes before the buffer gave up. The control byte is now 07 -- all three
+  limits on -- with the size, timer and inter-frame gap exposed as
+  `AxBulkCtrl` / `AxBulkSize` / `AxBulkTimer` / `AxBulkIfg` and reachable
+  from `AXRECV` as `/C=` and `/B=`.
+
+### Throughput, measured
+
+* About **1650 bytes/sec** sustained with the link deliberately loaded --
+  roughly 13 kbit/s.
+* In a 15-second run: **12,112 idle polls against ~390 reads carrying
+  data**. The limit is not how fast bytes leave the CH375, it is that the
+  chip has something for us on about 3% of polls. Raw read bandwidth looks
+  nearer 50 KB/s if the duty cycle could be improved.
+* Burst size does not behave the way you would guess: `/B=02` gives
+  1650 B/s and `/B=08` gives **302 B/s**, five times worse, because a
+  bigger threshold makes the chip wait longer and drop more while waiting.
+  The default is 2 for that measured reason rather than a guessed one.
 
 ### Not done
 
-* **The receive buffer layout.** The trailing count-and-offset word the
-  Linux driver describes reads as zero on this part, so the recollection
-  does not match the silicon. An `AA 55` pattern recurs in the gaps between
-  frames. `AXRECV /X /R` exists to dump bursts raw until this is settled --
-  a driver written from a guess that happened to be wrong is how this
-  repository once lost a day to a mouse.
 * **Transmit.** Each frame needs an 8-byte header; none is sent yet.
 * **The packet driver.** A Crynwr driver at INT 60h, so `mTCP` and
   `WATTCP` work without a TCP stack being written here.
-* **A throughput number** that means anything. The current one includes
-  idle polling and a link nobody is saturating.
+* **A duty-cycle fix.** 3% of polls carrying data is the thing standing
+  between 1.6 KB/s and something nearer 50 KB/s, and it is a tuning
+  problem rather than a bus-speed one.
