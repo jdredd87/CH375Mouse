@@ -41,6 +41,36 @@ clr_ep0:
         ret
 
 ; --------------------------------------------------------------------------
+; How hard the chip tries when a device answers NAK.  8F is "for ever",
+; 00 is "report it and move on", and which one is right depends entirely
+; on what you are doing:
+;
+;   control transfers want 8F.  A device that is busy NAKs, and the right
+;   response is to ask again -- treating one NAK as a failed transfer means
+;   the transfer fails whenever the device happens to be thinking.
+;
+;   polling an idle endpoint wants 00.  With 8F the chip sits there
+;   retrying instead of reporting, the caller's own wait expires, and a
+;   poll takes seconds.
+;
+; AXPROBE leaves the chip on 00 because that is what its receive loop
+; needs, so this has to put it back to 8F for its own control transfer and
+; then set it to 00 again before going resident.  Getting that wrong is
+; what made read_mac fail here while the identical request from Pascal
+; succeeded four times out of four -- the Pascal had just enumerated, so
+; the chip was still on 8F.
+; --------------------------------------------------------------------------
+set_retry:                               ; AL = the retry byte
+        push    ax
+        mov     al, CMD_SET_RETRY
+        call    ch_cmd
+        mov     al, 0x25
+        call    ch_wr
+        pop     ax
+        call    ch_wr
+        ret
+
+; --------------------------------------------------------------------------
 ; A control transfer with an IN data stage.  DS:SI -> 8 setup bytes,
 ; ES:DI -> where the data goes, BL = how many bytes are wanted.
 ; CF set on failure; on success BH = bytes actually stored.
@@ -151,10 +181,18 @@ read_mac:
         pop     ds
         push    cs
         pop     es
+        mov     al, 0x8F                 ; see set_retry: control transfers
+        call    set_retry                ; need the chip to keep asking
         mov     si, setup_mac
         mov     di, mac
         mov     bl, 6
         call    ctrl_in
+        pushf
+        push    bx
+        xor     al, al                   ; and back to no-retry, which is
+        call    set_retry                ; what the polling loop needs
+        pop     bx
+        popf
         jc      short rm_bad
         cmp     bh, 6
         jne     short rm_bad
@@ -276,6 +314,8 @@ op_status:  db 0
 op_verb:    db 0
 op_help:    db 0
 op_giga:    db 0
+op_test:    db 0
+op_nopoll:  db 0
 
 parse_args:
         mov     si, 0x81
@@ -295,7 +335,7 @@ pa_loop:
         je      short pa_slash
         cmp     al, '-'
         je      short pa_slash
-        jmp     short pa_more
+        jmp     near pa_more
 pa_j_base:
         jmp     near pa_base
 pa_more:
@@ -314,35 +354,52 @@ pa_slash:
         cmp     al, '?'
         jne     short pa_notq
         mov     byte [op_help], 1
-        jmp     short pa_more
+        jmp     near pa_more
 pa_notq:
         and     al, 0xDF
         cmp     al, 'U'
         jne     short pa_s2
         mov     byte [op_unload], 1
-        jmp     short pa_more
+        jmp     near pa_more
 pa_s2:
         cmp     al, 'S'
         jne     short pa_s3
         mov     byte [op_status], 1
-        jmp     short pa_more
+        jmp     near pa_more
 pa_s3:
         cmp     al, 'V'
         jne     short pa_s4
         mov     byte [op_verb], 1
-        jmp     short pa_more
+        jmp     near pa_more
 pa_s4:
         cmp     al, 'G'
         jne     short pa_s5
         mov     byte [op_giga], 1
-        jmp     short pa_more
+        jmp     near pa_more
 pa_s5:
+        cmp     al, 'T'
+        jne     short pa_s6
+        mov     byte [op_test], 1
+        jmp     near pa_more
+pa_s6:
+        cmp     al, 'N'
+        jne     short pa_s7
+        mov     byte [op_nopoll], 1
+        jmp     near pa_more
+pa_s7:
         cmp     al, 'I'
-        jne     short pa_more
+        je      short pa_vec_arg
+        jmp     near pa_more
+pa_vec_arg:
         ; /I=nn -- the vector, in hex
-        jcxz    pa_more
+        or      cx, cx
+        jnz     short pa_vec_eq          ; jcxz has no near form on an 8086
+        jmp     near pa_more
+pa_vec_eq:
         cmp     byte [si], '='
-        jne     short pa_more
+        je      short pa_vec_go
+        jmp     near pa_more
+pa_vec_go:
         inc     si
         dec     cx
         xor     bx, bx
@@ -362,9 +419,11 @@ pa_vec_d:
         jmp     short pa_vec_d
 pa_vec_set:
         or      bx, bx
-        je      short pa_more
+        jne     short pa_vec_store
+        jmp     near pa_more
+pa_vec_store:
         mov     [our_vec], bl
-        jmp     short pa_more
+        jmp     near pa_more
 
 pa_base:
         xor     bx, bx
@@ -439,28 +498,42 @@ vhp_no:
 sig_pkt:    db 'PKT DRVR'
 
 ; --------------------------------------------------------------------------
-; Find a resident copy of ourselves: walk the MCB chain looking for the
-; signature at 0103.  Returns the segment in AX, or zero.
+; Find a resident copy of ourselves.
+;
+; By looking at the one vector we would have installed on, and nowhere
+; else.  A previous version walked the DOS MCB chain instead, which is how
+; TSRs traditionally find themselves and is a bad trade here: it needs an
+; undocumented DOS call, it reads structures this program does not own, and
+; a walk that loses its place does not fail -- it loops, inside a program
+; that has not installed anything yet and cannot be talked out of it.  It
+; hung the machine twice.
+;
+; There is nothing to walk for.  If a copy is resident then our vector
+; points at it, so the question is answered by one indirection: does the
+; segment behind that vector carry our signature at 0103?  Constant time,
+; no undocumented anything, and it cannot loop.
 ; --------------------------------------------------------------------------
 res_seg:    dw 0
 
 find_resident:
         push    es
-        mov     ah, 0x52                 ; the DOS list of lists, undocumented
-        int     0x21                     ; and the only way to the first MCB
-        mov     ax, [es:bx-2]
-        mov     es, ax
-fr_loop:
-        mov     al, [es:0]
-        cmp     al, 'M'
-        je      short fr_check
-        cmp     al, 'Z'
-        jne     short fr_none
-fr_check:
-        push    ax
-        mov     ax, es
-        inc     ax                       ; the block itself, past the MCB
         push    ds
+        push    si
+        push    di
+        push    bx
+
+        mov     word [cs:res_seg], 0
+        xor     ax, ax
+        mov     es, ax
+        mov     al, [cs:our_vec]
+        xor     ah, ah
+        shl     ax, 1
+        shl     ax, 1
+        mov     bx, ax
+        mov     ax, [es:bx+2]            ; the segment behind the vector
+        or      ax, ax
+        je      short fr_none            ; nothing there at all
+
         mov     ds, ax
         mov     si, SIG_OFS
         push    cs
@@ -468,26 +541,15 @@ fr_check:
         mov     di, sig_self
         mov     cx, 8
         repe    cmpsb
-        pop     ds
-        pop     ax
-        jne     short fr_next
-        mov     ax, es
-        inc     ax
-        mov     [res_seg], ax
-        pop     es
-        ret
-fr_next:
-        cmp     al, 'Z'
-        je      short fr_none
-        mov     ax, es
-        add     ax, [es:3]
-        inc     ax
-        mov     es, ax
-        jmp     short fr_loop
+        jne     short fr_none
+        mov     [cs:res_seg], ds         ; that is us
 fr_none:
-        xor     ax, ax
-        mov     [res_seg], ax
+        pop     bx
+        pop     di
+        pop     si
+        pop     ds
         pop     es
+        mov     ax, [cs:res_seg]
         ret
 
 sig_self:   db 'AXPKT001'
@@ -591,6 +653,15 @@ init_macskip:
         loop    init_macl
         call    crlf
 
+        cmp     byte [op_test], 0
+        jne     short __ii
+        jmp     near init_install
+__ii:
+        mov     dx, msg_testonly
+        call    puts
+        jmp     near quit
+init_install:
+
         ; ---- hook the vector, and INT 08h for the polling ----
         push    ds
         xor     ax, ax
@@ -607,13 +678,21 @@ init_macskip:
         cli
         mov     word [si], pkt_entry
         mov     [si+2], cs
-        ; INT 08h
+        ; INT 08h -- /N leaves the timer alone, which installs a driver
+        ; that can be interrogated but never collects a packet.  It exists
+        ; to tell an install fault from an ISR fault, because from the
+        ; outside both look identical: a machine that stops answering.
+        cmp     byte [cs:op_nopoll], 0
+        je      short __in8
+        jmp     near init_no08
+__in8:
         mov     ax, [0x08*4]
         mov     [cs:old08], ax
         mov     ax, [0x08*4+2]
         mov     [cs:old08+2], ax
         mov     word [0x08*4], isr08
         mov     [0x08*4+2], cs
+init_no08:
         sti
         pop     ds
 
@@ -760,6 +839,8 @@ unl_have:
         mov     al, 7
         jmp     near die
 unl_vecok:
+        cmp     byte [es:op_nopoll], 0
+        jne     short unl_08ok           ; never hooked it
         push    ds
         xor     ax, ax
         mov     ds, ax
@@ -788,10 +869,13 @@ unl_08ok:
         mov     [si], ax
         mov     ax, [es:old_vec+2]
         mov     [si+2], ax
+        cmp     byte [es:op_nopoll], 0
+        jne     short unl_no08
         mov     ax, [es:old08]
         mov     [0x08*4], ax
         mov     ax, [es:old08+2]
         mov     [0x08*4+2], ax
+unl_no08:
         sti
         pop     ds
 
@@ -801,7 +885,7 @@ unl_08ok:
         mov     dx, msg_unloaded
         call    puts
         xor     al, al
-        jmp     short die
+        jmp     near die
 
 quit:
         xor     al, al
@@ -828,6 +912,10 @@ msg_help:
         db 13, 10
         db 'OTHER  @nnn CH375 I/O base in hex, default 260', 13, 10
         db '       /G   leave the PHY at gigabit    /V  trace', 13, 10
+        db '       /T   check the adapter and STOP, installing nothing', 13, 10
+        db '       /N   install but do not hook the timer: no packets are', 13, 10
+        db '            collected, which tells an install fault from an', 13, 10
+        db '            ISR one when both just look like a dead machine', 13, 10
         db 13, 10
         db 'VECTOR 60h IS REFUSED, and so is any vector already holding a', 13, 10
         db 'packet driver.  On this machine 60h is the network you are', 13, 10
@@ -856,6 +944,9 @@ msg_nomac:
         db 'Run AXPROBE first -- it brings the chip up, and this program', 13, 10
         db 'deliberately does not.', 13, 10, '$'
 msg_mac:       db 'MAC address: $'
+msg_testonly:
+        db 'That is /T: everything up to reading the adapter worked, and', 13, 10
+        db 'nothing was installed.  Drop /T to go resident.', 13, 10, '$'
 msg_installed: db 'Resident at vector $'
 msg_installed2:
         db 'h.  Point mTCP at it with PACKETINT in its', 13, 10
