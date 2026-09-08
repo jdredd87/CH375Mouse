@@ -260,19 +260,31 @@ and a re-entry guard, install, unload with out-of-order hook detection, and
 `/S` are all written. `/S`, `/T`, the vector refusals and the option parser
 all run correctly on the hardware.
 
-The remaining fault is **state left behind between programs**. Run on its
-own, `AXPKT /T /V` completes in 7.3 seconds and prints `abc` — its three
-stage markers — before failing cleanly at the MAC read, which is right,
-because nothing has brought the adapter up. Run *after* `AXPROBE`, the
-machine hangs; and the screen capture shows the hang is not in `AXPKT` at
-all but in **`AXPROBE` on the next invocation**, which produces no output
-whatsoever.
+`AXPKT /T` now runs correctly end to end. Under `/V` the chip reports each
+stage in its own words:
 
-So the sequence that breaks is: `AXPKT` touches the chip, exits, and the
-next program to open the chip wedges. The prime suspect is the retry
-setting and a control transfer abandoned part-way — `read_mac` sets retry
-to `8F`, and if `ctrl_in` gives up mid-transaction the chip is left with a
-token outstanding that the next program's bring-up does not expect.
+```
+abcS14I14n06dMAC address: 40:AE:30:6D:00:34
+```
+
+`S14` is the setup token answering success, `I14` the IN token, `n06` the
+six bytes that came out, `d` the stage past the MAC read.
+
+**What is still wrong is intermittent, and honesty about that matters more
+than a tidy story.** `AXPROBE` sometimes hangs on the invocation *after*
+`AXPKT` has touched the chip — producing no output at all, which is a worse
+thing to debug than a program failing in its own right. Every exit that
+does not go resident now issues `RESET_ALL` and waits, on the principle
+that a program leaving shared hardware half-set-up breaks the *next*
+program. That demonstrably fixed it within a single command chain —
+`AXPROBE`, `AXPKT /T`, `AXPROBE`, `AXPKT /T` runs clean — and did not fix
+it across separate ones.
+
+So the cause is not yet established. It is being attributed to whatever
+changed last, which is the position you are in when a fault is intermittent
+and you have not yet found a way to reproduce it on demand. The next step
+is a loop that runs the pair fifty times and counts, rather than another
+plausible fix.
 
 **How that was found is the point.** A hung DOS box returns nothing at all
 through the bridge, so from the outside every fault looks identical. The
