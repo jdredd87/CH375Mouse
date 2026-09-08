@@ -349,6 +349,37 @@ pdw_p:
 ; --------------------------------------------------------------------------
 ; hexval: AL char -> AL value, CF on error.
 ; --------------------------------------------------------------------------
+; A small decimal number after '=' -- the timer divisor and nothing else.
+pa_decnum:
+        xor     bx, bx
+        jcxz    pa_dn_out
+        cmp     byte [si], '='
+        jne     short pa_dn_out
+        inc     si
+        dec     cx
+pa_dn_d:
+        jcxz    pa_dn_out
+        mov     al, [si]
+        cmp     al, '0'
+        jb      short pa_dn_out
+        cmp     al, '9'
+        ja      short pa_dn_out
+        inc     si
+        dec     cx
+        sub     al, '0'
+        push    ax
+        mov     ax, bx
+        mov     bl, 10
+        mul     bl
+        mov     bx, ax
+        pop     ax
+        xor     ah, ah
+        add     bx, ax
+        jmp     short pa_dn_d
+pa_dn_out:
+        mov     al, bl
+        ret
+
 hexval:
         cmp     al, '0'
         jb      short hv_bad
@@ -448,6 +479,17 @@ pa_s4:
         mov     byte [op_giga], 1
         jmp     near pa_more
 pa_s5:
+        cmp     al, 'R'
+        jne     short pa_s5r
+        call    pa_decnum
+        or      al, al
+        je      short pa_r_done
+        cmp     al, 16
+        ja      short pa_r_done
+        mov     [tick_n], al
+pa_r_done:
+        jmp     near pa_more
+pa_s5r:
         cmp     al, 'T'
         jne     short pa_s6
         mov     byte [op_test], 1
@@ -776,6 +818,15 @@ init_no08:
         sti
         pop     ds
 
+        ; Speed the timer up, but only if we hooked it: /N leaves both the
+        ; vector and the rate alone.
+        cmp     byte [op_nopoll], 0
+        jne     short init_nopit
+        cmp     byte [tick_n], 2
+        jb      short init_nopit         ; 1 = leave the clock alone
+        call    pit_fast
+init_nopit:
+
         mov     dx, msg_installed
         call    puts
         mov     al, [our_vec]
@@ -881,6 +932,13 @@ stat_macskip:
         call    putdecw
         call    crlf
 
+        mov     dx, msg_s_rate
+        call    puts
+        mov     al, [es:tick_n]
+        xor     ah, ah
+        call    putdecw
+        call    crlf
+
         mov     dx, msg_s_peek
         call    puts
         mov     cx, 16
@@ -972,6 +1030,16 @@ unl_no08:
         sti
         pop     ds
 
+        ; The timer rate goes back before the memory does.  Leaving the PIT
+        ; fast with our handler gone means the BIOS clock runs eight times
+        ; quick and nothing on the machine knows why.
+        cmp     byte [es:pit_fast_on], 0
+        je      short unl_nopit
+        push    es
+        call    pit_slow_far
+        pop     es
+unl_nopit:
+
         mov     ah, 0x49                 ; release the resident block
         int     0x21
 
@@ -984,6 +1052,18 @@ unl_no08:
 ; was touched, reset it: a program that leaves shared hardware half-set-up
 ; breaks the NEXT program, which is a much worse thing to debug than
 ; failing honestly on the spot.
+; pit_slow lives in the resident image; call it there rather than keeping a
+; second copy here that could disagree with it.
+pit_slow_far:
+        push    ax
+        mov     al, 0x36
+        out     0x43, al
+        xor     al, al
+        out     0x40, al
+        out     0x40, al
+        pop     ax
+        ret
+
 quit:
         xor     al, al
 die:
@@ -1025,6 +1105,9 @@ msg_help:
         db 13, 10
         db 'OTHER  @nnn CH375 I/O base in hex, default 260', 13, 10
         db '       /G   leave the PHY at gigabit    /V  trace', 13, 10
+        db '       /R=n timer divisor 1..16, default 8.  The poll rate is', 13, 10
+        db '            18.2*n Hz and it IS the latency: 1 leaves the', 13, 10
+        db '            clock alone and answers in about 55ms', 13, 10
         db '       /T   check the adapter and STOP, installing nothing', 13, 10
         db '       /N   install but do not hook the timer: no packets are', 13, 10
         db '            collected, which tells an install fault from an', 13, 10
@@ -1082,4 +1165,5 @@ msg_s_frames:  db '  frames delivered=$'
 msg_s_nohandle:db '  frames nobody wanted=$'
 msg_s_short:   db '  bursts that made no sense=$'
 msg_s_sent:    db '  frames sent=$'
+msg_s_rate:    db '  timer divisor (/R)=$'
 msg_s_peek:    db '  last frame out=$'

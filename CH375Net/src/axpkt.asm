@@ -185,6 +185,22 @@ tx_peek:    times 16 db 0
 cfg_val:    db  1
 
 ; ---- state ----
+; The PIT divisor.  1 leaves the timer alone at 18.2 Hz; 8 gives 145 Hz.
+;
+; Latency here is the poll interval and nothing else, and there is a clean
+; measurement of it: the same gateway, one hop away, answers in 4.25 ms
+; through the machine's interrupt-driven NE2000 and about 50 ms through
+; this driver at 18.2 Hz.  The wire is not the difference; waiting up to
+; 55 ms for the next tick is.
+;
+; USBMOUSE and USBCOMBO already do this and the arrangement is theirs: the
+; PIT runs fast, and the handler that was in the vector before us is called
+; only every nth tick, so the BIOS clock and everything hooked in ahead of
+; us still see 18.2 Hz.
+tick_n:     db  8
+tick_ctr:   db  0
+pit_fast_on: db 0                ; did we actually change the timer
+
 in_isr:     db  0                ; re-entry guard: the ISR can take
                                  ; milliseconds and the next tick will
                                  ; arrive on top of it
@@ -451,6 +467,42 @@ bo_good:
         ret
 
 ; ==========================================================================
+; The timer rate.  Both of these are resident because unload has to put the
+; PIT back, and unload runs long after the transient half is gone.
+; ==========================================================================
+pit_fast:
+        push    ax
+        push    bx
+        push    dx
+        mov     al, 0x36
+        out     0x43, al
+        mov     bl, [cs:tick_n]
+        xor     bh, bh
+        xor     dx, dx
+        mov     ax, 0
+        dec     ax                       ; 65535: close enough, and it
+        div     bx                       ; cannot divide by zero
+        out     0x40, al
+        mov     al, ah
+        out     0x40, al
+        mov     byte [cs:pit_fast_on], 1
+        pop     dx
+        pop     bx
+        pop     ax
+        ret
+
+pit_slow:
+        push    ax
+        mov     al, 0x36
+        out     0x43, al
+        xor     al, al
+        out     0x40, al                 ; divisor 0 = 65536 = 18.2 Hz
+        out     0x40, al
+        mov     byte [cs:pit_fast_on], 0
+        pop     ax
+        ret
+
+; ==========================================================================
 ; A control transfer that survives going resident.
 ;
 ; set_rcv_mode has to reprogram the adapter's RX_CTL register, and that is
@@ -576,10 +628,7 @@ isr08:
         ; the second entry would use the same buffer and the same toggle as
         ; the first and both would be wrong.
         cmp     byte [cs:in_isr], 0
-        je      short isr_enter
-        pop     ax
-        jmp     far [cs:old08]
-isr_enter:
+        jne     short isr_tick           ; busy: skip the poll, still count
         mov     byte [cs:in_isr], 1
         push    bx
         push    cx
@@ -606,8 +655,27 @@ isr_enter:
         pop     cx
         pop     bx
         mov     byte [cs:in_isr], 0
+
+        ; Only every nth interrupt goes downstream, so whoever was in the
+        ; vector before us still sees 18.2 Hz however fast the PIT is now
+        ; running.  On the ticks we keep, the interrupt has to be
+        ; acknowledged here, because the handler that would have done it is
+        ; not being called.
+isr_tick:
+        mov     al, [cs:tick_ctr]
+        inc     al
+        cmp     al, [cs:tick_n]
+        jb      short isr_ours
+        xor     al, al
+        mov     [cs:tick_ctr], al
         pop     ax
         jmp     far [cs:old08]
+isr_ours:
+        mov     [cs:tick_ctr], al
+        mov     al, 0x20
+        out     0x20, al
+        pop     ax
+        iret
 
 ; --------------------------------------------------------------------------
 ; Collect at most one burst, then hand each frame in it to whoever asked.

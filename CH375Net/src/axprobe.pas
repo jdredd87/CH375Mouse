@@ -66,6 +66,11 @@ begin
   WriteLn('           10BASE-T, and that is not a mistake -- see below');
   WriteLn('  /V       print every register access');
   WriteLn('  /W=dec   wait this long for the link, default 15 seconds');
+  WriteLn('  /K=hex   bulk-in aggregation TIMER, default 0080.  The chip');
+  WriteLn('           holds received data until this expires, however');
+  WriteLn('           often we ask for it, so it is a floor under the');
+  WriteLn('           round-trip time and not a throughput knob');
+  WriteLn('  /B=hex   bulk-in burst size, default 02');
   WriteLn('  /?       this screen');
   WriteLn;
   WriteLn('Runs the full AX88179 initialisation -- power the PHY, set the');
@@ -104,7 +109,9 @@ begin
     begin
       K := Copy(A, 1, 3); A := Copy(A, 4, 250);
       if      K = '/P=' then begin Val('$' + A, V, Code); if Code = 0 then Base := Word(V); end
-      else if K = '/W=' then begin Val(A, V, Code); if Code = 0 then WaitS := Word(V); end;
+      else if K = '/W=' then begin Val(A, V, Code); if Code = 0 then WaitS := Word(V); end
+      else if K = '/K=' then begin Val('$' + A, V, Code); if Code = 0 then AxBulkTimer := Word(V); end
+      else if K = '/B=' then begin Val('$' + A, V, Code); if Code = 0 then AxBulkSize := Byte(V); end;
     end;
   end;
 end;
