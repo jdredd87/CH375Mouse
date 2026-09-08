@@ -131,6 +131,33 @@ a cross beside it rather than assuming any of them.
   bounded at 1024 packets, which is far more than any sane burst and
   finite.
 
+### AXPKT, and PKTSCAN before it
+
+* **`PKTSCAN` 1.0.0** lists which interrupt vectors hold a packet driver,
+  by the "PKT DRVR" signature three bytes into the handler. Read-only, so
+  it is safe over the live connection it is reporting on. On this machine:
+  60h taken, 61-66 / 68-6C / 6E-6F / 78-7E free, and 67h and 6Dh occupied
+  by EMS and video rather than free.
+* **`AXPKT.COM` 0.1.0 is written and assembles at 8,221 bytes.** It does
+  not work yet, and it refuses to do damage while not working, which was
+  the part worth getting right first:
+  - vector 60h refused outright, exit code 4, proven on the hardware;
+  - any vector already carrying the signature refused;
+  - neither overridable by a switch;
+  - install aborts cleanly when the adapter will not answer, leaving no
+    vector hooked -- `PKTSCAN` before and after shows 60h untouched.
+* Written but unproven: the Crynwr entry point and dispatch, the two-call
+  receive handshake, `send_pkt` with its 8-byte header, the INT 08h poll
+  with an adaptive budget and a re-entry guard, install, unload with
+  out-of-order hook detection, and `/S`.
+* **The bug:** `read_mac` in `axpktini.inc` returns an error where the
+  identical vendor request from Pascal returns the MAC four times out of
+  four. New assembly, not the chip and not the register map -- both proven.
+* **The split is wrong and known to be.** `AXPKT` needs `AXPROBE` to have
+  brought the adapter up first. A driver you have to prepare with a second
+  program is one somebody will forget to prepare; folding the bring-up in
+  comes after the control transfer works.
+
 ### Not done
 * **The packet driver.** A Crynwr driver at INT 60h, so `mTCP` and
   `WATTCP` work without a TCP stack being written here.

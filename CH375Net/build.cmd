@@ -30,6 +30,10 @@ if "%DOSBRIDGE%"=="" set DOSBRIDGE=C:\dosbridge
 set TOOLS=%~dp0..\CH375USBTOOLS\src
 if not exist bin mkdir bin
 
+echo --- AXPKT.COM
+nasm -f bin -Isrc\ src\axpkt.asm -o bin\AXPKT.COM
+if errorlevel 1 goto failed
+
 for %%T in (axprobe axrecv axsend pktscan) do (
   echo --- %%T
   fpc -Tmsdos -Pi8086 -WmLarge -Fu"%TOOLS%" -FEbin -FUbin src\%%T.pas >nul

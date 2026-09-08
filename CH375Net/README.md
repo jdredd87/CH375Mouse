@@ -234,9 +234,45 @@ Note that `67h` and `6Dh` are in use but are *not* packet drivers — EMS and
 video respectively. `PKTSCAN` reports them as occupied rather than free,
 which is the distinction that matters when picking a vector.
 
+## The packet driver
+
+`AXPKT.COM` — **written, assembles at 8,221 bytes, and does not work yet.**
+What it does do is refuse to hurt anything, which was the first thing worth
+getting right:
+
+```
+C:\>AXPKT /I=60
+Refusing vector 60h.
+That is where a packet driver normally lives, and on this
+machine it is the network everything else depends on.
+
+C:\>AXPKT
+The adapter did not return its MAC address.
+Run AXPROBE first -- it brings the chip up.
+```
+
+Both refusals are enforced in code, neither can be overridden by a switch,
+and `PKTSCAN` before and after a failed load shows 60h exactly as it was.
+
+**Where it stands.** The Crynwr entry point, the two-call receive handshake,
+`send_pkt` with its 8-byte header, the INT 08h poll with an adaptive budget
+and a re-entry guard, install, unload with out-of-order hook detection, and
+`/S` are all written. What fails is `read_mac`: the control transfer in
+`axpktini.inc` returns an error where the identical request from Pascal
+returns the MAC four times out of four. That is a bug in new assembly, not
+in the chip or the register map, both of which are proven.
+
+**It is also split wrong.** `AXPKT` requires `AXPROBE` to have run first,
+because the bring-up is a page of control transfers that already existed
+and worked in Pascal. A driver you have to prepare with a second program is
+a driver somebody will forget to prepare; folding the bring-up in is the
+next job after the control transfer works.
+
 ## What is not done
 
-- **The packet driver.** The goal is a Crynwr driver at INT 60h, because
+- **Finishing AXPKT** — see above.
+- **mTCP over it.** When it loads, point a *copy* of `MTCP.CFG` at the new
+  vector. Never the one the working network uses. The goal is a Crynwr driver at INT 60h, because
   that is what `mTCP`, `WATTCP` and NCSA Telnet all speak — get it right
   and the whole DOS networking ecosystem works, with no TCP stack written
   here.
