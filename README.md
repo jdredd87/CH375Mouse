@@ -1,681 +1,190 @@
-# CH375Mouse — a DOS mouse driver for a USB mouse on a CH375
+# CH375USBTools — DOS tools for a WCH CH375 in USB host mode
 
-**Version 1.0.0** · StevenC · <https://github.com/jdredd87/CH375Mouse>
+Four projects, one ISA card, and no storage anywhere in sight.
 
-`USBMOUSE.COM` is a resident DOS mouse driver that gets its input from a USB
-HID mouse plugged into the WCH **CH375** ISA card at I/O `260h`. It enumerates
-the mouse itself — bus reset, speed negotiation, descriptors, address,
-configuration, HID boot protocol — then polls the interrupt IN endpoint from a
-timer hook and presents the result to DOS as a standard **INT 33h** driver.
+The WCH **CH375** is usually sold as a way to read a USB stick from an old
+machine, and every driver you can find for it does exactly that. This
+repository is what the chip can do *instead*: talk to arbitrary USB devices
+from real-mode DOS, and present them — a mouse, a keyboard, or both at
+once — to DOS as though they had always been there.
 
-It is written in assembly and assembles either with `nasm` on Windows or with
-`MNASMFIX.COM` on the DOS machine itself. Both produce a byte-identical
-7,029-byte image; that is checked, not assumed.
+Everything here has been run on the hardware: a CH375B rev B7 on an ISA
+card at `260h`, in an 8086-class machine running MS-DOS 6.22.
 
-**Working on the development machine**, against a low-speed Pixart optical
-mouse (VID `093A`, PID `2510`) on a CH375B rev B7:
-
-```
-USBMOUSE 1.0.0 -- StevenC
-Low-speed device; USB bus set to 1.5 Mbps.
-USB mouse on CH375: endpoint 1, HID interface 0, VID/PID 093A/2510
-USBMOUSE 1.0.0 resident.  INT 33h installed.
-```
-
-```
-  t=0s   x=320 y=100  col=40 row=12  buttons=0
-  t=2s   x=312 y=165  col=39 row=20  buttons=0
-  t=3s   x=304 y=199  col=38 row=24  buttons=0
-  t=9s   x=303 y=82   col=37 row=10  buttons=0
-reports received during the demo: 1043
-```
-
----
-
-## Files
-
-`bin\` holds the built tools, committed deliberately: the machine this
-targets has no compiler for them, and `USBMOUSE.COM` is the thing most people
-actually want.
+> **[Read GUIDE.md](GUIDE.md)** — the complete guide: every tool, what works
+> and what does not, the hardware limits and why they are limits, and
+> troubleshooting. If you only read one file, read that one.
 
 | | |
 |---|---|
-| `src/usbmouse.asm` | the driver. Assembles to `USBMOUSE.COM`, 7,029 bytes, of which about 1.5 KB stays resident |
-| `src/chdiag.pas` | CH375 diagnostic: the same bring-up, printing every command, status and chip register |
-| `src/mousetst.pas` | INT 33h conformance test — 34 checks against a loaded driver |
-| `src/evtest.pas` | INT 33h function 0Ch test — 19 checks that the event callback fires for the right events and only those |
-| `src/ps2test.pas` | PS/2 BIOS emulation test — 25 checks, replicating the exact call sequence Windows 3.0's `MOUSE.DRV` makes |
-| `src/tickchk.pas` | measures the INT 08h and INT 1Ch rates a handler hooking *after* the driver sees |
-| `src/clicktst.pas` | button diagnostic: watches the raw report, the INT 33h mask and the press counters together, and beeps so you know when to click |
-| `src/mdemo.pas` | shows the cursor and reads the mouse for 25 s, so the pointer can be watched moving |
-| `src/clkchk.pas` | proves the DOS clock still keeps time with the driver's PIT change in place |
-| `CHANGELOG.md` | what changed in each version |
-| `tools/MNASMFIX.COM` | mininasm, patched so it does not create its output read-only. Assembles the driver on the DOS machine itself; not my work, included so the repository is self-contained |
+| **[CH375Mouse](CH375Mouse/)** | `USBMOUSE.COM`, a resident **INT 33h** mouse driver fed by a USB HID mouse. About 1.5 KB resident. Also does PS/2 BIOS emulation, so Windows 3.x sees a pointing device |
+| **[CH375USBTOOLS](CH375USBTOOLS/)** | Seven probe tools. What is plugged in, what it says about itself, and what it puts on the wire — for any device, of any class, whether or not anything here can drive it |
+| **[CH375Keyboard](CH375Keyboard/)** | `USBKBD.COM`, a resident keyboard driver, plus six diagnostics. Enumerates a USB HID keyboard, translates usages to PC scancodes, and writes them into the BIOS keyboard buffer where DOS expects to find them |
+| **[CH375Combo](CH375Combo/)** | `USBCOMBO.COM`, both of the above in one image, for a **USB-to-PS/2 adapter** — one USB device with a keyboard interface and a mouse interface on it. About 5.3 KB resident |
+
+Each project has its own `README.md`, `CHANGELOG.md`, `build.cmd` and
+`bin\`. The binaries are committed deliberately: the machine this targets
+has no compiler for them, and for most people the `.COM` file is the thing
+they actually want.
+
+## What works, and what does not
+
+| | DOS | Windows 3.0 | Windows 95 |
+|---|---|---|---|
+| USB mouse | **yes**, INT 33h | **yes**, via `/W` | **untested** |
+| USB keyboard | **yes**, BIOS buffer | **no** | **untested** |
+| USB storage, hubs | no — out of scope | no | no |
+
+Two limits are worth knowing before you start, because neither is a missing
+feature and both are permanent on this hardware:
+
+* **This machine has no 8042.** Port 64h reads `FF`. Keys can be written
+  into the BIOS buffer, so everything reading `INT 16h` or DOS sees them —
+  but they cannot be made to look like IRQ1, so any program that reads the
+  keyboard hardware itself is unreachable. DOS EDIT's menus, QBASIC and most
+  games are in that category. The 8042 injection path (`/K`) is written and
+  works where a controller exists; there simply isn't one here.
+* **Windows 95 is untested and unsupported.** It needs a 386 and this is an
+  8086. Nothing here has ever run under it, and claiming otherwise would be
+  guessing. [`davidegat/CH375USB`](https://github.com/davidegat/CH375USB)
+  does support Windows 95 — use theirs if that is what you need.
+
+## Start here
+
+If you have the card and something plugged into it and no idea what:
+
+    cd CH375USBTOOLS
+    build.cmd scan            find the card
+    build.cmd info            dump everything the device will tell you
+
+`USBINFO` does not care what class the device is. That is the difference
+between it and `CHDIAG` in the mouse project, which stops at *"this is not
+a mouse"* — a perfectly reasonable thing for a mouse diagnostic to do and a
+useless one for finding out what an unknown dongle is.
+
+## One driver at a time
+
+`USBMOUSE.COM` and `USBKBD.COM` **cannot both be loaded.** Each resets the
+CH375, enumerates from scratch, assigns the USB address and hooks `INT 08h`
+to poll; two of them on one chip would reset it out from under each other
+and interleave transactions with no locking. One CH375, one host driver —
+the same rule that stops either of them sharing the card with `CH375R9.SYS`
+or `CH375DOS.SYS`.
+
+That is what `CH375Combo` is for. A **USB-to-PS/2 adapter** with a keyboard
+and mouse on it is *one* USB device with two HID interfaces, so a single
+driver can own the chip and serve both — and `USBCOMBO.COM` does, delivering
+keys to the BIOS buffer and the pointer to `INT 33h` from one timer hook.
+Load exactly one of the three drivers.
+
+## What is shared
+
+`CH375USBTOOLS/src/ch375.pas` is the CH375 layer: the port handshake, the
+bring-up sequence, control transfers with a real data stage, and endpoint
+I/O. `CH375Keyboard` and `CH375Combo` compile against it with `-Fu`; each
+project builds its own `.ppu` into its own `bin\`, so they share source and
+never a compiled unit. Both assembly drivers are self-contained, and
+`USBCOMBO.COM` is `USBKBD.COM`'s image with `USBMOUSE.COM`'s `INT 33h` half
+transplanted into it.
+
+## Three things the chip does that are not in the datasheet
+
+**Command `0Ah` is a general register read.** The datasheet documents it
+only as `GET_MAX_LUN`. WCH's own DOS driver uses it to read any internal
+byte, and it is the only view there is of what the chip believes the USB
+bus is doing. `CHREG` dumps all 256. Registers `C0h`–`FFh` turn out to be
+the chip's 64-byte USB data buffer — run `CHREG` after a transfer and the
+descriptor that just arrived is still sitting in it.
+
+**`CLR_STALL` also resets the endpoint's data toggle**, and control
+transfers do not work reliably without it. A transfer that *succeeds*
+leaves endpoint 0 advanced and the next one gets stalled by the device; a
+transfer that *failed* cleared the stall on its way out and left things
+fine. So transfers alternate — fail, work, fail, work — which reads as a
+flaky device and is not one. Clearing endpoint 0 before every control
+transfer fixes it. `USBCTL /N=6` is what made it visible, as `[X.X.X.]`
+before and `[......]` after.
+
+**Low speed has to be set at exactly one moment.** `SET_USB_SPEED` is a
+CH376 command that this B7 firmware implements, and it is silently ignored
+unless it is issued after the last `SET_USB_MODE` *and* after the connect
+interrupt raised by the bus reset has been read and cleared. Get the order
+wrong and every transfer to a low-speed device times out, looking exactly
+like a chip with no low-speed support — which is what this looked like for
+a long time. Most mice and many keyboards are low-speed devices, so this is
+not an edge case.
+
+## A device's answer is not a promise
+
+The PS/2 adapter answers `SET_PROTOCOL 0` — *"switch to the simple three-byte
+boot report"* — with **success**, and then carries on sending its native
+five-byte report-ID format regardless. So the request is worth making, and
+its answer is worth nothing: `USBCOMBO.COM` reads the format off each packet
+instead.
+
+Building it the other way round cost a day. Believing the acknowledgement
+meant treating every five-byte packet as impossible, and the driver that did
+that **discarded 100% of real mouse data** — while its 43-check conformance
+suite passed clean, because every one of those checks injects its own report
+and never touches the USB read. The whole account, including the reasoning
+that made the wrong version look right, is in
+[`CH375Combo/README.md`](CH375Combo/README.md).
+
+Two lessons outlast the bug:
+
+* **A suite that fabricates its own inputs cannot test the input path.**
+  Nothing in 43 passing checks touched a real packet.
+* ***"No real device would send this"* is a claim about the device**, and the
+  way to settle it is to make the device send something known — move the
+  mouse — not to reason about what the bytes ought to look like. The tooling
+  that mattered in the end was a live view that beeps at a human.
+
+## Two rules for resident code on this machine
+
+Both cost real debugging time, and both are worth knowing before writing a
+fourth driver.
+
+**`CLD` before any string operation reachable from an interrupt handler.**
+The direction flag belongs to the interrupted program. Five string
+operations in the keyboard driver's ISR ran backwards whenever the
+foreground program left `DF=1` — a fault that depends entirely on what else
+is running, so the driver works perfectly until it suddenly does not. The
+mouse driver was checked and is not affected: all of its string operations
+are in transient code, after `resident_end`. Credit for the rule goes to
+[davidegat/CH375USB](https://github.com/davidegat/CH375USB), an independent
+CH375 host stack whose engineering notes are worth reading.
+
+**A polled driver has no safe context outside its own interrupt.** There is
+nowhere else to run, which makes anything requiring "not inside an
+interrupt" impossible. Calling `INT 09h` to wake a program that owns the
+keyboard interrupt looks obvious, works in principle, and locks the machine
+— the nested handler's EOI lands on top of the driver's own and the 8259's
+in-service state is corrupted. `CH375Keyboard/README.md` has the details.
+
+## What this machine cannot do
+
+It has **no 8042.** Port 64h reads `FF`, because an XT-class box has an 8255
+keyboard latch and no controller command to inject a scancode with. So
+software here cannot raise IRQ1 or fake one, and a program that drives its
+input from the keyboard *interrupt* rather than from the BIOS cannot be
+reached by any software-only keyboard driver. DOS EDIT and QBASIC are both
+such programs; `KBCINJ` in the keyboard project reports whether a given
+machine is better off.
 
 ## Building
 
-```
-build.cmd                 build everything into binbuild.cmd test            ...then run MOUSETST and EVTEST on the DOS machine
-build.cmd diag            ...then run CHDIAG there
-build.cmd ps2             ...then run the PS/2 BIOS emulation test
-build.cmd demo            ...then drive the on-screen cursor for 25 s
-build.cmd click           ...then watch the button path for 30 s
-build.cmd dosbuild        ...then assemble the driver on the DOS machine
-                          too, and check the two images match exactly
-```
-
-The build itself needs only **Free Pascal** cross-compiling to MS-DOS real
-mode (`-Tmsdos -Pi8086`) and **nasm**, which ships with it. Nothing in the
-tree depends on anything but the RTL's `Dos` unit.
-
-The targets that run something on the DOS machine additionally need
-[DOSBridge](https://github.com/jdredd87/DOSBridge) to reach it; set
-`DOSBRIDGE` if it is not in `C:\dosbridge`. Everything here can equally well be copied to the DOS
-machine by any other means and run there by hand.
-
----
-
-## Version
-
-The driver carries a version number from 1.0.0 onwards, and prints it on
-every run:
-
-```
-USBMOUSE 1.0.0 -- StevenC
-```
-
-It is written down in exactly one place — `ver_str` in `src/usbmouse.asm`,
-immediately after the resident signature:
-
-```asm
-signature:
-        db      'USBMOUS1'                      ; 0103
-ver_str:
-        db      '1.0.0$'                        ; 010B
-```
-
-That string is both what gets printed and what stays resident, so there is no
-second copy to forget. Releasing is: bump it, add a `CHANGELOG.md` entry,
-rebuild, `git tag -a v1.2.3`.
-
-Because it is resident, and at a fixed offset, `USBMOUSE /S` reports the
-version of the copy that is **already loaded** rather than its own — which is
-the number you want when you are not certain which build went resident:
-
-```
-Loaded: USBMOUSE 1.0.0.  live=1  endpoint=1  reports=0  timer divisor=8 ...
-```
-
-Any program can read it the same way: follow the `INT 33h` vector to the
-driver's segment, check for `USBMOUS1` at `0103h`, then read ASCII from
-`010Bh` up to the `$`. `MOUSETST` does exactly that, and checks it looks like
-a version rather than checking it against a fixed number, so the check keeps
-working across releases. Builds before 1.0.0 have nothing at `010Bh`.
-
-Do not confuse this with **INT 33h function `24h`**, which reports `7.00`.
-That is the API level — which interface the driver implements, so that
-applications know which calls they may make — and it has nothing to do with
-which build is answering.
-
----
-
-## Using it
-
-```
-USBMOUSE                  enumerate and install
-USBMOUSE @260             CH375 I/O base in hex (default 260)
-USBMOUSE /V               trace each bring-up step and the status it returned
-USBMOUSE /F               install even with nothing attached, and keep looking
-USBMOUSE /E=n             skip enumeration, poll endpoint n regardless
-USBMOUSE /W               also present the mouse as a PS/2 BIOS pointing
-                          device, so Windows 3.x can see it
-USBMOUSE /K               keep the fast poll rate even when another program
-                          hooks the timer after us
-USBMOUSE /R=n             PIT divisor; poll rate is 18.2 * n Hz (default 8)
-USBMOUSE /S               is it loaded, and what state is the USB side in
-USBMOUSE /U               unload: restore INT 33h, INT 08h and the PIT
-```
-
-`/U` refuses to unload if something else hooked INT 08h afterwards, because
-unhooking out of order would leave that other handler pointing into freed
-memory.
-
-### What INT 33h functions are implemented
-
-Everything an ordinary DOS application asks for:
-
-`00h` reset · `01h`/`02h` show/hide cursor · `03h` position and buttons ·
-`04h` set position · `05h`/`06h` button press/release counts and positions ·
-`07h`/`08h` coordinate ranges · `0Ah` text cursor masks · `0Bh` motion
-counters · `0Ch` install event handler · `0Fh` mickeys per 8 pixels ·
-`14h` swap event handler · `15h` state buffer size · `1Ah`/`1Bh` sensitivity ·
-`1Fh`/`20h` disable/enable · `21h` software reset · `23h` language ·
-`24h` API level and type (reports 7.00 — the interface level, not this
-driver's own version; see [Version](#version)).
-
-Two private functions exist for testing, outside the Microsoft numbering:
-
-* `AX=7F00h` — status: `BX` = USB state (0 nothing, 1 enumerated, 2 attached
-  but not enumerated), `CL` = endpoint, `CH` = last CH375 poll status,
-  `DX` = report count.
-* `AX=7F01h` — inject a HID boot report: `BL` buttons, `CL` dx, `CH` dy. It
-  runs through the identical code a real report takes. `MOUSETST` drives this,
-  which is what lets the INT 33h half be tested exhaustively without needing a
-  human to wave the mouse in a particular pattern.
-* `AX=7F03h` — the last raw HID report: `BL`/`BH` = bytes 0 and 1, `CL`/`CH`
-  = bytes 2 and 3, `AL` = every button bit ever seen, `AH` = the last report's
-  length, `DX` = how many reports carried a button down. `CLICKTST` uses it to
-  tell "the mouse never sent a press" apart from "the driver dropped it".
-* `AX=7F02h` — suspend (`BX=1`) or resume (`BX=0`) the driver's own polling;
-  the previous setting comes back in `BX`. `MOUSETST` needs it: with a live
-  mouse, real reports land between an injection and the read-back and the
-  deterministic checks become a race. It is also the polite way for an
-  application to stop the timer touching the CH375 while it uses the card for
-  something else.
-
-**Not implemented: the graphics-mode cursor.** In text modes the driver draws
-the classic software cursor (attribute inverted through the `0Ah` screen and
-cursor masks, `77FFh`/`7700h` by default). In graphics modes coordinates and
-buttons work normally but no pointer is painted — applications that draw their
-own, which is most of them, are unaffected. Functions `09h` (graphics cursor
-shape) and `10h` (exclusion area) are accepted and ignored rather than
-rejected, so callers that set them still run. `18h`/`19h` (alternate event
-handlers) return `AX=FFFF` — "not supported", the documented answer.
-
----
-
-## How it works
-
-### Polling, and why the timer
-
-DOS is not reentrant and this card gives the CH375's INT# pin no useful IRQ
-wiring, so the mouse has to be polled. The BIOS tick is 18.2 Hz, far too slow
-to track a pointer, so the driver takes over **INT 08h** and divides the PIT by
-8 → 145.6 Hz. Every eighth call is forwarded to the original handler, so BIOS
-timekeeping, the DOS clock and anything else on INT 08h see exactly the rate
-they expect. `clkchk` measures this: 20.0 s of DOS clock in the same wall-clock
-time with and without the driver resident and polling.
-
-Each tick issues one interrupt IN token. Retries are turned off after
-enumeration (`SET_RETRY` with `25h 00h`), so a mouse with nothing to report
-NAKs and the transaction is over in microseconds — `/S` reports `2Ah` as the
-usual last status, which is exactly right. If the device does not answer within
-a bounded ~3 ms spin the tick is abandoned rather than blocking; with `/E=1`
-against a device that never answers, the box runs at 145 failed transactions a
-second and stays completely healthy.
-
-A reentrancy flag keeps a tick out of the CH375 while an earlier one is still
-in it.
-
-### Giving the tick back when we are not first
-
-Dividing the tick on the way *down* the chain only helps the handlers that are
-below us. Anything that hooks INT 08h **after** the driver sits above that
-division and sees all 145 interrupts a second, so every timer it runs goes
-eight times too fast. Windows is exactly that case — it has to be started
-after the driver is loaded — and a Windows whose tick runs eight times fast
-has a double-click window eight times too short. Single clicks worked there;
-double clicks did not.
-
-`TICKCHK` measures this directly by hooking INT 08h the way Windows does:
-
-```
-                    INT 08h    INT 1Ch
-  before the fix    144 Hz      18 Hz
-  after the fix      18 Hz      18 Hz
-```
-
-INT 1Ch was always correct, because the BIOS INT 08h handler is what issues
-it and we call that only every eighth interrupt — so a program using the BIOS
-user tick never saw the problem.
-
-The fix is for the driver to notice when the INT 08h vector stops being its
-own and put the PIT back to 18.2 Hz, then take the fast rate again when it
-gets the vector back — which happens by itself when Windows exits. The cost is
-that the mouse is polled at 18.2 Hz while such a program is loaded, so the
-pointer moves in bigger steps; the distance is still right, because a HID
-mouse accumulates movement between polls.
-
-Reprogramming the PIT from inside the timer interrupt means the two routines
-that do it must not touch the interrupt flag: `pit_fast` and `pit_slow` now
-leave IF entirely alone and the caller states what it is, with `pit_fast_cli`
-and `pit_slow_cli` for the INIT and unload paths that run with interrupts on.
-An `STI` in there would let a second tick nest inside the first. Doing it with
-`PUSHF`/`POPF` instead looked tidier and is not worth it on a CPU whose `POPF`
-carries an erratum.
-
-The obvious alternative — snatching the vector back and pushing the newcomer
-underneath — was rejected. It needs a stored pointer to the displaced handler,
-and once that handler unhooks itself (Windows restores the vector on the way
-out) the pointer refers to freed memory with no way to tell. Getting that
-wrong crashes the machine, where this merely slows the mouse down. `/K` keeps
-the fast rate for anyone who would rather have the smoothness and does not
-care what else is running.
-
-### Position and buttons
-
-Movement is accumulated in eighths of a virtual unit before being divided by
-the sensitivity, so slow movement is not lost to truncation — the thing that
-otherwise makes a mouse feel dead at low speed. Coordinates live in the
-standard 640×200 virtual space and are clamped to the `07h`/`08h` ranges.
-Button edges are counted per button, with the position each press and release
-happened at, which is what functions `05h` and `06h` return.
-
-### Reading the video mode
-
-`cursor_ok` reads the video mode from BIOS data at `40:49`, not with INT 10h
-`AH=0Fh`. This code runs inside the timer interrupt and the BIOS video service
-is not reentrant; a tick landing while the foreground is inside INT 10h would
-corrupt it. The column count comes from `40:4A`, and mono vs colour picks
-`B000` or `B800` — decided **every time**, because on this machine the video
-card is not the same from one boot to the next.
-
----
-
-## Two things that stop it dead, neither of them the driver
-
-**Another driver owning the chip.** `CH375R9.SYS` / `CH375DOS.SYS` in
-`CONFIG.SYS` is the vendor's USB-disk driver, and it resets the CH375 into
-disk mode and keeps it there. There is one chip, one USB port and one device
-at a time, so the two cannot share it — it is the disk driver or this one, and
-that is a property of the hardware rather than something to engineer around.
-`MEM /C` shows it as `CH375R9`.
-
-**A wedged device.** Nothing in software cuts VBUS, so no amount of
-`RESET_ALL` or bus resetting will clear a USB device that has got itself
-confused — and one that has been through a couple of Windows sessions and a
-stint underneath the disk driver can. The symptom is precise and misleading:
-the chip reports the device attached, identifies its speed correctly, accepts
-the low-speed switch (`reg17` goes `90h` → `D8h`), runs SOF — and then every
-transfer returns `20h`, no answer at all. Unplug it and plug it back in; that
-is the only fix, and it works immediately.
-
-Both were mistaken for driver faults during development, which is why
-`CHDIAG` now lists them in that order before it mentions the cable.
-
-## The low-speed problem, and where the switch has to go
-
-Nearly every USB mouse is a **1.5 Mbps low-speed** device. The CH375 comes up
-driving the bus at 12 Mbps, and a low-speed device simply cannot hear it: every
-transaction returns `24h`, `USB_INT_RET_TOUT`, meaning the token went out and
-nothing came back. A USB stick on the same card enumerates perfectly, which
-makes this look convincingly like a hardware fault and is why it took so long
-to find.
-
-Two commands solve it, **neither of which is in the CH375 part-I datasheet** —
-both are documented for the CH376, and this B7 firmware turns out to implement
-them:
-
-```
-0Ah sub-address 07h    GET_DEV_RATE    bit 4 set = 1.5 Mbps low-speed device
-04h data 02h           SET_USB_SPEED   drop the bus to 1.5 Mbps
-```
-
-**Where the second one goes is the entire trick.** `SET_USB_MODE` puts the bus
-back to 12 Mbps, so the speed has to be set after the last mode change — but
-issued straight after `SET_USB_MODE 6` it is **silently ignored**: no error, no
-status, no register change, and every transaction still times out exactly as if
-the chip had no low-speed support at all. It only takes once the connect
-interrupt raised by the bus reset has been read and cleared.
-
-So the working order is:
-
-```
-SET_USB_MODE 5      host enabled, no SOF -- the idle state
-wait for USB_INT_CONNECT
-SET_USB_MODE 7      hold the bus in reset
-SET_USB_MODE 6      host enabled, auto SOF
-wait for USB_INT_CONNECT     <- the second one, raised by the reset
-drain any further interrupts
-SET_RETRY 25h 8Fh
-GET_DEV_RATE -> if bit 4, SET_USB_SPEED 02h        <- only works here
-GET_DESCR 1 / SET_ADDRESS / SET_USB_ADDR / GET_DESCR 2 / SET_CONFIG
-SET_PROTOCOL boot, SET_IDLE 0
-poll the interrupt IN endpoint
-```
-
-You can see it take: register `17h` goes `90h` → `D8h` the moment the speed
-command lands, and `chdiag` prints that. If it still reads `90h`, the command
-was issued too early.
-
-**If you move the connect wait or the drain, this stops working**, and the
-symptom is a total silence on the bus that looks nothing like a sequencing bug.
-That is why `bu_conn` waits for the interrupt rather than sleeping through it.
-
-Two of my own bugs hid behind this for a while and are worth knowing about,
-because both produced symptoms that pointed at the hardware:
-
-* `ch_read` returned "`CL` = length" but the `LOOP` that walks the buffer
-  leaves `CX` at zero, so the configuration descriptor always arrived with
-  length 0 and a perfectly enumerated mouse looked like it had no endpoints.
-* The `/V` trace helper ended with `crlf`, which leaves `AL = 0Ah`; the
-  `test al,10h` deciding whether to switch to low speed ran straight after it
-  and therefore never fired. Adding tracing switched the feature off.
-
----
-
-## What the CH375 actually does
-
-Worth writing down, because the part-I datasheet documents only the built-in
-USB-disk firmware and several widely-copied constants are wrong for this chip.
-
-**Ports on this ISA card**, from the PLD source (`CH375ISA.PLD`):
-
-```
-usb = aen & addr:[0260..026f] & !a1 & (ior # iow);   ; A0 picks data/command
-d0  = int ;  d0.oe = aen & addr:[0260..026f] & a1 & ior
-```
-
-so `base+0` is data, `base+1` is command, and `base+2` bit 0 is a readback of
-the chip's INT# pin. Only A9..A4 and A1 are decoded, so the chip also appears
-at `264h`, `268h` and `26Ch`.
-
-**Two ways to see the interrupt.** From revision B5 the chip returns a status
-byte when you *read* the command port, with bit 7 clear meaning an interrupt is
-pending — one `IN` instead of two, and independent of the board. Before B5 you
-must use the board's `base+2` bit 0. The driver checks the revision at install
-time and refuses to run on anything older rather than silently polling the
-wrong port. This chip is **B7**.
-
-**Commands 0Ah and 0Bh take a sub-address.** The datasheet lists only
-`GET_MAX_LUN` (`0Ah` + `38h`) and `SET_DISK_LUN` (`0Bh` + `34h`), but the whole
-internal map is reachable this way — the vendor's own `CH375DOS.SYS` and
-`CH375CHK.C` use `0Ah` + `20h` for device-attached and `0Ah` + `3Eh` for the
-drive letter, and `0Bh` + `25h` is `SET_RETRY`. `chdiag /R` dumps the map.
-Registers that turned out to matter:
-
-```
-07h  bit0 attached  bit1 D- level  bit2 suspend  bit3 bus reset
-     bit4 LOW SPEED DEVICE  bit5 SIE free
-17h  90h at 12 Mbps, D8h after SET_USB_SPEED 02h
-1Ch  40h exactly when the SOF generator is running
-20h  bit5 device attached
-```
-
-Note that bit 1 of `07h` (the D− line level) reads 0 for this low-speed mouse,
-so **do not use it to infer speed** — bit 4 is the one that means anything, and
-it agrees with `GET_DEV_RATE` on the CH376.
-
-**Host-mode status codes.** Success is `14h`. A failed transaction returns
-`0010xxxx` where the low nibble is the PID the device answered with, or a low
-nibble ending `00` for no answer at all:
-
-```
-14  success            15  connected        16  disconnected
-22  device sent ACK    2A  device sent NAK  2E  device sent STALL
-20 24 28 2C            device did not answer -- USB_INT_RET_TOUT
-```
-
-**Data toggle.** `CMD_SET_ENDP6` (`1Ch`) sets the host receive endpoint; bit 7
-enables it and bit 6 is the DATA0/DATA1 toggle, so you alternate `80h` and
-`C0h` across successful transfers. The vendor DOS driver reaches the same
-register as internal byte `1Eh`; they are the same thing. Getting this wrong
-shows up as every second packet failing, not as silence.
-
-**A stalled control endpoint has to be cleared.** This mouse `STALL`s
-`SET_IDLE` — it does not implement it. That is legal and harmless, but a stall
-left set fails every later control transfer, so `hid_request` clears endpoint 0
-whenever a request comes back `2Eh`.
-
----
-
-## Clicks
-
-Movement and clicks fail independently, so they are diagnosed independently.
-`USBMOUSE /S` now reports what the button path has seen:
-
-```
-Loaded: USBMOUSE 1.0.0.  live=1  endpoint=1  reports=1043  buttons seen=01  button reports=4
-```
-
-`buttons seen` is the OR of every button mask that has arrived in a report
-**from the mouse** — injected test reports are deliberately not counted, so
-this number answers exactly one question. If it stays `00` after you have
-clicked, the press is not reaching the driver at all.
-
-```
-build.cmd click           load the driver, watch the whole button path for
-                          30 seconds, unload.  Click while it runs.
-```
-
-Measured with a real hand on the mouse, all three buttons:
-
-```
-button bits ever seen in a raw report: 07
-reports carrying a button down       : 159
-press counts   left=46  right=33  middle=34
-release counts left=46  right=33  middle=34
-Presses arrive and INT 33h reports them.  The driver is fine.
-```
-
-`CLICKTST` beeps when its window opens, chirps once per press so you get
-confirmation without watching the screen, and beeps twice when it is done —
-the speaker runs off PIT channel 2, which is unrelated to the channel 0 the
-driver divides, so it cannot disturb the poll rate or the clock. It watches
-the raw HID report, the INT 33h button mask and the press counters together,
-and says which of the three stages is at fault:
-
-* raw byte 0 never non-zero → the mouse is not sending the press, or not in
-  the format expected
-* raw moves but the INT 33h mask does not → a driver bug
-* both move but an application still ignores clicks → that application reads
-  the mouse some other way
-
-Two bugs on this path were found and fixed after the first working build, both
-of which broke clicks while leaving movement perfect:
-
-* **The event handler never reported button events.** Function `0Ch` lets an
-  application register a callback and a mask of events it cares about. The
-  handler was being called with `AX=1` — "the pointer moved" — for every
-  report regardless of the mask, so an application subscribed to button
-  presses alone was called constantly and never once told that a button had
-  been pressed. It now builds the real condition mask (bit 0 moved, bits 1-2
-  left press/release, 3-4 right, 5-6 middle), tests it against the
-  application's mask, and only calls when something it asked for happened.
-  `EVTEST` covers this: 19 checks that every condition is reported with the
-  right bit, that a mask of `02h` gets left presses and nothing else, and that
-  a mask of zero stops the callbacks.
-* **The status stage of a control write used the wrong data toggle.** A
-  control write finishes with a zero-length IN carrying DATA1; the driver left
-  the host endpoint set to DATA0, so `SET_PROTOCOL` came back `2Bh` (toggle
-  mismatch) instead of `14h`. The mouse still reported in a boot-compatible
-  layout, which is why this went unnoticed, but the request was not reliably
-  taking effect.
-
-If an application still ignores clicks once `CLICKTST` shows presses arriving
-and INT 33h reporting them, it is reading the mouse in some way the driver
-does not implement — the most likely candidate being the alternate event
-handlers of functions `18h`/`19h`, which return "not supported".
-
----
-
-## Windows 3.x
-
-Windows has never heard of INT 33h. Its mouse support is a Windows DLL named
-in `SYSTEM.INI` as `[boot] mouse.drv=`, and the one shipped with Windows 3.0 —
-`MOUSE.DRV`, 4,896 bytes, dated 31 October 1990 — turns out to be a pure
-**PS/2 BIOS** driver. Disassembled, it never touches the 8042 at all; it drives
-everything through `INT 15h AH=C2h` plus one hardware vector. Its contract is:
-
-```
-INT 15h AH=C0h   must return a configuration table whose model byte at
-                 offset 2 is F8h, FAh or FCh, or it concludes there is no
-                 pointing device.  FCh also makes it choose INT 74h.
-INT 11h          bit 2 must be set: "pointing device installed"
-INT 15h AX=C205h BH=3     initialise, 3-byte packets
-        AX=C201h          reset
-        AX=C203h BH=3     resolution
-        AX=C207h ES:BX    register a callback
-        AX=C206h BH=1     scaling 1:1
-        AX=C202h BH=2     sample rate
-        AX=C200h BH=1     enable
-                 ...retrying twenty times on error code 4, giving up on
-                 anything else.
-```
-
-The last piece is the interesting one. `MOUSE.DRV` hooks `INT 74h` itself, and
-its handler *begins by chaining to whatever was already in that vector* —
-expecting the BIOS, which reads the mouse and calls the callback registered
-with `C207h`. So `USBMOUSE /W` takes `INT 74h` first, and when the Windows
-driver chains into it we deliver the packet in the frame the BIOS uses:
-
-```
-push status ; push X ; push Y ; push Z ; call far handler ; add sp,8
-```
-
-which the callback reads as `[bp+0Ch]`, `[bp+0Ah]`, `[bp+08]` — confirmed by
-disassembling the callback rather than trusting a reference. Y is inverted on
-the way out, because USB counts downwards and PS/2 counts up.
-
-The upshot is that **none of this needs any Windows code**: with the emulation
-in place the stock Microsoft driver runs unmodified.
-
-```
-USBMOUSE /W                       load before starting Windows
-```
-
-and in `SYSTEM.INI`:
-
-```
-[boot]
-mouse.drv=mouse.drv               (was msmouse1.drv on this machine)
-```
-
-`/W` is opt-in because claiming to be a PS/2 model FC on an 8086 is a lie
-other software can see: it makes `INT 15h AH=C0h` answer where the machine's
-own BIOS says model FAh, and sets a bit in the `INT 11h` equipment word. All
-three vectors are restored by `/U`.
-
-`PS2TEST` makes exactly the calls `MOUSE.DRV` makes, in the same order, so the
-emulation is provable without starting Windows — which matters here, because
-Windows cannot be exited remotely: it reads the keyboard at INT 9, where
-neither `KINJ` nor `KNET` can reach it, so the only way out is the smart plug.
-
-```
-=== USBMOUSE PS/2 BIOS emulation test ===
-  ok    INT 15h AH=C0h returns a configuration table
-  model byte = FC
-  ok    model is a PS/2 class the driver accepts (F8/FA/FC)
-  ok    bit 2 set: pointing device installed
-  ok    C205h initialise ... C201h reset ... C207h set callback ... C200h enable
-  ok      Y is inverted: USB counts down, PS/2 counts up = -3
-  ok      left / right / middle button bits
-  packets delivered: 436
-25/25 checks passed.
-```
-
-**One trap worth recording.** `/W` hung the machine the first time. `ps2_ok`,
-the helper that clears CF in the flags an IRET will restore, is reached by a
-*near call* from inside an interrupt handler — so between the saved BP and the
-IRET frame there is also the call's own return address. `[bp+6]` was clearing
-bit 0 of the return **CS** rather than the flags, and the machine left the
-building the moment the handler returned. The offset is `[bp+8]`.
-
----
-
-## Test results
-
-`build.cmd test` loads the driver, runs `MOUSETST` and unloads:
-
-```
-USBMOUSE 1.0.0 -- StevenC
-Low-speed device; USB bus set to 1.5 Mbps.
-USB mouse on CH375: endpoint 1, HID interface 0, VID/PID 093A/2510
-USBMOUSE 1.0.0 resident.  INT 33h installed.
-=== USBMOUSE INT 33h test ===
-  ok  function 00h reports a driver installed
-  ok  button count = 3
-  ...
-watching for real USB reports for about 10 seconds
-  reports delivered by the mouse: 838
-  live position 325,0 buttons 0
-
-34/34 checks passed.
-USBMOUSE 1.0.0 -- StevenC
-USBMOUSE unloaded.
-```
-
-`EVTEST` then runs 19 more against the function 0Ch callback, and `PS2TEST`
-25 against the PS/2 BIOS emulation -- 78 in all, and the whole set has been
-run green against a live mouse with the driver loaded `/W`:
-
-```
-34/34 checks passed.                    MOUSETST
-19/19 checks passed.                    EVTEST
-25/25 checks passed.                    PS2TEST
-INT 08h : 18 Hz     INT 1Ch : 18 Hz     TICKCHK
-DOS says 15.0 seconds elapsed           CLKCHK
-live=1  endpoint=1  reports=364  timer divisor=8  buttons seen=07
-```
-
-The last line is the driver's own view afterwards: still enumerated, back at
-the fast poll rate now that TICKCHK has let go of the timer, and having seen
-all three buttons.
-
-`PS2TEST`'s last check needs the mouse to actually be moving; with an idle
-mouse it is not asserted and the run reports `24/24` rather than failing.
-
-The 34 checks cover position setting and read-back, movement in both directions
-including negative deltas, clamping at both ends of the default and of a
-narrowed range, sub-unit accumulation at half sensitivity, motion counters and
-their clear-on-read, all three buttons' state, press and release counts and the
-positions they were recorded at, cursor show/move/hide, and reset. They are
-driven through the `7F01h` injection hook, with polling suspended via `7F02h`,
-so every case is exact and repeatable; polling is resumed for the last section
-and the real mouse then proves the USB path on top of that. The 34th reads the
-version string out of the resident image and checks it is one.
-
-Also verified on the machine:
-
-* **The real mouse drives it.** 1043 reports over a 25-second run, position
-  tracking the jiggler and clamping correctly at the screen edge, with the text
-  cursor visible on the captured video.
-* `USBMOUSE.COM` from `nasm -f bin` and from `MNASMFIX -O9 -f bin` on the DOS
-  box are **byte-identical**.
-* With the driver resident and polling at 145 Hz, `CLKCHK` measures 20.0 s of
-  DOS clock in the same wall-clock time as without it.
-* With `/E=1` — polling an endpoint on a device that never answers — the box
-  runs for ten seconds at 145 failed transactions per second and stays healthy;
-  `/U` then unloads cleanly.
-
----
-
-## Assembling on the DOS machine
-
-The driver needs no cross-compiler at all: it assembles on the target, byte
-for byte identically to the `nasm` build. `tools\MNASMFIX.COM` in this
-repository is the assembler to use -- a patched mininasm, because the stock
-one creates its output file read-only, so pass 2 fails and quietly leaves a
-stale image behind.
-
-```
-build.cmd dosbuild
-```
-
-does the whole thing: sends `src\usbmouse.asm` and `tools\MNASMFIX.COM` to
-the DOS machine, assembles there, fetches the result back and compares it
-with `bin\USBMOUSE.COM` byte for byte. By hand, with
-[DOSBridge](https://github.com/jdredd87/DOSBridge)'s commands, it is:
-
-```
-dosdeploy src\usbmouse.asm    C:\WORK
-dosdeploy tools\MNASMFIX.COM  C:\WORK
-dosexec "C:\WORK\MNASMFIX.COM -O9 -f bin -o C:\WORK\USBMOUSE.COM C:\WORK\USBMOUSE.ASM"
-```
-
-or copy those two files to the machine by any other means and run the one
-command there. Nothing else is needed.
-
-`-O9` matters: without it mininasm leaves some jumps in their long form and the
-image comes out larger than nasm's. With it the two agree exactly.
-
-Every jump in `usbmouse.asm` carries an explicit `short` or `near` at its
-natural size. If a displacement will not reach, **add a trampoline** — there
-are four in the option parser already — rather than widening the jump:
-mininasm re-shortens jumps on every pass, so a source that forces them long
-never converges.
-
----
+Each project's `build.cmd` compiles with Free Pascal cross-compiling to
+`i8086-msdos` (`-Tmsdos -Pi8086`), plus `nasm` for the assembly drivers.
+Both ship with FPC and both must be on `PATH`. The build needs nothing
+else.
+
+Targets that *run* something additionally need
+[DOSBridge](https://github.com/jdredd87/DOSBridge) to reach the DOS
+machine; set `DOSBRIDGE` if it is not in `C:\dosbridge`. That is what put
+every binary here on the real machine and brought the output back.
+
+Nothing in the bridge is required to use the drivers — copy the `.COM` file
+to the DOS machine and run it.
 
 ## Licence
 
@@ -683,21 +192,8 @@ never converges.
 `LICENSE`. Copy it, sell it, strip my name off it, do whatever you like. No
 attribution required, none expected.
 
-The one exception is `tools/MNASMFIX.COM`, which is somebody else's work and
-stays under their terms. Delete it if you would rather not carry it: nothing
-depends on it, and `nasm` builds the identical image.
+The one exception is `CH375Mouse/tools/MNASMFIX.COM`, which is somebody
+else's work and stays under their terms. Delete it if you would rather not
+carry it: nothing depends on it, and `nasm` builds the identical image.
 
----
-
-## Credits
-
-Written by **StevenC**. <https://github.com/jdredd87/CH375Mouse>
-
-Built and tested over [DOSBridge](https://github.com/jdredd87/DOSBridge),
-which is what put every one of these binaries on the real machine and
-brought the output back.
-
-`tools/MNASMFIX.COM` is not mine: it is
-[mininasm](https://github.com/pts/mininasm) with the read-only-output bug
-patched out, bundled so the driver can be rebuilt on the DOS machine with
-nothing else present.
+Written by **StevenC**. <https://github.com/jdredd87/CH375USBTools>

@@ -1,0 +1,518 @@
+# CH375USBTools — the complete guide
+
+Everything in this repository, what it is for, what it can and cannot do,
+and why. If you only read one file, read this one.
+
+**Contents**
+
+1. [What this is](#what-this-is)
+2. [The machine it was built on](#the-machine-it-was-built-on)
+3. [Which driver do I want?](#which-driver-do-i-want)
+4. [First run](#first-run)
+5. [The drivers](#the-drivers)
+6. [The tools](#the-tools)
+7. [What works and what does not](#what-works-and-what-does-not)
+8. [The 8042 problem](#the-8042-problem)
+9. [Windows](#windows)
+10. [Things the hardware does that are not in the datasheet](#things-the-hardware-does-that-are-not-in-the-datasheet)
+11. [Troubleshooting](#troubleshooting)
+12. [Building from source](#building-from-source)
+13. [What a 386 would unlock](#what-a-386-would-unlock)
+14. [Related work](#related-work)
+
+---
+
+## What this is
+
+The WCH **CH375** is usually sold as a way to read a USB stick from an old
+machine, and nearly every driver you can find for it does exactly that.
+This repository is what the chip can do *instead*: act as a USB **host** on
+a real-mode DOS machine, talk to arbitrary USB devices, and present a
+keyboard and a mouse to DOS as though they had always been there.
+
+Four projects:
+
+| | |
+|---|---|
+| **[CH375USBTOOLS](CH375USBTOOLS/)** | seven probe tools. What is plugged in, what it says about itself, what it puts on the wire — any device, any class |
+| **[CH375Mouse](CH375Mouse/)** | `USBMOUSE.COM` — INT 33h mouse driver, plus PS/2 BIOS emulation for Windows 3.x |
+| **[CH375Keyboard](CH375Keyboard/)** | `USBKBD.COM` — keyboard driver writing into the BIOS keyboard buffer |
+| **[CH375Combo](CH375Combo/)** | `USBCOMBO.COM` — both at once, for a USB-to-PS/2 adapter |
+
+Everything here has been run on real hardware. Where something is untested,
+this guide says so rather than implying otherwise.
+
+---
+
+## The machine it was built on
+
+```
+CPU        8088/8086, ISA bus            <- this matters more than anything else
+DOS        MS-DOS 6.22
+USB        CH375B rev B7 on an ISA card, I/O base 260h
+Windows    Windows 3.0 (real mode)
+Keyboard   XT-class, 8255 latch -- NO 8042 CONTROLLER
+```
+
+Two consequences run through everything:
+
+* **`cpu 8086`.** No near conditional jumps, no `PUSHA`, no 386
+  instructions. Where a conditional jump cannot reach, the test is inverted
+  over an unconditional `jmp near`, or a trampoline is added. There are
+  several in the sources and they are commented as such — they are not
+  stylistic.
+* **No 8042.** Port 64h reads `FF`. Nothing can inject a scancode at the
+  hardware level, which is the single biggest limitation in this
+  repository. [See below](#the-8042-problem).
+
+Devices exercised:
+
+| device | what it showed |
+|---|---|
+| HP USB keyboard `04F2:1717` | low speed, boot keyboard on interface 0, EP 81 |
+| ASUS WiFi dongle `0B05:1786` | full speed, vendor class `FF/FF/FF`, four bulk endpoints — enumerated and dumped, not driven |
+| PS2-to-USB adapter `0E8F:0020` | low speed, **two** boot HID interfaces, keyboard on EP 81 and mouse on EP 82 |
+
+---
+
+## Which driver do I want?
+
+**Load exactly one.** Each resets the CH375, enumerates from scratch,
+assigns the USB address and hooks `INT 08h` to poll. Two of them on one chip
+reset it out from under each other.
+
+| you have | load |
+|---|---|
+| a USB mouse | `USBMOUSE.COM` |
+| a USB keyboard | `USBKBD.COM` |
+| a USB-to-PS/2 adapter with both, or a combo dongle | `USBCOMBO.COM` |
+| a mouse, and you want Windows 3.x | `USBMOUSE /W` or `USBCOMBO /W` |
+| no idea what you have | `USBINFO` first — it drives nothing |
+
+---
+
+## First run
+
+```
+cd CH375USBTOOLS
+build.cmd scan            find the card
+build.cmd info            dump everything the device will tell you
+```
+
+`USBSCAN` answers *"what address is the card at"*, which every other tool
+assumes you already know. `USBINFO` does not care what class the device is —
+that is the difference between it and `CHDIAG`, which stops at *"this is not
+a mouse"*.
+
+Then load the driver that matches what you found.
+
+---
+
+## The drivers
+
+### `USBMOUSE.COM` — CH375Mouse
+
+Resident INT 33h mouse driver, about 1.5 KB. Functions `00h`–`24h` with a
+text-mode software cursor, plus `/W` for PS/2 BIOS emulation so Windows 3.x
+finds a pointing device.
+
+```
+USBMOUSE            load
+USBMOUSE /W         load with Windows 3.x support
+USBMOUSE /S  /U     status, unload
+```
+
+### `USBKBD.COM` — CH375Keyboard
+
+Resident keyboard driver, version 1.7.1. Enumerates a USB HID keyboard,
+translates usages to PC scancodes, and writes them into the BIOS keyboard
+buffer at `0040:001E` — exactly what a real keyboard interrupt does. It also
+maintains the three shift-state bytes and drives the lock LEDs.
+
+```
+USBKBD              load
+USBKBD /S  /U       status, unload
+```
+
+### `USBCOMBO.COM` — CH375Combo
+
+Both halves in one image, about 5.3 KB resident. Written because a
+USB-to-PS/2 adapter is **one** USB device with two boot HID interfaces, and
+the two single-purpose drivers cannot share the chip.
+
+```
+USBCOMBO            load -- that is all most people need
+USBCOMBO /?         a full help screen
+USBCOMBO /W         ...with Windows 3.x mouse support
+USBCOMBO /S  /U     status, unload
+```
+
+The switches worth knowing:
+
+| | |
+|---|---|
+| `/G=n` | mouse speed. **Bigger is faster**, default 16, no ceiling |
+| `/M=n` | poll the mouse every *n*th tick, default 2 |
+| `/R=n` | poll rate, `18.2 × n` Hz, default 16 (291 Hz). **Lower loses keystrokes** |
+| `/NK` `/NM` | drive only the mouse, or only the keyboard |
+| `/W` | PS/2 BIOS emulation for Windows 3.x |
+| `/T` | self-test both halves and exit; needs no keypress |
+
+---
+
+## The tools
+
+### CH375USBTOOLS — seven, class-agnostic
+
+| | |
+|---|---|
+| `USBINFO` | **run this first.** Every descriptor the device will part with, decoded field by field with raw bytes alongside |
+| `HIDREP` | decodes a HID report descriptor into the field map an actual driver needs |
+| `USBPOLL` | sits on an IN endpoint and prints every packet |
+| `USBCTL` | issues the control transfer you type and shows every stage |
+| `CHREG` | the chip's 256 internal registers, with a watch mode |
+| `USBSCAN` | finds CH375 boards |
+| `USBMON` | watches for devices being plugged and unplugged |
+
+### The per-driver test programs
+
+These are not decoration. Each driver has parts that fail independently, and
+each tool isolates one of them.
+
+**CH375Mouse:** `CHDIAG` (is this a mouse?), `MOUSETST` (INT 33h
+conformance), `EVTEST` (event handler), `PS2TEST` (25 checks replicating the
+exact call sequence Windows 3.0's `MOUSE.DRV` makes), `TICKCHK` and `CLKCHK`
+(timer behaviour), `MDEMO` and `CLICKTST` (interactive).
+
+**CH375Keyboard:** `KBDRAW` (raw reports), `KBDTST` (33 checks including
+table agreement), `KBDBIOS` (BIOS keyboard data area), `KBCINJ` (is there an
+8042?), `KBD16` (which INT 16h calls exist), `I16SPY` (counts INT 16h calls
+and paints the INT 09h/08h owners into video memory — the only channel out
+of a machine whose foreground is held).
+
+**CH375Combo:** `COMBOTST` — 40 checks, plus:
+
+```
+COMBOTST /W=20      watch BOTH endpoints live, with beeps
+COMBOTST /KB=20     watch the KEYBOARD reports only
+COMBOTST /BIOS      dump the BIOS keyboard data area
+COMBOTST /FLUSH     empty the BIOS keyboard buffer
+COMBOTST /BEEP      check you can hear the cues
+```
+
+`/W` **beeps at you**, because the one thing no automated check can do is
+move the mouse: three rising notes to start, one blip per report used, three
+falling notes to stop, four hard notes if packets arrived and none was used.
+That last cue exists because a driver once discarded 100% of real mouse data
+while every automated check passed — they all inject their own reports and
+never touch the USB read.
+
+---
+
+## What works and what does not
+
+| | DOS | Windows 3.0 | Windows 95 |
+|---|---|---|---|
+| USB mouse | **yes**, INT 33h | **yes**, via `/W` | **untested** |
+| USB keyboard | **yes**, BIOS buffer | **no**, and unfixable here | **untested** |
+| USB storage | no — out of scope | no | no |
+| USB hubs | no | no | no |
+| WiFi dongles, speakers, serial adapters | enumerated and dumped only | — | — |
+
+**Programs that read the keyboard through `INT 09h` never see anything from
+`USBKBD` or `USBCOMBO`.** DOS EDIT and QBASIC are both such programs; so are
+most games. This was chased to a definitive conclusion with `I16SPY`, which
+showed `INT 09h` *and* `INT 08h` both move into QBASIC's segment the moment
+EDIT starts. Typing into EDIT works; its **menus** do not. The mouse
+*does* reach EDIT's menus, because EDIT reads its mouse through INT 33h.
+
+**Windows 95 is not supported and has not been tested.** There is no 386-class
+machine here to test it on, and shipping a claim that cannot be verified is
+worse than shipping nothing. See [what a 386 would
+unlock](#what-a-386-would-unlock).
+
+---
+
+## The 8042 problem
+
+An AT-class machine has an Intel 8042 keyboard controller, and its command
+`D2h` means *"pretend this scancode arrived from the keyboard"* — a real
+IRQ1, indistinguishable from a keypress. That is the clean way to feed a
+synthetic keyboard into DOS, and it reaches everything, including programs
+that hook `INT 09h`.
+
+**This machine has no 8042.** Port 64h reads `FF`, because an XT-class box
+uses an 8255 latch with no controller command to inject with. `KBCINJ`
+reports whether a given machine is better off; `USBKBD /K` and
+`USBCOMBO /K` will use the 8042 where one exists and say so and fall back
+where one does not.
+
+So on this hardware:
+
+* keys can be **written into the BIOS buffer** — everything reading `INT 16h`
+  or DOS sees them; and
+* keys **cannot be made to look like IRQ1** — so anything reading the
+  hardware itself is unreachable.
+
+There is no software workaround. Calling `INT 09h` directly does not help:
+the handler reads port 60h and finds whatever the hardware last latched. It
+was tried, as `USBKBD /W`, and it **locked the machine** — the nested
+handler's EOI lands on top of the driver's own and corrupts the 8259. That
+option is withdrawn and the note by `wake_int09` explains it at length.
+
+---
+
+## Windows
+
+### Windows 3.0 — mouse yes, keyboard no
+
+Confirmed in a live session on this machine, not merely predicted.
+
+Windows has never heard of INT 33h. Its mouse support is a DLL named in
+`SYSTEM.INI` as `[boot] mouse.drv=`, and the one shipped with Windows 3.0 —
+`MOUSE.DRV`, 4,896 bytes, 31 October 1990 — is a pure **PS/2 BIOS** driver.
+Disassembled, it never touches the 8042: it wants `INT 15h AH=C0h` to report
+model `F8/FA/FC`, `INT 11h` bit 2 set, the `C2xx` call sequence, and a
+callback registered with `C207h` that it reaches by hooking `INT 74h` and
+chaining to whatever was there.
+
+So `/W` claims to be a PS/2 model `FC`, takes `INT 74h` first, and delivers
+packets in the frame the BIOS uses. **The stock Microsoft driver then runs
+unmodified** — none of this needs any Windows-side code.
+
+```
+USBCOMBO /W
+WIN
+```
+
+with `[boot] mouse.drv=mouse.drv` in `SYSTEM.INI`. `/W` is opt-in because
+claiming to be a PS/2 model FC on an 8086 is a lie other software can see.
+All three vectors come back on `/U`.
+
+The keyboard half does nothing under Windows, for the same reason as EDIT:
+Windows drives input from `INT 09h`. `KEYBOARD.DRV` reads its scancode from
+port 60h and there is no 8042 to put one there. Use the machine's own
+keyboard.
+
+**Windows cannot be exited over DOSBridge** — it reads the keyboard at
+`INT 09h`, where neither `KINJ` nor `KNET` can reach. The only way out is the
+power switch. That is why `PS2TEST` exists: it makes exactly the calls
+`MOUSE.DRV` makes, in the same order, and proves the emulation **without
+starting Windows**.
+
+### Windows 95 — untested, and honestly so
+
+Windows 95 needs a 386 or better. This machine is an 8086. Nothing here has
+ever been run under Windows 95, and none of it is written with Windows 95 in
+mind:
+
+* the drivers are real-mode TSRs, not VxDs;
+* Windows 95 would want a `.386` virtual device driver to arbitrate the
+  CH375 between VMs;
+* the PS/2 BIOS emulation targets the Windows 3.0 `MOUSE.DRV` contract
+  specifically, and Windows 95's mouse stack is different.
+
+`davidegat/CH375USB` does support Windows 95, via a companion `CH375MOU.DRV`
+bridge. If that is what you need, use theirs.
+
+---
+
+## Things the hardware does that are not in the datasheet
+
+Each of these cost real debugging time.
+
+**Command `0Ah` is a general register read.** Documented only as
+`GET_MAX_LUN`. Registers `C0h`–`FFh` turn out to be the chip's 64-byte USB
+data buffer — run `CHREG` after a transfer and the descriptor that just
+arrived is still sitting there.
+
+**`CLR_STALL` also resets the endpoint's data toggle.** A control transfer
+that *succeeds* leaves endpoint 0 advanced and the next one is stalled; one
+that *failed* cleared the stall on its way out. So transfers alternate —
+fail, work, fail, work — which reads as a flaky device and is not one.
+Clearing endpoint 0 before every control transfer fixes it.
+
+**Low speed must be set at exactly one moment.** `SET_USB_SPEED` is silently
+ignored unless issued after the last `SET_USB_MODE` *and* after the connect
+interrupt from the bus reset has been read and cleared. Most mice and many
+keyboards are low speed, so this is not an edge case.
+
+**The data toggle is per endpoint.** Polling two endpoints through one
+toggle variable makes every second transaction on each a mismatch, reported
+as `2Bh`.
+
+**Poll an interrupt endpoint faster than its `bInterval`.** A report the
+host does not collect is *replaced*, not accumulated. Polling this adapter's
+mouse at 73 Hz against its 100 Hz interval discarded a quarter of the
+movement and the pointer crawled.
+
+**A device's answer to `SET_PROTOCOL` is not a promise.** This adapter
+answers `SET_PROTOCOL 0` with success and then keeps sending its native
+report-ID format anyway. Read the format off the packet, never off the
+request's status. Believing the acknowledgement once cost a driver 100% of
+its real mouse data.
+
+**Under `SET_IDLE 0`, every report carries a change.** A stream in which no
+packet is empty is exactly correct, not evidence of anything fabricated —
+and a silent endpoint is a still device, not a broken one. Both were
+misread here, in opposite directions, on the same day.
+
+### Two rules for resident code
+
+**`CLD` before any string operation reachable from an interrupt handler.**
+The direction flag belongs to the interrupted program. Five string
+operations in the keyboard driver's ISR ran backwards whenever the
+foreground left `DF=1` — a fault that depends entirely on what else is
+running. Credit for the rule goes to
+[davidegat/CH375USB](https://github.com/davidegat/CH375USB).
+
+**A polled driver has no safe context outside its own interrupt.** There is
+nowhere else to run, which makes anything requiring "not inside an
+interrupt" impossible.
+
+---
+
+## Troubleshooting
+
+### The keyboard is completely dead
+
+Check the BIOS keyboard buffer **before** blaming a driver.
+
+```
+COMBOTST /BIOS      show it
+COMBOTST /FLUSH     empty it
+```
+
+The BIOS keeps a 15-entry ring at `0040:001E`. When it is full the BIOS
+discards every new keystroke **from every keyboard on the machine**. Total
+keyboard death, looks exactly like a crashed driver, is not one:
+
+```
+40:1A head = 001E   40:1C tail = 003C      <- 15 queued, nothing reading
+```
+
+Anything that runs without reading the keyboard fills it — including
+DOSBridge's own agent loop, so typing at the machine while that is polling
+will do it with no driver loaded at all.
+
+### The mouse pointer crawls
+
+Raise `/G`. `USBCOMBO /G=16` is the default and `/G=24` or more is
+available; it multiplies and has no ceiling. Note that this adapter emits
+only about **33 reports a second** — the PS/2 mouse's own sample rate — so a
+faster pointer is also a choppier one. No poll rate fixes that; `/M` is
+already above what the device can generate.
+
+### There is no mouse pointer at the DOS prompt
+
+Correct behaviour. Only a program that calls INT 33h and asks for a cursor
+gets one. Run `MDEMO` to see coordinates move.
+
+### Typing drops or transposes characters
+
+Raise the poll rate: `/R=16` is the default and lower values lose keys. A
+boot keyboard reports the *set of keys held right now, in no order*, so a
+keypress completed between two polls never happened, and two keys in one
+report have no ordering. At 145 Hz `abcdefghijkl` came back as
+`abcdefghjikl`; at 291 Hz it is exact.
+
+### Nothing enumerates
+
+`USBINFO` first. If it finds no chip, `USBSCAN`. If the chip answers but no
+device does, try `/V` on the driver for a bring-up trace — every step prints
+the status it returned.
+
+### The machine hangs during a probe
+
+`USBSCAN` without `/A` only tries addresses a CH375 board is actually
+jumpered to, and even `/A` skips a reserved list. The first version swept
+blind and wrote into the floppy controller at `3F0h`, which took a power
+cycle. Do not use `/FORCE` casually.
+
+---
+
+## Building from source
+
+```
+cd <project>
+build.cmd
+```
+
+Needs Free Pascal cross-compiling to `i8086-msdos` (`-Tmsdos -Pi8086`) and
+`nasm`, both of which ship with FPC and both of which must be on `PATH`.
+Nothing else.
+
+Targets that *run* something additionally need
+[DOSBridge](https://github.com/jdredd87/DOSBridge); set `DOSBRIDGE` if it is
+not in `C:\dosbridge`.
+
+The binaries are committed deliberately: the machine this targets has no
+compiler for them, and for most people the `.COM` file is the thing they
+actually want.
+
+**A development footgun:** the version string does not change between
+development builds, so two different images that both say `1.0.0` pass the
+`/S` and `/U` version check and then read each other's data at the wrong
+offsets. Always `/U` before deploying a new build.
+
+---
+
+## What a 386 would unlock
+
+Everything below is **not implemented and not tested**. It is written down
+so the next session starts from a plan rather than from memory.
+
+**Windows 95 support.** The obvious big one, and the reason the machine
+matters — Windows 95 needs a 386. It would want a `.386` VxD to arbitrate
+the CH375 between virtual machines, and a mouse bridge in the shape of
+`davidegat`'s `CH375MOU.DRV` rather than the Windows 3.0 PS/2 BIOS trick.
+
+**An 8042, probably.** A 386-class machine almost certainly has one, and
+that single fact removes the largest limitation in this repository. With
+`D2h` injection, `USBKBD /K` and `USBCOMBO /K` already work — the code is
+written and has never had hardware to run on. DOS EDIT's menus, QBASIC and
+most games would all become reachable.
+
+**386 instructions.** Everything here is `cpu 8086`: no near conditional
+jumps, no 32-bit registers. A 386 target could drop the trampolines and use
+`PUSHAD`/`POPAD` in the ISRs.
+
+**USB hubs**, so more than one device at a time — `davidegat` has
+experimental support for four downstream ports.
+
+**Mass storage**, which this repository has deliberately never touched.
+`davidegat` does it properly and there is no reason to duplicate it.
+
+**Worth reading their source before writing any of it.** Two rules already
+came from that project — `CLD`-in-an-ISR and the mode-7 bring-up order —
+and both fixed real bugs here. It is cheaper to learn from than to
+rediscover.
+
+---
+
+## Related work
+
+[**davidegat/CH375USB**](https://github.com/davidegat/CH375USB) is an
+independent CH375 host stack for the same chip at the same I/O address, also
+in NASM. It covers ground this repository does not — mass storage with a
+drive letter, experimental hub support, and Windows 95 via a companion
+driver — and targets 386-class machines such as the Pocket386.
+
+Where they overlap, they overlap substantially: both present a USB keyboard
+through the BIOS keyboard buffer and a USB mouse through INT 33h. What is
+different here is the 8086 constraint taken seriously, and the class-agnostic
+diagnostic suite.
+
+**If you have a 386 and want USB storage, use theirs.**
+
+---
+
+## Licence
+
+**Public domain**, under [the Unlicense](https://unlicense.org) — see
+`LICENSE`. Copy it, sell it, strip my name off it. No attribution required.
+
+The one exception is `CH375Mouse/tools/MNASMFIX.COM`, which is somebody
+else's work and stays under their terms.
+
+Written by **StevenC**. <https://github.com/jdredd87/CH375USBTools>

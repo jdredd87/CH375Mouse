@@ -1,6 +1,6 @@
 @echo off
 REM  CH375Mouse -- build everything into bin\
-REM  StevenC -- https://github.com/jdredd87/CH375Mouse
+REM  StevenC -- https://github.com/jdredd87/CH375USBToolsTools
 REM  Public domain (the Unlicense); see LICENSE.
 REM
 REM    build.cmd            build only

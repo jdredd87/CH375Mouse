@@ -1,9 +1,23 @@
 # Changelog
 
-CH375Mouse -- StevenC -- https://github.com/jdredd87/CH375Mouse
+CH375Mouse -- StevenC -- https://github.com/jdredd87/CH375USBTools
 
 The version lives in `ver_str` in `src/usbmouse.asm` and nowhere else. A
 release is: bump it, add an entry here, `build.cmd`, commit, `git tag -a`.
+
+## Unreleased
+
+No code change. Two findings from the sibling projects were checked against
+this driver and recorded in the README:
+
+* `CLR_STALL` resets the CH375's endpoint-0 data toggle, so manual control
+  transfers work only every other time unless endpoint 0 is cleared first.
+  This driver issues only optional no-data requests, so the effect is
+  invisible here -- but `SET_IDLE` may be failing silently on the second
+  call, and clearing endpoint 0 in `hid_request` would be correct.
+* The CLD-in-an-interrupt-handler rule does **not** apply here: every string
+  operation in `usbmouse.asm` is after `resident_end`, in transient code.
+  Checked rather than assumed.
 
 ## 1.0.0 -- 2026-09-06
 

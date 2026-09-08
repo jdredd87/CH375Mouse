@@ -3,7 +3,7 @@
 ;                 attached to a WCH CH375 in host mode.
 ;
 ;   Version 1.0.0                                                  StevenC
-;   https://github.com/jdredd87/CH375Mouse
+;   https://github.com/jdredd87/CH375USBToolsTools
 ;   Public domain (the Unlicense).  Do anything you like with it.
 ;
 ; The version number is written down in exactly one place: ver_str, a few
@@ -2638,6 +2638,6 @@ msg_help:
         db 13, 10
         db 'Options may be combined, in any order:  USBMOUSE @260 /R=4 /V', 13, 10
         db 13, 10
-        db 'StevenC   https://github.com/jdredd87/CH375Mouse', 13, 10
+        db 'StevenC   https://github.com/jdredd87/CH375USBToolsTools', 13, 10
         db 'Public domain (the Unlicense).  Do anything you like with it.', 13, 10
         db '$'
