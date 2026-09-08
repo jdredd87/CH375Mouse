@@ -1,8 +1,8 @@
 # CH375Net — USB Ethernet on a machine older than USB
 
-**Status: receive works.** Bring-up, link negotiation and the receive path
-are finished and proven on the hardware, and the buffer layout is solved
-and verified. Nothing transmits yet.
+**Status: it talks both ways.** Bring-up, link negotiation, receive and
+transmit all work and are proven on the hardware. What is left is the
+packet driver that turns this into something `mTCP` can use.
 
 A USB-to-RJ45 adapter, an ISA card from a different decade, and an IBM PS/2
 Model 30 with an 8086 in it. The question this project answers is whether a
@@ -47,9 +47,40 @@ C0 A8 32 08         from 192.168.50.8
 |---|---|
 | `src/ax179.pas` | everything that knows what an AX88179 is: the register map, the two vendor requests, the bring-up, and the bulk read |
 | `src/axprobe.pas` | `AXPROBE.EXE` — runs the bring-up and reports every stage. Step one, and the one that decided the rest was worth writing |
-| `src/axrecv.pas` | `AXRECV.EXE` — reads the bulk endpoint and tries to make sense of what comes back. Deliberately an **investigation**, not a parser |
+| `src/axrecv.pas` | `AXRECV.EXE` — reads the bulk endpoint and makes sense of what comes back. Deliberately an **investigation**, not a parser |
+| `src/axsend.pas` | `AXSEND.EXE` — sends an ARP request and waits for a real machine to answer it |
 
-Both take `/?`. `/P=hex` sets the CH375 I/O base.
+All take `/?`. `/P=hex` sets the CH375 I/O base.
+
+## Transmit, proved the only way that counts
+
+A write to the bulk endpoint returning "success" only means the CH375 took
+the bytes. It says nothing about whether a frame reached the wire — a
+header field misplaced, a length off by the eight bytes of the header
+itself, a padding flag missed, and the chip discards the lot in silence.
+
+So `AXSEND` does not check that the write succeeded. It asks the network a
+question and waits to be answered:
+
+```
+Asking 192.168.50.1 who it is, claiming to be 192.168.50.222
+  request 1 sent
+
+REPLY from 04:D4:C4:D2:2B:00 -- 192.168.50.1 answered us.
+```
+
+That reply cannot be manufactured at this end. A frame built on an 8086,
+pushed through an ISA card, put on the wire by the adapter, was received by
+the router, parsed, believed, and answered back to this MAC. The router's
+MAC also matches the one seen in an unrelated IGMP query `AXRECV` caught
+earlier, which is a second, independent confirmation.
+
+**The transmit header** is 8 bytes, two little-endian 32-bit words in front
+of the frame: the length, then zero — except when the total including the
+header lands on an exact multiple of the endpoint's 64-byte packet size, in
+which case bits 15 and 31 are set. That same case also needs a zero-length
+packet to terminate the USB transfer, which is a *separate* requirement
+that happens to arise at the same moment and is easy to confuse with it.
 
 ## Why 10BASE-T, on purpose
 
@@ -72,7 +103,7 @@ driver holds it down to something it can drain, where Linux lets the chip
 fill 20 KB because it can absorb that. Both are `/G` and `/B=` rather than
 constants, so faster hardware needs a different flag and not a rewrite.
 
-## Three traps that cost real time
+## Four traps that cost real time
 
 **`BusUp` does not send SET_CONFIGURATION.** It fetches the descriptors and
 assigns the address and stops there. A device with an address but no
@@ -99,6 +130,13 @@ And zeroing `AX_RX_BULK_QCTRL` does **not** mean "no aggregation". It means
 *no limit*, which is the opposite: the chip keeps appending frames for as
 long as traffic arrives and the transfer never ends. One capture reached
 55,680 bytes before the buffer gave up.
+
+**An unbounded drain loop will take the machine with it.** When a burst
+overflows the buffer the remainder has to be read and discarded, or the
+endpoint desynchronises. That drain was written as "read until a short
+packet" — but the chip can stream continuously, so on a busy network it
+never returns, and a DOS program that never returns hangs the box. It did,
+twice, and needed the power cycled. It is bounded now.
 
 `USBPOLL` already knew the first two of these. None of them is written down
 anywhere except in source, which is why they are written down here.
@@ -153,7 +191,6 @@ default is 2 for that measured reason and not a guessed one.
 
 ## What is not done
 
-- **Transmit.** Nothing is sent. Each frame needs an 8-byte header.
 - **The packet driver.** The goal is a Crynwr driver at INT 60h, because
   that is what `mTCP`, `WATTCP` and NCSA Telnet all speak — get it right
   and the whole DOS networking ecosystem works, with no TCP stack written
@@ -165,6 +202,7 @@ default is 2 for that measured reason and not a guessed one.
     build.cmd probe      ...then bring the adapter up on the DOS machine
     build.cmd recv       ...then watch frames arrive
     build.cmd raw        ...then dump bursts without interpreting them
+    build.cmd send       ...then ARP the router and wait to be answered
 
 Needs Free Pascal cross-compiling to `i8086-msdos`. `ch375.pas` and
 `chtool.pas` come from `..\CH375USBTOOLS\src` via `-Fu`.

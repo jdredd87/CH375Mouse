@@ -10,6 +10,7 @@ REM    build.cmd giga       ...then bring it up WITHOUT forcing 10BASE-T
 REM    build.cmd recv       ...then watch frames arrive, promiscuous
 REM    build.cmd raw        ...then watch them without interpreting the
 REM                         buffer at all, hex only
+REM    build.cmd send       ...then ARP the router and wait to be answered
 REM
 REM  NEEDS
 REM    fpc    Free Pascal cross-compiling to MS-DOS real mode (-Tmsdos -Pi8086)
@@ -29,7 +30,7 @@ if "%DOSBRIDGE%"=="" set DOSBRIDGE=C:\dosbridge
 set TOOLS=%~dp0..\CH375USBTOOLS\src
 if not exist bin mkdir bin
 
-for %%T in (axprobe axrecv) do (
+for %%T in (axprobe axrecv axsend) do (
   echo --- %%T
   fpc -Tmsdos -Pi8086 -WmLarge -Fu"%TOOLS%" -FEbin -FUbin src\%%T.pas >nul
   if errorlevel 1 goto failed
@@ -47,6 +48,7 @@ if /I "%1"=="trace" goto runtrace
 if /I "%1"=="giga"  goto rungiga
 if /I "%1"=="recv"  goto runrecv
 if /I "%1"=="raw"   goto runraw
+if /I "%1"=="send"  goto runsend
 echo Built.  "build.cmd probe" brings the adapter up on the DOS machine.
 exit /b 0
 
@@ -64,6 +66,9 @@ python "%DOSBRIDGE%\dosctl.py" run bin\AXRECV.EXE /A /S=20
 exit /b %ERRORLEVEL%
 :runraw
 python "%DOSBRIDGE%\dosctl.py" run bin\AXRECV.EXE /A /S=20 /N=3 /X /R
+exit /b %ERRORLEVEL%
+:runsend
+python "%DOSBRIDGE%\dosctl.py" run bin\AXSEND.EXE
 exit /b %ERRORLEVEL%
 
 :failed

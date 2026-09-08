@@ -168,6 +168,18 @@ function  MacStr(const M: TMac): ShortString;
 function  AxRxBurst(var Buf; Max: Word; var Len: Word): Integer;
 procedure AxRxReset;           { forget the data toggle, after a stall }
 
+{ ---- transmit ----
+  The AX88179 wants an 8-byte header in front of every frame: two
+  little-endian 32-bit words.  The first is the frame length.  The second
+  is zero, except that when the whole thing -- header included -- comes to
+  an exact multiple of the endpoint's packet size, bit 15 and bit 31 are
+  set to tell the chip padding follows.  That case also needs a
+  zero-length packet to terminate the USB transfer, which is a separate
+  requirement that happens to arise at the same moment and is easy to
+  confuse with it. }
+function  AxTxFrame(const Frame; Len: Word): Integer;
+procedure AxTxReset;
+
 var
   { Bytes AxRxBurst had to read and throw away because Buf was full.
     Non-zero means the buffer is too small for what the chip is sending,
@@ -179,6 +191,8 @@ implementation
 
 var
   RxTog: Byte = $80;           { SET_ENDP6 argument; bit 6 is the toggle }
+  TxTog: Byte = $80;           { SET_ENDP7, same arrangement }
+  TxBuf: array[0..8 + AX_MAXFRAME] of Byte;
 
 procedure Say(const S: ShortString);
 begin
@@ -342,6 +356,7 @@ begin
   Do1('rx control', AxMacWr16(AX_RX_CTL, W));
 
   RxTog := $80;
+  TxTog := $80;
   AxInit := Ok;
 end;
 
@@ -410,6 +425,7 @@ var
   Got: Byte;
   St: Integer;
   Waits: Word;
+  Drain: Word;
   Scratch: array[0..63] of Byte;
 begin
   P := @Buf;
@@ -425,11 +441,18 @@ begin
         pick up the middle of this transfer and every burst after it would
         be garbage -- so the remainder is read and discarded, and the
         caller is told how much went missing. }
+      { Bounded, and it has to be.  The chip can stream continuously --
+        one capture ran to 55,680 bytes without a short packet -- so an
+        unbounded drain on a busy network never returns, and a DOS program
+        that never returns takes the machine with it.  64 KB is far more
+        than any sane burst and still finite. }
+      Drain := 0;
       repeat
         St := EpIn(AX_EP_BULK_IN, RxTog, Scratch, 64, Got);
         if St <> INT_SUCCESS then Break;
         AxRxOver := AxRxOver + Got;
-      until Got < 64;
+        Inc(Drain);
+      until (Got < 64) or (Drain >= 1024);
       Break;
     end;
     St := EpIn(AX_EP_BULK_IN, RxTog, P[Len], 64, Got);
@@ -462,6 +485,70 @@ begin
     if Got < 64 then Break;              { a short packet ends a transfer }
   end;
   AxRxBurst := INT_SUCCESS;
+end;
+
+procedure AxTxReset;
+begin
+  TxTog := $80;
+end;
+
+function AxTxFrame(const Frame; Len: Word): Integer;
+var
+  P: PByte;
+  I, Total, Ofs, Chunk: Word;
+  Flags: LongInt;
+  St: Integer;
+begin
+  if (Len < 14) or (Len > AX_MAXFRAME) then
+  begin
+    AxTxFrame := -1;
+    Exit;
+  end;
+
+  P := @Frame;
+
+  { Header word 1: the length.  Word 2: the padding flag, and only when
+    the total lands exactly on a packet boundary. }
+  TxBuf[0] := Byte(Len and $FF);
+  TxBuf[1] := Byte((Len shr 8) and $FF);
+  TxBuf[2] := 0;
+  TxBuf[3] := 0;
+  Total := Len + 8;
+  if (Total mod 64) = 0 then Flags := $80008000 else Flags := 0;
+  TxBuf[4] := Byte(Flags and $FF);
+  TxBuf[5] := Byte((Flags shr 8) and $FF);
+  TxBuf[6] := Byte((Flags shr 16) and $FF);
+  TxBuf[7] := Byte((Flags shr 24) and $FF);
+
+  for I := 0 to Len - 1 do TxBuf[8 + I] := P[I];
+
+  { Out in 64-byte packets.  A transfer ends with a short packet, so when
+    the total is an exact multiple of 64 an explicit zero-length one has
+    to be sent or the far end waits for more that never comes. }
+  Ofs := 0;
+  while Ofs < Total do
+  begin
+    Chunk := Total - Ofs;
+    if Chunk > 64 then Chunk := 64;
+    St := EpOut(AX_EP_BULK_OUT, TxTog, TxBuf[Ofs], Byte(Chunk));
+    if St <> INT_SUCCESS then
+    begin
+      AxTxFrame := St;
+      Exit;
+    end;
+    Ofs := Ofs + Chunk;
+  end;
+  if (Total mod 64) = 0 then
+  begin
+    St := EpOut(AX_EP_BULK_OUT, TxTog, TxBuf[0], 0);
+    if St <> INT_SUCCESS then
+    begin
+      AxTxFrame := St;
+      Exit;
+    end;
+  end;
+
+  AxTxFrame := INT_SUCCESS;
 end;
 
 end.

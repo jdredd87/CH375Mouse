@@ -101,9 +101,37 @@ a cross beside it rather than assuming any of them.
   bigger threshold makes the chip wait longer and drop more while waiting.
   The default is 2 for that measured reason rather than a guessed one.
 
-### Not done
+### Transmit works, and a real machine confirmed it
 
-* **Transmit.** Each frame needs an 8-byte header; none is sent yet.
+* **`AXSEND` 0.1.0** builds an ARP request, sends it, and waits for an
+  answer. The router replied: `REPLY from 04:D4:C4:D2:2B:00 --
+  192.168.50.1 answered us.` Three runs, three replies, two polls to the
+  first one.
+* Proving it this way is deliberate. A bulk write returning success only
+  means the CH375 accepted the bytes; a misplaced header field or a missed
+  padding flag makes the chip drop the frame in silence and report nothing.
+  A reply cannot be manufactured at this end -- it means another computer
+  received the frame, parsed it, believed it and addressed a response back
+  to this MAC. The router's MAC also matches the one in an unrelated IGMP
+  query `AXRECV` caught earlier.
+* The TX header is 8 bytes: two little-endian 32-bit words, the frame
+  length then zero -- except when the total including the header is an
+  exact multiple of the 64-byte packet size, when bits 15 and 31 are set.
+  That case separately needs a zero-length packet to end the USB transfer;
+  the two requirements arise together and are easy to conflate.
+
+### A third bug in AxRxBurst, and this one hung the machine
+
+* **The overflow drain was unbounded.** When a burst does not fit the
+  caller's buffer the remainder has to be read and discarded or the
+  endpoint desynchronises -- but that was written as "read until a short
+  packet", and the chip can stream continuously. On a busy network the
+  loop never returned, and a DOS program that never returns takes the box
+  with it. It hung twice and needed the power cycled both times. Now
+  bounded at 1024 packets, which is far more than any sane burst and
+  finite.
+
+### Not done
 * **The packet driver.** A Crynwr driver at INT 60h, so `mTCP` and
   `WATTCP` work without a TCP stack being written here.
 * **A duty-cycle fix.** 3% of polls carrying data is the thing standing

@@ -24,7 +24,7 @@ which is rather the point.
 | **[CH375USBTOOLS](CH375USBTOOLS/)** | Seven probe tools. What is plugged in, what it says about itself, and what it puts on the wire — for any device, of any class, whether or not anything here can drive it |
 | **[CH375Keyboard](CH375Keyboard/)** | `USBKBD.COM`, a resident keyboard driver, plus six diagnostics. Enumerates a USB HID keyboard, translates usages to PC scancodes, and writes them into the BIOS keyboard buffer where DOS expects to find them |
 | **[CH375Combo](CH375Combo/)** | `USBCOMBO.COM`, both of the above in one image, for a **USB-to-PS/2 adapter** — one USB device with a keyboard interface and a mouse interface on it. About 5.3 KB resident |
-| **[CH375Net](CH375Net/)** | **work in progress.** USB Ethernet through an ASIX AX88179. Bring-up works and real frames arrive; the receive buffer layout is still being reverse-engineered and nothing transmits yet |
+| **[CH375Net](CH375Net/)** | **work in progress.** USB Ethernet through an ASIX AX88179. It sends and receives real Ethernet — the router answers its ARP requests — at about 1.6 KB/s. What is left is the packet driver that would make `mTCP` work |
 
 Each project has its own `README.md`, `CHANGELOG.md`, `build.cmd` and
 `bin\`. The binaries are committed deliberately: the machine this targets
