@@ -377,6 +377,21 @@ consecutive 32-bit counters in a fixed order; mine had five, in a different
 order, so `pkttool` was reading two variables past the end of it. Fixed,
 including the `bytes_in` / `bytes_out` that were simply missing.
 
+### set_rcv_mode reaches the hardware
+
+Modes 1 to 6 are mapped onto the adapter's filter bits and written to
+`RX_CTL`. It used to store the value and stop there, so `get_rcv_mode`
+agreed with itself while the adapter carried on doing whatever it had been
+doing — and an application asking for promiscuous mode and silently not
+getting it is a particularly unhelpful failure, because everything looks
+fine and simply no interesting frames arrive.
+
+Doing it needed a control transfer that survives going resident: the full
+one lives in the transient half and is handed back to DOS. There is now a
+minimal resident version — one register, one 16-bit value — reached only
+from the INT 65h handler and never from the ISR, because it takes
+milliseconds and that is not a cost worth paying inside a timer interrupt.
+
 ## What is not done
 
 - **The ARP round trip.** When it loads, point a *copy* of `MTCP.CFG` at the new

@@ -100,6 +100,7 @@ INT_RET_STALL    equ 0x2E
 
 PID_OUT          equ 0x01
 PID_IN           equ 0x09
+PID_SETUP_R      equ 0x0D
 
 USB_ADDR         equ 0x02
 
@@ -118,6 +119,15 @@ AX_TXCOE_CTL     equ 0x35
 AX_PAUSE_HIGH    equ 0x54
 AX_PAUSE_LOW     equ 0x55
 AX_PHY_ID        equ 0x03
+
+; ---- RX_CTL bits, the same set ax179.pas carries for the Pascal side ----
+RX_CTL_PROMISC   equ 0x0001
+RX_CTL_ALLMULTI  equ 0x0002
+RX_CTL_BROADCAST equ 0x0008
+RX_CTL_MULTICAST equ 0x0010
+RX_CTL_ACCEPT_PHY equ 0x0020
+RX_CTL_START     equ 0x0080
+RX_CTL_DROP_CRC  equ 0x0100
 
 EP_BULK_IN       equ 2
 EP_BULK_OUT      equ 3
@@ -438,6 +448,114 @@ bo_good:
         pop     bp
         pop     cx
         clc
+        ret
+
+; ==========================================================================
+; A control transfer that survives going resident.
+;
+; set_rcv_mode has to reprogram the adapter's RX_CTL register, and that is
+; a vendor control transfer.  The transient half has a full one, but it is
+; gone by the time an application calls us, so this minimal version -- one
+; register, one 16-bit value -- lives in the resident image.
+;
+; It is only ever reached from the INT 65h handler, never from the ISR: it
+; takes milliseconds, and a millisecond inside a timer interrupt is not a
+; cost worth paying for a call that happens once per program.
+; ==========================================================================
+setup_buf:  times 8 db 0
+val_buf:    dw 0
+
+res_clr_ep0:
+        mov     al, CMD_CLR_STALL
+        call    ch_cmd
+        xor     al, al
+        call    ch_wr
+        mov     cx, 0x4000
+        call    ch_wait
+        ret
+
+; AL = MAC register, BX = value.  CF set if any stage failed.
+res_mac_wr16:
+        push    si
+        mov     [cs:setup_buf+0], byte 0x40      ; OUT, vendor, device
+        mov     [cs:setup_buf+1], byte AX_ACCESS_MAC
+        mov     [cs:setup_buf+2], al             ; wValue  = the register
+        mov     [cs:setup_buf+3], byte 0
+        mov     [cs:setup_buf+4], byte 2         ; wIndex  = its length
+        mov     [cs:setup_buf+5], byte 0
+        mov     [cs:setup_buf+6], byte 2         ; wLength
+        mov     [cs:setup_buf+7], byte 0
+        mov     [cs:val_buf], bx
+
+        call    res_clr_ep0
+
+        mov     al, CMD_WR_USB_DATA7
+        call    ch_cmd
+        mov     al, 8
+        call    ch_wr
+        mov     si, setup_buf
+        mov     cx, 8
+rmw_setup:
+        mov     al, [cs:si]
+        call    ch_wr
+        inc     si
+        loop    rmw_setup
+
+        mov     al, CMD_SET_ENDP6
+        call    ch_cmd
+        mov     al, 0x80                 ; SETUP is always DATA0
+        call    ch_wr
+        mov     al, CMD_ISSUE_TOKEN
+        call    ch_cmd
+        mov     al, PID_SETUP_R
+        call    ch_wr
+        mov     cx, 0xFFFF
+        call    ch_wait
+        jc      short rmw_bad
+        cmp     al, INT_SUCCESS
+        jne     short rmw_bad
+
+        ; data stage: two bytes OUT, and it starts on DATA1
+        mov     al, CMD_WR_USB_DATA7
+        call    ch_cmd
+        mov     al, 2
+        call    ch_wr
+        mov     al, [cs:val_buf]
+        call    ch_wr
+        mov     al, [cs:val_buf+1]
+        call    ch_wr
+        mov     al, CMD_SET_ENDP7
+        call    ch_cmd
+        mov     al, 0xC0
+        call    ch_wr
+        mov     al, CMD_ISSUE_TOKEN
+        call    ch_cmd
+        mov     al, (0 << 4) | PID_OUT
+        call    ch_wr
+        mov     cx, 0xFFFF
+        call    ch_wait
+        jc      short rmw_bad
+        cmp     al, INT_SUCCESS
+        jne     short rmw_bad
+
+        ; status stage: an IN carrying DATA1
+        mov     al, CMD_SET_ENDP6
+        call    ch_cmd
+        mov     al, 0xC0
+        call    ch_wr
+        mov     al, CMD_ISSUE_TOKEN
+        call    ch_cmd
+        mov     al, PID_IN
+        call    ch_wr
+        mov     cx, 0xFFFF
+        call    ch_wait
+        pop     si
+        clc
+        ret
+rmw_bad:
+        call    res_clr_ep0
+        pop     si
+        stc
         ret
 
 ; ==========================================================================
@@ -852,13 +970,52 @@ pkt_getmode:
         retf    2
 
 ; ---- 20: set_rcv_mode ----
+; It used to store the mode and stop there, which made get_rcv_mode agree
+; with itself and the adapter carry on doing whatever it had been doing.
+; An application asking for promiscuous mode and not getting it is a
+; particularly unhelpful way to fail, because everything looks fine and
+; simply no interesting frames arrive.
 pkt_setmode:
         cmp     cx, 1
         jb      short psm_bad
         cmp     cx, 6
         ja      short psm_bad
+        push    ax
+        push    bx
+        push    cx
+        push    dx
+        push    si
+        mov     bx, RX_CTL_DROP_CRC
+        cmp     cx, 1
+        je      short psm_write          ; 1 = receiver off
+        or      bx, (RX_CTL_START | RX_CTL_ACCEPT_PHY)
+        cmp     cx, 2
+        je      short psm_write          ; 2 = our address only
+        or      bx, RX_CTL_BROADCAST
+        cmp     cx, 3
+        je      short psm_write          ; 3 = ...and broadcast
+        or      bx, RX_CTL_MULTICAST
+        cmp     cx, 4
+        je      short psm_write          ; 4 = ...and some multicast
+        or      bx, RX_CTL_ALLMULTI
+        cmp     cx, 5
+        je      short psm_write          ; 5 = ...and all multicast
+        or      bx, RX_CTL_PROMISC       ; 6 = everything on the wire
+psm_write:
+        mov     al, AX_RX_CTL
+        call    res_mac_wr16
+        pop     si
+        pop     dx
+        pop     cx
+        pop     bx
+        pop     ax
+        jc      short psm_hw
         mov     [cs:rcv_mode], cx
         clc
+        retf    2
+psm_hw:
+        mov     dh, E_CANT_SET
+        stc
         retf    2
 psm_bad:
         mov     dh, E_BAD_MODE
