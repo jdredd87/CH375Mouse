@@ -404,37 +404,52 @@ minimal resident version — one register, one 16-bit value — reached only
 from the INT 65h handler and never from the ISR, because it takes
 milliseconds and that is not a cost worth paying inside a timer interrupt.
 
-## What has and has not been proved over it
+## What has been proved over it
 
 | | |
 |---|---|
-| ICMP, local | 3/3 to the gateway |
-| ICMP, routed | 3/3 to `8.8.8.8` at ttl=118, 2/2 to `1.1.1.1` |
-| DNS (UDP/53) | `ping example.com` resolved to `172.66.147.243` and got 2/2 |
 | ARP | resolves both directions |
-| TCP | **not proved, and not for want of trying** |
+| ICMP, local | 3/3 to the gateway, 3/3 to a host on the LAN |
+| ICMP, routed | 3/3 to `8.8.8.8` at ttl=118, 2/2 to `1.1.1.1` |
+| DNS (UDP/53) | `ping example.com` resolved to `172.66.147.243`, 2/2 replies |
+| **TCP** | **a telnet session to a BBS in Rimini, Italy** |
 
-**No HTTP client on this machine runs.** `HTGET` produces no output and no
-file; `NC` starts, opens its output file, and sends nothing; `DNSTEST`
-prints its banner and stops. All three fail the same way whether they are
-pointed at this driver or at the machine's own working network, and there
-is 541 KB free, so it is not memory. `PING` is the only mTCP tool here that
-works at all — over either card.
+That last one is the one that matters, because it is a sustained byte
+stream rather than a packet exchange: DNS resolution, a three-way
+handshake, and a full 80x24 screen of ASCII art delivered and rendered.
 
-That control matters: **the failure is not in this driver.** But it does
-mean TCP over `CH375Net` is untested rather than working, and the honest
-statement is that nobody has yet made a byte stream go through it.
+```
+Welcome to the Telnet version of 84-24.org, hosted in Rimini, Italy,
+on a Raspberry Pi Zero sitting just a few centimeters away from the story's
+main character.
 
-One of my own controls was worthless and is worth writing down so it is not
+This reader is designed for an 80x24 black-and-white terminal and uses only
+7-bit ASCII characters - embracing the same hardware and software
+constraints of a 1984 Macintosh 128K.
+
+Press ANY KEY to continue...
+```
+
+A reader built for the constraints of a 1984 Macintosh, read on a 1987 IBM
+PS/2 Model 30, over a USB network adapter it predates by nine years.
+
+### The HTTP clients on this machine are broken, and it is not the driver
+
+`HTGET` produces no output and no file. `NC` starts, opens its output file,
+and sends nothing. `DNSTEST` prints its banner and stops. All three fail
+identically whether pointed at this driver or at the machine's own working
+network, with 541 KB free.
+
+Meanwhile `PING` and `TELNET` both work over this driver, and `PING`
+reaches the very host whose HTTP server `HTGET` cannot fetch from — 3/3 at
+ttl=128. So the network underneath those tools is fine and the tools are
+not.
+
+One control of mine was worthless and is worth writing down so it is not
 repeated: `dosctl exec` does not run its command through `COMMAND.COM`, so
-`<` and `>` in an exec argument are passed to the program as text rather
-than performing redirection. Every "control" that relied on a shell
-redirect tested nothing. Redirection inside a **batch file** does work,
+`<` and `>` in an exec argument reach the program as text rather than
+redirecting anything. Redirection inside a **batch file** does work,
 because that runs under `COMMAND.COM`.
-
-The next thing to try is `HTTPSERV`, which comes at TCP from the other
-side: run it on the DOS machine and fetch from elsewhere. Inbound is a
-different code path and does not depend on any of the broken clients.
 
 ## What is not done
 
