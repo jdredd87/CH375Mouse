@@ -1,22 +1,34 @@
 # CH375Net — USB Ethernet on a machine older than USB
 
-**Status: it pings.**
+**Status: it reaches the internet.**
 
 ```
-Packet sequence number 0 received from 192.168.50.1 in 46.75 ms, ttl=64
-Packet sequence number 1 received from 192.168.50.1 in 51.85 ms, ttl=64
-Packet sequence number 2 received from 192.168.50.1 in 51.85 ms, ttl=64
+Sending ICMP packets to 8.8.8.8
+Packet sequence number 0 received from 8.8.8.8 in 46.75 ms, ttl=118
+Packet sequence number 1 received from 8.8.8.8 in 51.85 ms, ttl=118
+Packet sequence number 2 received from 8.8.8.8 in 51.85 ms, ttl=118
 Packets sent: 3, Replies received: 3, Replies lost: 0
+Average time for a reply: 50.15 ms
+
+Sending ICMP packets to 1.1.1.1
+Packet sequence number 0 received from 1.1.1.1 in 47.60 ms, ttl=60
 ```
 
-That is mTCP, on an IBM PS/2 Model 30, over a USB Ethernet adapter on a
+`ttl=118` from Google and `ttl=60` from Cloudflare are the giveaway: those
+packets crossed a dozen routers each way. This is not a device on the local
+segment answering politely — it is a full IP path, out and back.
+
+That is mTCP on an **IBM PS/2 Model 30** — an 8086 from 1987, nine years
+older than USB — reaching Google's DNS through a USB Ethernet adapter on a
 CH375 ISA card. Bring-up, link negotiation, receive, transmit and a Crynwr
 packet driver, all working, with the machine's own network at INT 60h
 untouched throughout.
 
-The ~50 ms round trip is the driver's own poll interval showing through:
-the ISR collects on the 18.2 Hz timer, so a reply waits up to 55 ms before
-anyone looks at it. The wire is not the slow part.
+The ~50 ms is almost entirely the driver's own poll interval, not the
+internet. The ISR collects on the 18.2 Hz timer, so a reply waits up to
+55 ms before anyone looks at it — which is why the gateway, one hop away,
+and Google, a dozen hops away, both answer in about the same time. The wire
+is not the slow part; we are.
 
 A USB-to-RJ45 adapter, an ISA card from a different decade, and an IBM PS/2
 Model 30 with an 8086 in it. The question this project answers is whether a
