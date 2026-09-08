@@ -381,6 +381,14 @@ op_giga:    db 0
 op_test:    db 0
 op_nopoll:  db 0
 
+; Set the moment this program first speaks to the chip.  Any exit that does
+; NOT go resident has to hand the chip back in a state the next program's
+; bring-up can start from, and the only state that qualifies is "just
+; reset".  Leaving it configured-but-idle is what wedged AXPROBE on the
+; following invocation -- its enumeration begins by waiting for a connect
+; interrupt that a chip already past that point never raises again.
+touched:    db 0
+
 parse_args:
         mov     si, 0x81
         mov     cl, [0x80]
@@ -696,6 +704,7 @@ init_vecfree:
         mov     al, 1
         jmp     near die
 init_chip:
+        mov     byte [touched], 1
         mov     al, 'c'
         call    mark
 
@@ -959,9 +968,29 @@ unl_no08:
         xor     al, al
         jmp     near die
 
+; Every exit that is not "went resident" comes through here.  If the chip
+; was touched, reset it: a program that leaves shared hardware half-set-up
+; breaks the NEXT program, which is a much worse thing to debug than
+; failing honestly on the spot.
 quit:
         xor     al, al
 die:
+        cmp     byte [cs:touched], 0
+        je      short die_now
+        push    ax
+        mov     al, CMD_RESET_ALL
+        call    ch_cmd
+        ; The chip needs a moment after a reset before it will answer
+        ; again, and the next program will start by talking to it.
+        mov     cx, 0xFFFF
+die_wait:
+        push    dx
+        mov     dx, 0x61
+        in      al, dx
+        pop     dx
+        loop    die_wait
+        pop     ax
+die_now:
         mov     ah, 0x4C
         int     0x21
 
