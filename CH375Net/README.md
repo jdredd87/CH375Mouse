@@ -413,7 +413,7 @@ milliseconds and that is not a cost worth paying inside a timer interrupt.
 | ICMP, routed | 3/3 to `8.8.8.8` at ttl=118, 2/2 to `1.1.1.1` |
 | DNS (UDP/53) | `example.com` resolved to `172.66.147.243` |
 | TCP | a telnet session to a BBS in Rimini, full 80x24 screen |
-| **HTTP** | **`example.com` fetched, 200 OK, 559 bytes** |
+| **HTTP** | **`example.com` 200 OK / 559 bytes, `info.cern.ch` 646 bytes** |
 
 ```
 --- example.com over the CH375 USB adapter ---
@@ -421,9 +421,33 @@ mTCP HTGet by M Brutman
 Server return code: 200 OK
 ```
 
-559 bytes, byte for byte what a modern machine gets from the same URL. An
-IBM PS/2 Model 30 from 1987 pulling a web page over a USB network adapter
-it predates by nine years.
+559 bytes, byte for byte what a modern machine gets from the same URL, and
+`info.cern.ch` fetched afterwards at 646 bytes with the server's 2014
+Last-Modified date preserved on the file. An IBM PS/2 Model 30 from 1987
+pulling web pages over a USB network adapter it predates by nine years.
+
+### Two drivers at once
+
+The machine's own network is an NE2000 packet driver at INT 60h and the
+bridge this is developed over runs on it, so the two coexisting is not a
+nicety. Checked in six stages: vectors before, load ours, vectors with both
+present, ping over 60h **while ours is loaded**, ping over 65h, unload,
+vectors again, ping over 60h again.
+
+```
+===== 5. unload ours =====
+AXPKT unloaded.
+  60h  15A2:03CE   PACKET DRIVER
+1 packet driver(s) between 60h and 80h.
+===== 6. 60h ping after unload =====
+Packets sent: 2, Replies received: 2, Replies lost: 0
+Average time for a reply: 4.25 ms
+```
+
+That 4.25 ms against roughly 50 ms over ours is worth noting: it is the
+same gateway, one hop away, over an interrupt-driven card instead of a
+driver polling at 18.2 Hz. It is the clearest measurement yet that the
+latency here is the poll interval and nothing else.
 
 ### An error of mine that cost hours, and the correction
 
