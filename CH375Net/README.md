@@ -444,44 +444,57 @@ Packets sent: 2, Replies received: 2, Replies lost: 0
 Average time for a reply: 4.25 ms
 ```
 
-That 4.25 ms against roughly 50 ms over ours is worth noting: it is the
-same gateway, one hop away, over an interrupt-driven card instead of a
-driver polling at 18.2 Hz. It is the clearest measurement yet that the
-latency here is the poll interval and nothing else.
+That 4.25 ms against roughly 51 ms over ours is the open question of this
+project, and the section below is what is actually known about it.
 
-### An error of mine that cost hours, and the correction
+## Latency: two theories tested, both wrong
 
-This file spent a long time claiming the HTTP clients on this machine were
-broken, because `HTGET`, `NC` and `DNSTEST` all failed identically over
-both network cards. That was wrong, and it was wrong because of damage I
-had done.
+The round trip to the gateway is a near-constant **51 ms** over this driver
+and **4.25 ms** over the machine's interrupt-driven NE2000 to the same
+address one hop away. It is a constant rather than a distribution, which is
+the most useful thing about it.
 
-The test batches were generated with `printf`, and DOS paths went into the
-**format string** rather than through `%s`. `printf` reads a backslash-n as
-a newline, so the configured path became
+**Theory one: our poll interval.** The ISR collects on the timer, so a
+reply could be waiting for the next tick. `/R=n` divides the PIT the way
+`USBMOUSE` and `USBCOMBO` do -- the timer runs fast and the handler that
+was in the vector before us is called only every nth tick, so the BIOS
+clock is undisturbed. Verified working rather than assumed:
 
 ```
-MTCPCFG=c:
-etwork\mtcp\mtcp.cfg
+DOS says 5.0 seconds elapsed
+  timer ticks=855          (~171/sec; it reads 106 at /R=1)
+  timer divisor (/R)=8
 ```
 
-which split the batch line in two and left `MTCPCFG=c:` in the machine's
-**persistent** environment. Every mTCP tool afterwards failed to find its
-config and exited quietly. `PING` appeared to work only because the batches
-running it set `MTCPCFG` to a path with no backslash-n in it.
+Eight times the poll rate, DOS clock still correct -- and the latency did
+not move. `/R=8` gives ~51 ms and so does `/R=1`. **Not the cause.**
 
-Two lessons, both worth more than the bug cost:
+**Theory two: the adapter's bulk-in aggregation timer.** The chip holds
+received data until its own timer expires, whatever we do. `AXPROBE /K=hex`
+sets it; `0x0080` and `0x0004` both give ~51 ms. **Not the cause.**
 
-* **Never put a DOS path in a `printf` format string.** Pass it as an
-  argument. A path is a string full of escape sequences waiting to happen.
-* **A tool failing on both the thing under test and the control does not
-  exonerate the thing under test.** It should have prompted the question
-  "what do those two runs have in common?" -- and the answer was me.
+So something imposes a fixed ~51 ms in the receive path that is neither of
+those. Untested: mTCP's own timing granularity over a polled driver, and
+whatever the CH375 does between a frame reaching the chip and the bulk
+endpoint having it.
 
-`HTGET` was never broken. Against the local test server it correctly says
-`Not an HTTP 1.0 or 1.1 server`, because that server emits a `GREETINGS`
-banner ahead of the HTTP status line; PowerShell rejects it for the same
-reason.
+The `/R` work stays. It is correct, it restores the PIT on unload -- leaving
+the timer fast with our handler gone would make the DOS clock run eight
+times quick with nothing on the machine able to explain why -- and an
+eightfold increase in how often the wire is looked at matters for
+throughput even if it did nothing here. `/R=1` leaves the timer alone.
+
+### A process note worth more than either theory
+
+Theory one was "disproven" once against a **stale binary**: built, never
+re-staged, so the test ran the old driver and produced a confident wrong
+answer. What caught it was measuring the *mechanism* -- `timer ticks` --
+instead of the *outcome*. Source and behaviour disagreeing is visible; two
+identical ping results are not.
+
+`dosctl exec` runs what is already on the box and only `run` re-stages.
+That has now cost three wrong conclusions in one session, so: after every
+build, `run` the binary once before any test that uses `exec`.
 
 ## Which adapters can this drive?
 
