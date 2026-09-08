@@ -164,6 +164,14 @@ tx_tog:     db  0x80
 ; afterwards was subtracting a leftover CH375 opcode from the bytes
 ; remaining.
 tx_chunk:   dw  0
+
+; The first 16 bytes of the last frame handed to send_pkt, kept so /S can
+; show them.  The chip accepting a transfer says nothing about whether what
+; went out was a valid frame -- 11 ARP requests left this driver, were
+; counted, and no machine on the segment learned our address from any of
+; them.  The only way to tell a send that failed from a send that carried
+; rubbish is to look at the bytes.
+tx_peek:    times 16 db 0
 cfg_val:    db  1
 
 ; ---- state ----
@@ -414,7 +422,19 @@ bo_bad:
         ret
 bo_good:
         xor     byte [cs:tx_tog], 0x40
-        pop     si
+        ; DISCARD the saved SI rather than restoring it.  LODSB has walked
+        ; SI through the bytes just sent, and a caller splitting a frame
+        ; across several 64-byte packets needs that advance to survive --
+        ; restoring it makes every packet after the first re-send the
+        ; beginning of the frame.
+        ;
+        ; This was invisible on ARP and fatal on everything else. A 60-byte
+        ; ARP request is 68 bytes with the header: 64 plus 4, and the four
+        ; repeated bytes land in the padding nobody reads, so ARP resolved
+        ; perfectly. A 74-byte ping is 82: 64 plus 18, and those eighteen
+        ; repeated bytes are real header, so the router dropped every one
+        ; in silence.
+        add     sp, 2
         pop     bp
         pop     cx
         clc
@@ -574,6 +594,22 @@ rxd_next:
         mov     ax, [si+2]               ; high word of the entry
         and     ax, 0x1FFF               ; ...bits 16..28 are the length
         mov     cx, ax
+
+        ; THE LENGTH INCLUDES THE ETHERNET FCS.  RX_CTL_DROP_CRC means
+        ; "discard frames whose CRC is wrong", not "strip the CRC", and
+        ; the four bytes are handed to us with the frame.  Passing them up
+        ; makes every frame four bytes too long.
+        ;
+        ; ARP survives that -- it reads fixed offsets and ignores the tail
+        ; -- which is exactly why this hid for so long: ARP resolved, the
+        ; router answered, and then every ping timed out.  A capture made
+        ; it obvious in one line: a 42-byte ARP request padded to the
+        ; 60-byte minimum arrived as 64 bytes, with four non-zero bytes
+        ; after the padding.
+        ;
+        ; The frame that follows is still spaced on the FULL length rounded
+        ; up to eight, so the step below uses the untrimmed value.
+        sub     cx, 4
         cmp     cx, 14
         jb      short rxd_skip
         mov     bx, di
@@ -585,7 +621,10 @@ rxd_next:
         pop     di
         inc     word [n_frames]
 rxd_skip:
-        ; on to the next frame: length rounded up to 8
+        ; On to the next frame.  The stride is the length AS THE CHIP
+        ; REPORTED IT -- FCS included -- rounded up to eight, so the four
+        ; bytes trimmed above have to be added back before rounding.
+        add     cx, 4
         add     cx, 7
         and     cx, 0xFFF8
         add     di, cx
@@ -997,6 +1036,23 @@ psend_nopad:
 psend_body:
         push    cx
         rep     movsb                    ; DS:SI -> caller's frame
+        pop     cx
+
+        ; Snapshot what we are about to put on the wire, from txbuf rather
+        ; than from the caller's buffer, so it shows the bytes as assembled.
+        push    cx
+        push    si
+        push    di
+        push    ds
+        push    cs
+        pop     ds
+        mov     si, txbuf + 8
+        mov     di, tx_peek
+        mov     cx, 16
+        rep     movsb
+        pop     ds
+        pop     di
+        pop     si
         pop     cx
         add     cx, 8                    ; CX = total to push out
 

@@ -1,8 +1,22 @@
 # CH375Net — USB Ethernet on a machine older than USB
 
-**Status: it talks both ways.** Bring-up, link negotiation, receive and
-transmit all work and are proven on the hardware. What is left is the
-packet driver that turns this into something `mTCP` can use.
+**Status: it pings.**
+
+```
+Packet sequence number 0 received from 192.168.50.1 in 46.75 ms, ttl=64
+Packet sequence number 1 received from 192.168.50.1 in 51.85 ms, ttl=64
+Packet sequence number 2 received from 192.168.50.1 in 51.85 ms, ttl=64
+Packets sent: 3, Replies received: 3, Replies lost: 0
+```
+
+That is mTCP, on an IBM PS/2 Model 30, over a USB Ethernet adapter on a
+CH375 ISA card. Bring-up, link negotiation, receive, transmit and a Crynwr
+packet driver, all working, with the machine's own network at INT 60h
+untouched throughout.
+
+The ~50 ms round trip is the driver's own poll interval showing through:
+the ISR collects on the 18.2 Hz timer, so a reply waits up to 55 ms before
+anyone looks at it. The wire is not the slow part.
 
 A USB-to-RJ45 adapter, an ISA card from a different decade, and an IBM PS/2
 Model 30 with an 8086 in it. The question this project answers is whether a
@@ -322,12 +336,27 @@ exercised by third-party software and all correct.
 `send_pkt` moves frames too: 11 out, 660 bytes — exactly 11 × 60, the right
 size for an ARP request.
 
-**What does not work yet is a round trip.** `PING` still reports "Timeout
-waiting for ARP response": our requests leave and other traffic arrives,
-but the replies to our own requests are not coming back up. Since `AXSEND`
-gets a reply to a hand-built ARP through the same chip, the difference is
-somewhere in the resident path rather than in the wire or the header
-format. The receive filter is the current suspect.
+### The two bugs between "frames move" and "it pings"
+
+Both hid behind a partial success, which is the worst place for a bug to
+hide.
+
+**The delivered length included the Ethernet FCS.** `RX_CTL_DROP_CRC` means
+"discard frames whose CRC is wrong", not "strip the CRC" — the four bytes
+arrive with the frame. `PKTCAP`'s dump had said so plainly for some time: a
+42-byte ARP request, padded to the 60-byte minimum, arrived as **64 bytes**
+with four non-zero bytes sitting after the padding.
+
+**`bulk_out` restored `SI` on success.** It was added for the NAK rewind and
+applied to the success path too, so the caller's `SI` never advanced and
+every 64-byte packet after the first re-sent the *beginning* of the frame.
+
+That second one is why the fault looked like a receive problem for so long.
+A 60-byte ARP request is 68 bytes with the transmit header — 64 plus 4 — and
+those four repeated bytes land in padding nobody reads, so **ARP resolved
+perfectly**. A 74-byte ping is 82 — 64 plus 18 — and those eighteen repeated
+bytes are real IP header, so the router dropped every one in silence. ARP
+working was the thing that made the transmit path look innocent.
 
 ### Two transmit bugs found on the way
 

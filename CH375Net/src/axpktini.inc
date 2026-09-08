@@ -881,6 +881,19 @@ stat_macskip:
         call    putdecw
         call    crlf
 
+        mov     dx, msg_s_peek
+        call    puts
+        mov     cx, 16
+        xor     si, si
+stat_peek:
+        mov     al, [es:si+tx_peek]
+        call    puthex
+        mov     al, ' '
+        call    putc
+        inc     si
+        loop    stat_peek
+        call    crlf
+
         xor     al, al
         jmp     near die
 
@@ -1069,3 +1082,4 @@ msg_s_frames:  db '  frames delivered=$'
 msg_s_nohandle:db '  frames nobody wanted=$'
 msg_s_short:   db '  bursts that made no sense=$'
 msg_s_sent:    db '  frames sent=$'
+msg_s_peek:    db '  last frame out=$'

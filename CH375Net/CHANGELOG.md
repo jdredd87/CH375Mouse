@@ -158,6 +158,54 @@ a cross beside it rather than assuming any of them.
   program is one somebody will forget to prepare; folding the bring-up in
   comes after the control transfer works.
 
+### It pings
+
+    Packet sequence number 0 received from 192.168.50.1 in 46.75 ms, ttl=64
+    Packet sequence number 1 received from 192.168.50.1 in 51.85 ms, ttl=64
+    Packet sequence number 2 received from 192.168.50.1 in 51.85 ms, ttl=64
+    Packets sent: 3, Replies received: 3, Replies lost: 0
+
+mTCP, on an IBM PS/2 Model 30, over USB Ethernet on a CH375 ISA card, with
+the machine's own network at INT 60h untouched throughout. The ~50 ms round
+trip is the 18.2 Hz poll interval showing through, not the wire.
+
+`AXPKT.COM` implements driver_info, access_type, release_type, send_pkt,
+get_address, reset_interface, set_rcv_mode, get_rcv_mode and
+get_statistics, with receive collected on the timer and handed up through
+the two-call handshake. mTCP's `pkttool` and DOSBridge's `PKTCAP` both
+drive it correctly.
+
+### The two bugs between "frames move" and "it pings"
+
+Both hid behind a partial success, which is the worst place for a bug to
+hide.
+
+* **The delivered length included the Ethernet FCS.** RX_CTL_DROP_CRC means
+  "discard frames whose CRC is wrong", not "strip the CRC". PKTCAP's own
+  dump had been saying so for a while: a 42-byte ARP request padded to the
+  60-byte minimum arrived as 64 bytes, with four non-zero bytes after the
+  padding.
+* **bulk_out restored SI on success.** It was added for the NAK rewind and
+  wrongly applied to the success path, so the caller's SI never advanced
+  and every 64-byte packet after the first re-sent the beginning of the
+  frame.
+
+The second is why this looked like a receive fault for hours. A 60-byte ARP
+request is 68 bytes with the transmit header -- 64 plus 4 -- and the four
+repeated bytes land in padding nobody reads, so ARP resolved perfectly. A
+74-byte ping is 82 -- 64 plus 18 -- and those are real IP header bytes, so
+the router dropped every one in silence. ARP succeeding is precisely what
+made the transmit path look innocent.
+
+### Also
+
+* PKTCAP, in DOSBridge, gained a third argument naming the interrupt
+  vector. That is a safety feature rather than a convenience: without it
+  the tool attaches to the first packet driver between 60h and 80h, which
+  on a bridge machine is the network the bridge runs over, and with ALL the
+  frames it captures are frames nobody else receives. Naming a second
+  driver confines the capture to the card being debugged.
+
 ### Not done
 * **The packet driver.** A Crynwr driver at INT 60h, so `mTCP` and
   `WATTCP` work without a TCP stack being written here.
