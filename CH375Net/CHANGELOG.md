@@ -5,6 +5,43 @@ CH375Net -- StevenC -- https://github.com/jdredd87/CH375USBTools
 Versions live in the `VER` constant of each program. Nothing here has been
 released; the project is in progress.
 
+
+## AXPKT does the whole job
+
+`AXPKT.COM` now enumerates the device and brings the adapter up itself, so
+it is one command like `NE2000.COM`. `AXPROBE` is a diagnostic now, not a
+prerequisite. Verified from a cold start: link up, gateway 2/2, 8.8.8.8 2/2
+at ttl=118, and `HTGET http://example.com/` returning 200 OK, with the
+machine's own driver at 60h untouched.
+
+Four faults found getting there, and the order matters because each one hid
+the next:
+
+**`CLEAR_FEATURE` before every register access.** `CMD_CLR_STALL` is not a
+local chip operation — the CH375 issues a real control transfer to the
+device. Doing that ahead of every write left the device busy when the write
+arrived, so it NAKed. The failure moved around as timing shifted (step 7,
+then 9, then 3), always with status 2A, always blaming whichever register
+happened to be next. The Pascal bring-up clears a stall only after one
+happens, and never NAKs; this now does the same.
+
+**`SET_USB_MODE` without its readback.** The chip leaves a status byte in
+the data port and a byte nobody collects is still there for the next read.
+Three mode changes during enumeration meant three stale bytes queued ahead
+of the device descriptor — which is where it failed, three commands
+downstream of the cause.
+
+**`WaitInt` milliseconds treated as a spin count.** The Pascal's
+`WaitInt(Ms)` is an outer loop over an inner 400-poll spin. `wait_for(300)`
+was being handed 300 raw iterations: four hundred times too short.
+
+**A teardown that overwrote its own diagnostic**, so a failure at step 3
+reported a register the teardown had touched on the way out.
+
+Also: `/N` takes the adapter as it stands, `/U` unconfigures the device
+before releasing memory, and the failure message now names the real cause
+of the common step-23 failure and the only thing that actually fixes it.
+
 ## Unreleased
 
 ### Working, and proven on the hardware

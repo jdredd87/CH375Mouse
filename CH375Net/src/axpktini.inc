@@ -5,20 +5,15 @@
 ;
 ;   CH375Net, StevenC.  Public domain (the Unlicense).
 ;
-; WHY THIS DOES NOT BRING THE ADAPTER UP
+; ONE PROGRAM.  This brings the adapter up itself -- PHY power, clocks, MAC,
+; receive path, autonegotiation, link -- and then goes resident, so loading
+; the network is a single command the way NE2000.COM is.
 ;
-;   Run AXPROBE first.  It powers the PHY, sets the clocks, configures the
-;   receive path and negotiates the link, and it leaves the adapter in
-;   exactly that state when it exits -- the chip does not forget because a
-;   DOS program ended.  AXPKT checks the chip is there, reads the MAC, and
-;   goes resident.
-;
-;   That is a real limitation and not a design: a driver you have to
-;   prepare with a second program is a driver somebody will forget to
-;   prepare.  It is split this way because the bring-up is a page of
-;   control transfers that already exist, tested, in Pascal, and having
-;   them in one place while the layout was still being learned was worth
-;   more than having them in the .COM.  Folding them in is the next job.
+; It used to require AXPROBE to have run first, which was a real limitation
+; and never a design: a driver you have to prepare with a second program is
+; one somebody will forget to prepare. AXPROBE still exists and is still
+; the better tool when something is wrong, because it narrates every
+; register access; this just gets the machine on the network.
 ; ==========================================================================
 
 PID_SETUP        equ 0x0D
@@ -60,6 +55,23 @@ clr_ep0:
 ; succeeded four times out of four -- the Pascal had just enumerated, so
 ; the chip was still on 8F.
 ; --------------------------------------------------------------------------
+; AL = the USB mode.  The readback is not optional and its absence is not
+; harmless: SET_USB_MODE leaves a status byte in the data port, and a byte
+; nobody collects is still there when the next read happens.  Three modes
+; are set during enumeration, so three stale bytes were queued ahead of the
+; device descriptor -- which is precisely where this used to fail, with the
+; descriptor blamed for a fault three commands upstream.
+set_mode:
+        push    ax
+        mov     al, CMD_SET_USB_MODE
+        call    ch_cmd
+        pop     ax
+        call    ch_wr
+        mov     cx, 20
+        call    delay_ms
+        call    ch_rd
+        ret
+
 set_retry:                               ; AL = the retry byte
         push    ax
         mov     al, CMD_SET_RETRY
@@ -77,7 +89,20 @@ set_retry:                               ; AL = the retry byte
 ; --------------------------------------------------------------------------
 ctrl_in:
         push    bp
-        call    clr_ep0
+        ; NO clr_ep0 here, and that is deliberate.
+        ;
+        ; CMD_CLR_STALL is not a local chip operation: the CH375 issues a
+        ; real CLEAR_FEATURE(ENDPOINT_HALT) transfer to the device.  Doing
+        ; that before every register access doubles the control traffic and
+        ; leaves the device busy when the write it was clearing the way for
+        ; arrives -- so the write gets a NAK.  That is the whole story
+        ; behind a bring-up that failed at step 7, then step 9, then step 3,
+        ; always with status 2A, always blaming whichever register happened
+        ; to be next.
+        ;
+        ; The Pascal bring-up clears a stall only after one actually
+        ; happens, and never NAKs.  This now does the same: see the failure
+        ; paths below and the retry wrappers.
         mov     al, CMD_WR_USB_DATA7
         call    ch_cmd
         mov     al, 8
@@ -232,6 +257,7 @@ rm_try:
         cmp     bh, 6
         je      short rm_good
 rm_again:
+        call    clr_ep0                  ; the attempt failed; start clean
         dec     bp
         jnz     short rm_try
 
@@ -262,6 +288,956 @@ mark:                                    ; AL = the letter
         je      short mark_out
         call    putc
 mark_out:
+        ret
+
+
+; ==========================================================================
+; USB ENUMERATION.
+;
+; The step the driver was missing when it still expected AXPROBE to have
+; gone first: reset the chip, bring the bus up, find the device, give it an
+; address and select its configuration. Until that has happened the device
+; is not addressable and even the first vendor request fails -- which is
+; exactly how it failed, at step 1, with the register write blamed.
+;
+; Modelled on the sequence in USBCOMBO, which has had more hardware time
+; than anything else here. The order matters and is WCH's, not mine.
+; ==========================================================================
+
+desc_buf:   times 80 db 0
+ep0max:     db 8
+cfg_val_e:  db 1
+
+; CX milliseconds, near enough. The loop is calibrated by the ISA settling
+; read on port 61h, the same one ch_cmd uses.
+delay_ms:
+        push    ax
+        push    cx
+        push    dx
+        or      cx, cx
+        je      short dm_out
+dm_outer:
+        push    cx
+        mov     cx, 120
+dm_inner:
+        mov     dx, 0x61
+        in      al, dx
+        loop    dm_inner
+        pop     cx
+        loop    dm_outer
+dm_out:
+        pop     dx
+        pop     cx
+        pop     ax
+        ret
+
+; CX = the same "milliseconds" the Pascal bring-up passes to WaitInt: an
+; outer count over an inner 400-poll spin, which is not a real time unit
+; and is transcribed rather than reinterpreted on purpose.
+;
+; ch_wait's CX is a bare spin count, so the two are NOT interchangeable and
+; the difference is not small -- WaitInt(600) is worth about four times
+; ch_wait with CX=0xFFFF, and wait_for(300) was worth four hundred times
+; what it was being given.  Approximating this is how the device descriptor
+; came to be read before the device was willing to answer.
+ch_waitms:
+        push    bx
+        push    dx
+        mov     bx, cx
+        mov     dx, [cs:io_cmd]
+cwm_outer:
+        mov     cx, 400
+cwm_inner:
+        in      al, dx
+        test    al, 0x80
+        je      short cwm_got
+        loop    cwm_inner
+        dec     bx
+        jnz     short cwm_outer
+        pop     dx
+        pop     bx
+        stc
+        ret
+cwm_got:
+        pop     dx
+        pop     bx
+        mov     al, CMD_GET_STATUS
+        call    ch_cmd
+        call    ch_rd
+        clc
+        ret
+
+; AH = the status wanted, CX = ms in the sense above.  CF clear if it
+; arrived.  A timeout gives up at once rather than trying again: twelve
+; tries are for a chip answering with the WRONG status, and a chip that
+; answers with nothing at all will not change its mind.
+wf_want:    db 0
+wait_for:
+        mov     [cs:wf_want], ah
+        push    bx
+        mov     bx, 12
+wf_try:
+        push    bx
+        push    cx
+        call    ch_waitms
+        pop     cx
+        pop     bx
+        jc      short wf_none
+        mov     ah, [cs:wf_want]
+        cmp     al, ah
+        je      short wf_got
+        dec     bx
+        jnz     short wf_try
+wf_none:
+        pop     bx
+        stc
+        ret
+wf_got:
+        pop     bx
+        clc
+        ret
+
+; AL = a CH375 high-level command, AH = its single argument byte.  Issues
+; it, waits, and tries again a few times if it does not come back
+; successful.  Same reasoning as ctrl_out_r: the patience lives here rather
+; than in the chip's retry register, so giving up leaves nothing in flight.
+;
+; The command and argument go to memory because ch_cmd needs DX for the
+; port and there is no spare register on an 8086 worth the contortion.
+chi_cmd:    db 0
+chi_arg:    db 0
+ch_hi:
+        mov     [cs:chi_cmd], al
+        mov     [cs:chi_arg], ah
+        push    bp
+        mov     bp, 6                    ; six tries, as BusUp does
+chi_try:
+        mov     al, [cs:chi_cmd]
+        call    ch_cmd
+        mov     al, [cs:chi_arg]
+        call    ch_wr
+        mov     cx, 600                  ; WaitInt(600), as GetDescrQuick does
+        call    ch_waitms
+        jnc     short chi_got
+        mov     byte [cs:bu_st], 0xFF    ; no interrupt within the wait
+        jmp     short chi_next
+chi_got:
+        mov     [cs:bu_st], al
+        cmp     al, INT_SUCCESS
+        je      short chi_ok
+chi_next:
+        mov     cx, 150
+        call    delay_ms
+        dec     bp
+        jnz     short chi_try
+        pop     bp
+        stc
+        ret
+chi_ok:
+        pop     bp
+        clc
+        ret
+
+; Put the bus back roughly where a cold boot leaves it.
+;
+; A bring-up that stops half way leaves the device addressed, part
+; configured, and possibly with a control transfer unfinished.  RESET_ALL
+; resets the CH375 but does not cut the device's power, so the DEVICE
+; remembers all of that -- and the next run then fails at the device
+; descriptor instead, which blames the USB side for a fault in the adapter
+; bring-up and sends the next hour in the wrong direction.  Ask me how I
+; know.  Unplugging is the real cure; this is the nearest thing reachable
+; from software, and it is worth doing on every failure path.
+usb_down:
+        ; Keep the failure that brought us here.  The teardown writes
+        ; registers of its own, and without this it overwrites the very
+        ; diagnostic the caller is about to print -- which had step 3
+        ; reporting a register the teardown touched.
+        push    ax
+        mov     al, [cs:bu_reg]
+        mov     ah, [cs:bu_st]
+        mov     [cs:save_reg], al
+        mov     [cs:save_st], ah
+        pop     ax
+
+        call    clr_ep0
+        xor     al, al
+        call    set_retry
+
+        ; If the device is up and talking, take it down properly first.
+        ; A bus reset alone does not do it: this adapter, left configured
+        ; and running, ignores one and then ignores everything afterwards,
+        ; at address 0 and at its own address alike.  From outside that is
+        ; indistinguishable from a dead card, and the only cure was to
+        ; remove its power.
+        ;
+        ; SET_CONFIGURATION 0 is the teardown the DEVICE acts on: it stops
+        ; the receiver and returns it to the Addressed state, where a bus
+        ; reset means what the specification says it means.  Skipped when
+        ; nothing was ever brought up, because then there is nothing to
+        ; tell and the attempt only costs time.
+        cmp     byte [cs:dev_live], 0
+        je      short ud_nodev
+        mov     byte [cs:dev_live], 0
+        mov     al, AX_RX_CTL            ; stop the receiver
+        xor     bx, bx
+        call    ax_wr16
+        mov     al, CMD_SET_CONFIG       ; and unconfigure
+        call    ch_cmd
+        xor     al, al
+        call    ch_wr
+        mov     cx, 100
+        call    ch_waitms
+        mov     cx, 50
+        call    delay_ms
+ud_nodev:
+
+        mov     al, CMD_SET_USB_ADDR     ; host side back to address 0
+        call    ch_cmd
+        xor     al, al
+        call    ch_wr
+        mov     al, 7                    ; hold the bus in reset
+        call    set_mode
+        mov     cx, 250                  ; generously: the point is that the
+        call    delay_ms                 ; DEVICE notices, not the chip
+        mov     al, 5                    ; then idle, as a fresh chip is
+        call    set_mode
+        mov     al, CMD_RESET_ALL
+        call    ch_cmd
+        mov     cx, 60
+        call    delay_ms
+        ret
+
+; GET_DESCR for the device descriptor at whatever address the host side is
+; currently set to.  CF set if nothing answered.
+adopted:    db 0
+
+; Set once the device is enumerated and configured, cleared by usb_down.
+; It is what tells a teardown whether there is anybody there to tell.
+dev_live:   db 0
+try_descr:
+        mov     al, CMD_GET_DESCR
+        mov     ah, 1
+        call    ch_hi
+        jc      short td_bad
+        push    cs
+        pop     es
+        mov     di, desc_buf
+        mov     cl, 64
+        call    ch_read
+        clc
+        ret
+td_bad:
+        stc
+        ret
+
+usb_enum:
+        ; ---- the chip itself ----
+        mov     byte [cs:bu_step], 20
+        mov     al, CMD_RESET_ALL
+        call    ch_cmd
+        mov     cx, 60
+        call    delay_ms
+        mov     al, CMD_GET_IC_VER
+        call    ch_cmd
+        call    ch_rd
+        cmp     al, 0xB5
+        jae     short __uev1
+        jmp     near ue_bad
+__uev1:
+        cmp     al, 0xC0
+        jb     short __uev2
+        jmp     near ue_bad
+__uev2:
+
+        ; ---- host mode, and the first connect ----
+        mov     byte [cs:bu_step], 21
+        mov     al, 5
+        call    set_mode
+        mov     ah, INT_CONNECT
+        mov     cx, 300
+        call    wait_for
+        jnc     short ue_conn
+        ; No interrupt, so ask the chip directly -- a device already
+        ; attached when the chip was reset does not always raise one.
+        mov     al, CMD_TEST_CONNECT
+        call    ch_cmd
+        call    ch_rd
+        cmp     al, INT_CONNECT
+        je     short __uev3
+        jmp     near ue_bad
+__uev3:
+ue_conn:
+
+        ; ---- hold the bus in reset, then let it go ----
+        mov     byte [cs:bu_step], 22
+        mov     cx, 100
+        call    delay_ms
+        mov     al, 7
+        call    set_mode
+        ; How long the bus is held in reset decides whether a device that
+        ; is already up goes back to the Default state or carries on
+        ; ignoring us.  40 ms is what the Pascal uses and it is enough for
+        ; a device that has just been plugged in; it is not always enough
+        ; for one an earlier run left configured and busy.  Each attempt
+        ; therefore holds it longer than the last: 40 ms, then 250, then
+        ; 600.  The specification's minimum is 10 ms, so none of these is
+        ; unreasonable -- they are just more patient than the happy path
+        ; needs to be.
+        mov     cx, [cs:reset_hold]
+        call    delay_ms
+        mov     al, 6
+        call    set_mode
+        mov     ah, INT_CONNECT
+        mov     cx, 400
+        call    wait_for                 ; a second connect is normal, and
+        mov     cx, 200                  ; its absence is not fatal
+        call    delay_ms
+
+        ; Let the chip retry NAKs while enumerating: a device still waking
+        ; up should be waited for, and this is what the Pascal bring-up
+        ; does.  read_mac's warning about 8F stands, so ue_bad below puts
+        ; it back to 00 -- the danger was never 8F itself, it was walking
+        ; away from a chip still set to it.
+        mov     al, 0x8F
+        call    set_retry
+
+        ; ---- the device descriptor, for the endpoint-0 packet size ----
+        ;
+        ; Two attempts, at two addresses, and the second one is the whole
+        ; reason this program can be run twice.
+        ;
+        ; A bus reset is supposed to put every device back in the Default
+        ; state answering at address 0.  An adapter that a previous run
+        ; left configured and running does not always oblige -- the CH375's
+        ; reset does not cut its power, and mode 7 does not reliably
+        ; persuade a device that is already up to forget where it was.  It
+        ; sits there, still at the address the last run gave it, ignoring
+        ; everything sent to address 0.  From the outside that is
+        ; indistinguishable from a dead adapter: no interrupt at all, and a
+        ; failure at the device descriptor that blames the card.
+        ;
+        ; It cost a power cycle between every single test before this was
+        ; understood.  So: ask at address 0, and if nothing answers, ask
+        ; again at the address we would have given it.  A device that
+        ; replies there is not broken, it is just already dressed.
+        mov     byte [cs:bu_step], 23
+        call    try_descr
+        jnc     short ue_at0
+        mov     al, CMD_SET_USB_ADDR
+        call    ch_cmd
+        mov     al, USB_ADDR
+        call    ch_wr
+        mov     cx, 20
+        call    delay_ms
+        call    try_descr
+        jnc     short ue_adopt
+        ; Neither address answers.  Put the host side back to 0 so the
+        ; state we leave behind is the one the next attempt expects.
+        mov     al, CMD_SET_USB_ADDR
+        call    ch_cmd
+        xor     al, al
+        call    ch_wr
+        jmp     near ue_bad
+ue_at0:
+        mov     byte [cs:adopted], 0
+        jmp     short ue_gotdesc
+ue_adopt:
+        mov     byte [cs:adopted], 1
+ue_gotdesc:
+        mov     al, [cs:desc_buf + 7]
+        or      al, al
+        jne     short ue_ep0
+        mov     al, 8
+ue_ep0:
+        mov     [cs:ep0max], al
+
+        ; ---- give it an address, and tell the chip about it ----
+        ; Unless it already has one and we joined it there, in which case
+        ; setting it again is at best a no-op and at worst another way to
+        ; upset a device that is currently working.
+        cmp     byte [cs:adopted], 0
+        je      short ue_doaddr
+        jmp     short ue_addrdone
+ue_doaddr:
+        mov     byte [cs:bu_step], 24
+        mov     al, CMD_SET_ADDRESS
+        mov     ah, USB_ADDR
+        call    ch_hi
+        jnc     short __uev6
+        jmp     near ue_bad
+__uev6:
+        mov     al, CMD_SET_USB_ADDR
+        call    ch_cmd
+        mov     al, USB_ADDR
+        call    ch_wr
+        mov     cx, 20
+        call    delay_ms
+ue_addrdone:
+
+        ; ---- the configuration descriptor, for its value ----
+        mov     byte [cs:bu_step], 25
+        mov     al, CMD_GET_DESCR
+        mov     ah, 2
+        call    ch_hi
+        jnc     short __uev8
+        jmp     near ue_bad
+__uev8:
+        push    cs
+        pop     es
+        mov     di, desc_buf
+        mov     cl, 80
+        call    ch_read
+        mov     al, [cs:desc_buf + 5]    ; bConfigurationValue
+        or      al, al
+        jne     short ue_cfgv
+        mov     al, 1
+ue_cfgv:
+        mov     [cs:cfg_val_e], al
+
+        ; ---- select it. Without this the device has an address and no
+        ; endpoints: control transfers to endpoint 0 work perfectly and
+        ; everything else times out. ----
+        mov     byte [cs:bu_step], 26
+        mov     al, CMD_SET_CONFIG
+        mov     ah, [cs:cfg_val_e]
+        call    ch_hi
+        jnc     short __uev10
+        jmp     near ue_bad
+__uev10:
+        mov     cx, 50
+        call    delay_ms
+        mov     byte [cs:dev_live], 1
+
+        ; Back to reporting NAKs rather than retrying them.  This is not a
+        ; tuning choice: see the note in read_mac.  A chip left on 8F is
+        ; still retrying in the background after our own wait expires, and
+        ; the next program to open it finds a transaction in flight.
+        xor     al, al
+        call    set_retry
+
+        mov     byte [cs:bu_step], 0
+        clc
+        ret
+ue_bad:
+        call    usb_down
+        stc
+        ret
+
+
+; ==========================================================================
+; THE BRING-UP, so this is one program and not two.
+;
+; It used to require AXPROBE to have run first. That is a fine way to
+; develop and a poor thing to ship: a driver you have to prepare with a
+; second program is one somebody will forget to prepare, and the failure
+; when they do is a machine with no network and no clue why.
+;
+; All of it lives in the transient half. It runs once, at install, and goes
+; back to DOS with everything else here -- there is no reason for a page of
+; one-shot register writes to sit in memory for the rest of the day.
+; ==========================================================================
+
+; DS:SI -> 8 setup bytes, ES:DI -> data to send, BL = how many (0 = none).
+ctrl_out_n:
+        ; NO clr_ep0 here, and that is deliberate.
+        ;
+        ; CMD_CLR_STALL is not a local chip operation: the CH375 issues a
+        ; real CLEAR_FEATURE(ENDPOINT_HALT) transfer to the device.  Doing
+        ; that before every register access doubles the control traffic and
+        ; leaves the device busy when the write it was clearing the way for
+        ; arrives -- so the write gets a NAK.  That is the whole story
+        ; behind a bring-up that failed at step 7, then step 9, then step 3,
+        ; always with status 2A, always blaming whichever register happened
+        ; to be next.
+        ;
+        ; The Pascal bring-up clears a stall only after one actually
+        ; happens, and never NAKs.  This now does the same: see the failure
+        ; paths below and the retry wrappers.
+        mov     al, CMD_WR_USB_DATA7
+        call    ch_cmd
+        mov     al, 8
+        call    ch_wr
+        mov     cx, 8
+co_setup:
+        lodsb
+        call    ch_wr
+        loop    co_setup
+
+        mov     al, CMD_SET_ENDP6
+        call    ch_cmd
+        mov     al, 0x80                 ; SETUP is always DATA0
+        call    ch_wr
+        mov     al, CMD_ISSUE_TOKEN
+        call    ch_cmd
+        mov     al, PID_SETUP
+        call    ch_wr
+        mov     cx, 0xFFFF
+        call    ch_wait
+        jc      short co_fail
+        cmp     al, INT_SUCCESS
+        jne     short co_fail
+
+        or      bl, bl
+        je      short co_status
+        ; The data stage starts on DATA1 by spec and the chip has to be
+        ; told: it does not infer that from the SETUP before it.
+        mov     al, CMD_WR_USB_DATA7
+        call    ch_cmd
+        mov     al, bl
+        call    ch_wr
+        push    si
+        mov     si, di
+        mov     cl, bl
+        xor     ch, ch
+co_data:
+        mov     al, [es:si]
+        call    ch_wr
+        inc     si
+        loop    co_data
+        pop     si
+        mov     al, CMD_SET_ENDP7
+        call    ch_cmd
+        mov     al, 0xC0
+        call    ch_wr
+        mov     al, CMD_ISSUE_TOKEN
+        call    ch_cmd
+        mov     al, PID_OUT
+        call    ch_wr
+        mov     cx, 0xFFFF
+        call    ch_wait
+        jc      short co_fail
+        cmp     al, INT_SUCCESS
+        jne     short co_fail
+
+co_status:
+        ; The status stage of an OUT is an IN carrying DATA1.
+        mov     al, CMD_SET_ENDP6
+        call    ch_cmd
+        mov     al, 0xC0
+        call    ch_wr
+        mov     al, CMD_ISSUE_TOKEN
+        call    ch_cmd
+        mov     al, PID_IN
+        call    ch_wr
+        mov     cx, 0xFFFF
+        call    ch_wait
+        clc
+        ret
+co_fail:
+        mov     [cs:bu_st], al
+        cmp     al, INT_RET_STALL
+        jne     short co_fail_out
+        push    ax
+        call    clr_ep0                  ; only a stall needs clearing
+        pop     ax
+co_fail_out:
+        stc
+        ret
+
+bu_reg:     db 0                         ; register of the last access
+bu_st:      db 0                         ; what the CH375 said about it
+save_reg:   db 0                         ; ...held across a teardown
+save_st:    db 0
+
+; --------------------------------------------------------------------------
+; The same control transfers, with the patience that read_mac already has.
+;
+; A register write lands on a device that is still digesting the one before
+; it, and a busy device NAKs.  One NAK used to fail the whole bring-up --
+; which is how an innocent 8-bit write to the pause watermark came to be
+; blamed for a fault that was really about timing.
+;
+; The tempting fix is to set the chip's retry to 8F and let it be patient
+; for us.  Do not: read_mac explains at length why that wedges the ADAPTER
+; and shows up as a failure in the NEXT program to run, not this one.  With
+; retry at 00 the chip answers immediately and sits idle between attempts,
+; so the loop below costs the same patience and leaves nothing in flight
+; when it gives up.
+;
+; Every attempt restarts at the SETUP packet, and clr_ep0 at the top of
+; ctrl_out_n/ctrl_in resets the endpoint toggle, so a retry is a clean
+; transfer rather than a resumption of a broken one.
+; --------------------------------------------------------------------------
+ctrl_out_r:
+        push    bp
+        mov     bp, 12
+cor_try:
+        push    si
+        push    di
+        push    bx
+        call    ctrl_out_n
+        pop     bx
+        pop     di
+        pop     si
+        jnc     short cor_ok
+        call    clr_ep0                  ; on the error path only
+        mov     cx, 10
+        call    delay_ms
+        dec     bp
+        jnz     short cor_try
+        call    clr_ep0
+        pop     bp
+        stc
+        ret
+cor_ok:
+        ; Let the write land before the next one is issued.  The Pascal
+        ; bring-up has no retry and needs none, because it prints a trace
+        ; line between every register access and that print is worth
+        ; several milliseconds.  Nothing here prints, so a rapid row of
+        ; writes finds the device still busy and gets a NAK -- which looks
+        ; like a fault in whichever register happened to be next, rather
+        ; than in the ones before it.  It read as the wake-on-LAN register,
+        ; then as ANAR; it was neither.
+        ;
+        ; A PHY write is an MDIO transaction behind the USB one and is
+        ; slower again, so this is sized for the slower of the two.
+        mov     cx, 5
+        call    delay_ms
+        pop     bp
+        clc
+        ret
+
+ctrl_in_r:
+        push    bp
+        mov     bp, 8
+cir_try:
+        push    si
+        push    di
+        push    bx
+        call    ctrl_in
+        pop     bx
+        pop     di
+        pop     si
+        jnc     short cir_ok
+        call    clr_ep0
+        mov     cx, 10
+        call    delay_ms
+        dec     bp
+        jnz     short cir_try
+        call    clr_ep0
+        pop     bp
+        stc
+        ret
+cir_ok:
+        pop     bp
+        clc
+        ret
+
+; One setup buffer serves every request, assembled on the spot.
+bu_setup:   times 8 db 0
+bu_data:    times 8 db 0
+bu_step:    db 0
+
+; AL = register, BL = length, payload already in bu_data.
+ax_mac_wr:
+        mov     [cs:bu_reg], al
+        mov     [cs:bu_setup+0], byte 0x40       ; OUT, vendor, device
+        mov     [cs:bu_setup+1], byte AX_ACCESS_MAC
+        mov     [cs:bu_setup+2], al              ; wValue = the register
+        mov     [cs:bu_setup+3], byte 0
+        mov     [cs:bu_setup+4], bl              ; wIndex = its length
+        mov     [cs:bu_setup+5], byte 0
+        mov     [cs:bu_setup+6], bl              ; wLength
+        mov     [cs:bu_setup+7], byte 0
+        push    cs
+        pop     ds
+        push    cs
+        pop     es
+        mov     si, bu_setup
+        mov     di, bu_data
+        call    ctrl_out_r
+        ret
+
+ax_wr16:                                 ; AL = register, BX = value
+        mov     [cs:bu_data+0], bl
+        mov     [cs:bu_data+1], bh
+        mov     bl, 2
+        call    ax_mac_wr
+        ret
+
+ax_wr8:                                  ; AL = register, BL = value
+        mov     [cs:bu_data+0], bl
+        mov     bl, 1
+        call    ax_mac_wr
+        ret
+
+ax_phy_wr:                               ; AL = PHY register, BX = value
+        mov     [cs:bu_reg], al
+        mov     [cs:bu_setup+0], byte 0x40
+        mov     [cs:bu_setup+1], byte AX_ACCESS_PHY
+        mov     [cs:bu_setup+2], byte AX_PHY_ID  ; wValue = the PHY address
+        mov     [cs:bu_setup+3], byte 0
+        mov     [cs:bu_setup+4], al              ; wIndex = the register
+        mov     [cs:bu_setup+5], byte 0
+        mov     [cs:bu_setup+6], byte 2
+        mov     [cs:bu_setup+7], byte 0
+        mov     [cs:bu_data+0], bl
+        mov     [cs:bu_data+1], bh
+        push    cs
+        pop     ds
+        push    cs
+        pop     es
+        mov     si, bu_setup
+        mov     di, bu_data
+        mov     bl, 2
+        call    ctrl_out_r
+        ret
+
+ax_phy_rd:                               ; AL = PHY register -> BX
+        mov     [cs:bu_setup+0], byte 0xC0       ; IN, vendor, device
+        mov     [cs:bu_setup+1], byte AX_ACCESS_PHY
+        mov     [cs:bu_setup+2], byte AX_PHY_ID
+        mov     [cs:bu_setup+3], byte 0
+        mov     [cs:bu_setup+4], al
+        mov     [cs:bu_setup+5], byte 0
+        mov     [cs:bu_setup+6], byte 2
+        mov     [cs:bu_setup+7], byte 0
+        push    cs
+        pop     ds
+        push    cs
+        pop     es
+        mov     si, bu_setup
+        mov     di, bu_data
+        mov     bl, 2
+        call    ctrl_in_r
+        jc      short apr_bad
+        mov     bl, [cs:bu_data+0]
+        mov     bh, [cs:bu_data+1]
+        clc
+        ret
+apr_bad:
+        stc
+        ret
+
+; Wait AL BIOS ticks. Coarse -- a tick is 55 ms -- and deliberately so:
+; every delay in this sequence is a minimum the chip needs rather than a
+; maximum, and the PIT has not been touched yet at this point.
+delay_ticks:
+        push    ax
+        push    bx
+        push    cx
+        push    dx
+        push    es
+        xor     cx, cx
+        mov     es, cx
+        mov     cl, al
+        xor     ch, ch
+        jcxz    dt_out
+dt_one:
+        mov     bx, [es:0x46C]
+dt_spin:
+        mov     dx, [es:0x46C]
+        cmp     dx, bx
+        je      short dt_spin
+        loop    dt_one
+dt_out:
+        pop     es
+        pop     dx
+        pop     cx
+        pop     bx
+        pop     ax
+        ret
+
+; The whole sequence. CF set on failure, with bu_step naming the stage --
+; "initialisation failed" on its own sends somebody to look at the cable.
+enum_tries: db 0
+reset_hold: dw 40
+
+ax_bringup:
+        ; Three goes at the enumeration, with a full teardown between them.
+        ; A device left configured by a bring-up that stopped half way does
+        ; not answer a fresh enumeration, and the first thing that clears it
+        ; is the teardown -- so the second attempt is the one that usually
+        ; works.  Without this the recovery is a power cycle, which is not
+        ; something a driver should ask of anybody.
+        mov     byte [cs:enum_tries], 3
+        mov     word [cs:reset_hold], 40
+bu_again:
+        call    usb_enum
+        jnc     short bu_enumok
+        dec     byte [cs:enum_tries]
+        jz      short bu_giveup
+        call    usb_down
+        ; Longer each time round.
+        mov     ax, [cs:reset_hold]
+        cmp     ax, 250
+        jae     short bu_hold600
+        mov     word [cs:reset_hold], 250
+        jmp     short bu_again
+bu_hold600:
+        mov     word [cs:reset_hold], 600
+        jmp     short bu_again
+bu_giveup:
+        stc
+        ret
+bu_enumok:
+        mov     byte [cs:bu_step], 1
+        ; Power the PHY. The reset line has to be seen low and then high,
+        ; and the settle afterwards is not optional: before it the PHY
+        ; answers MDIO with all ones.
+        mov     al, AX_PHYPWR_RSTCTL
+        mov     bx, 0
+        call    ax_wr16
+        jnc     short __buv1
+        jmp     near bu_bad
+__buv1:
+        mov     al, 1
+        call    delay_ticks
+
+        mov     byte [cs:bu_step], 2
+        mov     al, AX_PHYPWR_RSTCTL
+        mov     bx, 0x0020
+        call    ax_wr16
+        jnc     short __buv2
+        jmp     near bu_bad
+__buv2:
+        mov     al, 4
+        call    delay_ticks
+
+        mov     byte [cs:bu_step], 3
+        mov     al, AX_CLK_SELECT
+        mov     bl, 0x03
+        call    ax_wr8
+        jnc     short __buv3
+        jmp     near bu_bad
+__buv3:
+        mov     al, 2
+        call    delay_ticks
+
+        mov     byte [cs:bu_step], 4
+        call    read_mac
+        jnc     short __buv4
+        jmp     near bu_bad
+__buv4:
+
+        mov     byte [cs:bu_step], 5
+        ; Zeroing this register does NOT mean "no aggregation", it means NO
+        ; LIMIT -- the chip then appends frames for as long as traffic
+        ; arrives and the transfer never ends. 07 enables all three limits.
+        mov     [cs:bu_data+0], byte 0x07
+        mov     [cs:bu_data+1], byte 0x04        ; timer low
+        mov     [cs:bu_data+2], byte 0x00        ; timer high
+        mov     [cs:bu_data+3], byte 0x02        ; burst size
+        mov     [cs:bu_data+4], byte 0x08        ; inter-frame gap
+        mov     al, AX_RX_BULK_QCTRL
+        mov     bl, 5
+        call    ax_mac_wr
+        jnc     short __buv5
+        jmp     near bu_bad
+__buv5:
+
+        mov     byte [cs:bu_step], 6
+        mov     al, AX_PAUSE_LOW
+        mov     bl, 0x34
+        call    ax_wr8
+        jnc     short __buv6
+        jmp     near bu_bad
+__buv6:
+        mov     al, AX_PAUSE_HIGH
+        mov     bl, 0x52
+        call    ax_wr8
+        jnc     short __buv7
+        jmp     near bu_bad
+__buv7:
+
+        mov     byte [cs:bu_step], 7
+        ; Checksum offload off: it changes the frame layout on both paths.
+        mov     al, AX_RXCOE_CTL
+        xor     bl, bl
+        call    ax_wr8
+        jnc     short __buv8
+        jmp     near bu_bad
+__buv8:
+        mov     al, AX_TXCOE_CTL
+        xor     bl, bl
+        call    ax_wr8
+        jnc     short __buv9
+        jmp     near bu_bad
+__buv9:
+        mov     al, AX_MONITOR_MODE
+        xor     bl, bl
+        call    ax_wr8
+        jnc     short __buv10
+        jmp     near bu_bad
+__buv10:
+
+        mov     byte [cs:bu_step], 8
+        ; Start the receiver. IP_ALIGN deliberately clear: it pads every
+        ; frame by two so an IP header lands aligned, which matters to a
+        ; CPU that faults on unaligned access and not at all to an 8086.
+        mov     al, AX_RX_CTL
+        mov     bx, (RX_CTL_START | RX_CTL_ACCEPT_PHY | RX_CTL_BROADCAST | RX_CTL_DROP_CRC)
+        call    ax_wr16
+        jnc     short __buv11
+        jmp     near bu_bad
+__buv11:
+
+        mov     byte [cs:bu_step], 9
+        ; Restrict what the PHY advertises rather than forcing the speed,
+        ; so the far end negotiates normally instead of working out why its
+        ; partner went quiet. ANAR 0061 is 10BASE-T half and full with the
+        ; 802.3 selector; GBCR 0 withdraws the gigabit offer.
+        cmp     byte [cs:op_giga], 0
+        jne     short bu_nego
+        mov     al, MII_GBCR
+        mov     bx, 0
+        call    ax_phy_wr
+        jnc     short __buv12
+        jmp     near bu_bad
+__buv12:
+        mov     al, MII_ANAR
+        mov     bx, 0x0061
+        call    ax_phy_wr
+        jnc     short __buv13
+        jmp     near bu_bad
+__buv13:
+bu_nego:
+        mov     al, MII_BMCR
+        mov     bx, (BMCR_ANENABLE | BMCR_ANRESTART)
+        call    ax_phy_wr
+        jnc     short __buv14
+        jmp     near bu_bad
+__buv14:
+
+        mov     byte [cs:bu_step], 10
+        ; BMSR latches link-down low, so it is read twice by convention:
+        ; the first read clears the latch, the second is the current state.
+        mov     cx, 120
+bu_link:
+        push    cx
+        mov     al, 1
+        call    delay_ticks
+        mov     al, MII_BMSR
+        call    ax_phy_rd
+        mov     al, MII_BMSR
+        call    ax_phy_rd
+        pop     cx
+        jc      short bu_bad
+        test    bx, BMSR_LINK
+        jnz     short bu_haslink
+        loop    bu_link
+        jmp     short bu_bad
+bu_haslink:
+
+        mov     byte [cs:bu_step], 11
+        ; The MAC does not learn the speed by itself, and a link that is up
+        ; while this register disagrees passes no traffic at all.
+        mov     bx, (MED_RECEIVE_EN | MED_ALWAYS_ONE | MED_RXFLOW_EN | MED_TXFLOW_EN | MED_FULL_DUPLEX)
+        cmp     byte [cs:op_giga], 0
+        je      short bu_med
+        or      bx, (MED_GIGA | MED_EN_125MHZ)
+bu_med:
+        mov     al, AX_MEDIUM_MODE
+        call    ax_wr16
+        jc      short bu_bad
+
+        mov     byte [cs:bu_step], 0
+        clc
+        ret
+bu_bad:
+        call    usb_down
+        stc
         ret
 
 ; --------------------------------------------------------------------------
@@ -411,6 +1387,13 @@ op_help:    db 0
 op_giga:    db 0
 op_test:    db 0
 
+; /N -- take the adapter as it stands instead of bringing it up.  This is
+; the old two-program arrangement, where AXPROBE did the bring-up and this
+; program only went resident over the top of it.  Worth keeping: it is the
+; way to tell a fault in the bring-up apart from a fault in the driver,
+; which is not a distinction the failure message can make on its own.
+op_nobring: db 0
+
 ; Set the moment this program first speaks to the chip.  Any exit that does
 ; NOT go resident has to hand the chip back in a state the next program's
 ; bring-up can start from, and the only state that qualifies is "just
@@ -479,6 +1462,11 @@ pa_s4:
         mov     byte [op_giga], 1
         jmp     near pa_more
 pa_s5:
+        cmp     al, 'N'
+        jne     short pa_s5n
+        mov     byte [op_nobring], 1
+        jmp     near pa_more
+pa_s5n:
         cmp     al, 'R'
         jne     short pa_s5r
         call    pa_decnum
@@ -749,14 +1737,48 @@ init_chip:
         mov     al, 'c'
         call    mark
 
-        ; ---- who are we ----
+        ; ---- bring the adapter up, all of it ----
+        cmp     byte [op_nobring], 0
+        je      short init_dobring
+        mov     dx, msg_nobring
+        call    puts
+        ; The MAC is still ours to read: it is what we hand to whoever
+        ; calls get_address, and the adapter is the only thing that knows
+        ; it.  /N skips the bring-up, not the driver's own homework.
+        mov     byte [touched], 1
+        xor     al, al
+        call    set_retry
         call    read_mac
         jnc     short init_gotmac
         mov     dx, msg_nomac
         call    puts
         mov     al, 6
         jmp     near die
+init_dobring:
+        mov     dx, msg_bringup
+        call    puts
+        call    ax_bringup
+        jnc     short init_gotmac
+        mov     dx, msg_bufail
+        call    puts
+        mov     al, [bu_step]
+        xor     ah, ah
+        call    putdecw
+        mov     dx, msg_bureg
+        call    puts
+        mov     al, [bu_reg]
+        call    puthex
+        mov     dx, msg_bust
+        call    puts
+        mov     al, [bu_st]
+        call    puthex
+        mov     dx, msg_bufail2
+        call    puts
+        mov     al, 6
+        jmp     near die
 init_gotmac:
+        mov     dx, msg_buok
+        call    puts
         mov     al, 'd'
         call    mark
 
@@ -952,6 +1974,23 @@ stat_peek:
         loop    stat_peek
         call    crlf
 
+        mov     dx, msg_s_rxpk
+        call    puts
+        mov     ax, [es:rx_peeklen]
+        call    putdecw
+        mov     dx, msg_s_rxpk2
+        call    puts
+        mov     cx, 16
+        xor     si, si
+stat_rxpeek:
+        mov     al, [es:si+rx_peek]
+        call    puthex
+        mov     al, ' '
+        call    putc
+        inc     si
+        loop    stat_rxpeek
+        call    crlf
+
         xor     al, al
         jmp     near die
 
@@ -1040,6 +2079,25 @@ unl_no08:
         pop     es
 unl_nopit:
 
+        ; Tear the adapter down before the memory goes.  Leaving it
+        ; configured and running is not harmless: a device already past
+        ; enumeration does not answer a fresh one, so unload-then-load used
+        ; to fail at the device descriptor and read as a fault in the card.
+        ; Use the base the RESIDENT copy is using, not our own default --
+        ; they are only the same when /U was given no @base.
+        push    es
+        mov     ax, [es:io_cmd]
+        mov     [cs:io_cmd], ax
+        mov     ax, [es:io_dat]
+        mov     [cs:io_dat], ax
+        mov     byte [cs:touched], 1
+        ; This invocation never enumerated anything -- the copy going
+        ; resident did.  Say so, or the teardown skips the only part that
+        ; the device itself acts on.
+        mov     byte [cs:dev_live], 1
+        call    usb_down
+        pop     es
+
         mov     ah, 0x49                 ; release the resident block
         int     0x21
 
@@ -1096,7 +2154,7 @@ msg_help:
         db 13, 10
         db 'A packet driver for a USB Ethernet adapter on a CH375 card,', 13, 10
         db 'so mTCP and anything else speaking the Crynwr interface can', 13, 10
-        db 'use it.  RUN AXPROBE FIRST -- it brings the adapter up.', 13, 10
+        db 'use it.  One command: it brings the adapter up itself.', 13, 10
         db 13, 10
         db '  AXPKT          load it at vector 65h', 13, 10
         db '  AXPKT /I=6A    ...at 6Ah instead', 13, 10
@@ -1136,10 +2194,43 @@ msg_vectaken2:
 msg_nochip:
         db 'No CH375 answers at that address.  USBSCAN finds the card.', 13, 10, '$'
 msg_nomac:
-        db 'The adapter did not return its MAC address.', 13, 10
-        db 'Run AXPROBE first -- it brings the chip up, and this program', 13, 10
-        db 'deliberately does not.', 13, 10, '$'
+        db 'The adapter did not return its MAC address.', 13, 10, '$'
 msg_mac:       db 'MAC address: $'
+msg_bringup:   db 'Bringing the adapter up...$'
+msg_nobring:   db 'Taking the adapter as it stands (/N).', 13, 10, '$'
+msg_buok:      db ' link up.', 13, 10, '$'
+msg_bufail:    db ' FAILED at step $'
+msg_bureg:     db ', register $'
+msg_bust:      db ', chip status $'
+msg_bufail2:
+        db '.', 13, 10
+        db '20-26 are the USB side: 20 chip reset, 21 host mode, 22 bus', 13, 10
+        db 'reset, 23 device descriptor, 24 address, 25 config descriptor,', 13, 10
+        db '26 set configuration.  1-11 are the adapter: 1-2 PHY power,', 13, 10
+        db '3 clocks, 4 MAC read, 5 bulk queue, 6 pause, 7 offload off,', 13, 10
+        db '8 receiver on, 9 autonegotiation, 10 link, 11 medium mode.', 13, 10
+        db 13, 10
+        db 13, 10
+        db 'STEP 23 WITH STATUS FF is the common one, and it is almost', 13, 10
+        db 'never a broken adapter.  It means the device is already', 13, 10
+        db 'enumerated -- by an earlier AXPKT, or by NETID or AXPROBE,', 13, 10
+        db 'which enumerate it just to look at it.  A device that is', 13, 10
+        db 'already configured answers nothing at address 0, and a bus', 13, 10
+        db 'reset does not always persuade it otherwise.', 13, 10
+        db 13, 10
+        db '  The cure is to remove its power: unplug the adapter and', 13, 10
+        db '  plug it back in, or power-cycle the machine, which does the', 13, 10
+        db '  same thing because the card feeds it off the ISA bus.', 13, 10
+        db '  Resetting the CH375 does not, which is why nothing this', 13, 10
+        db '  program can do on its own always clears it.', 13, 10
+        db 13, 10
+        db '  To avoid it: run AXPKT FIRST, before NETID or AXPROBE.  It', 13, 10
+        db '  needs neither of them -- it does the whole bring-up itself.', 13, 10
+        db 13, 10
+        db 'Step 10 means the cable or the far end.  20-22 mean the card', 13, 10
+        db 'or nothing plugged into it.  Anything else means the adapter.', 13, 10
+        db 'AXPROBE /V walks the same ground printing the chip status at', 13, 10
+        db 'every access.', 13, 10, '$'
 msg_testonly:
         db 'That is /T: everything up to reading the adapter worked, and', 13, 10
         db 'nothing was installed.  Drop /T to go resident.', 13, 10, '$'
@@ -1167,3 +2258,5 @@ msg_s_short:   db '  bursts that made no sense=$'
 msg_s_sent:    db '  frames sent=$'
 msg_s_rate:    db '  timer divisor (/R)=$'
 msg_s_peek:    db '  last frame out=$'
+msg_s_rxpk:    db '  last burst rejected: len=$'
+msg_s_rxpk2:   db ' data=$'

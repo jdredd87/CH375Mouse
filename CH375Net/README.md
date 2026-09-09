@@ -67,17 +67,64 @@ FF FF FF FF FF FF   destination: broadcast
 C0 A8 32 08         from 192.168.50.8
 ```
 
+## Getting it running
+
+One command, the way `NE2000.COM` is one command:
+
+```
+C:\CH375> AXPKT
+AXPKT 0.1.0 -- StevenC
+Bringing the adapter up... link up.
+MAC address: 40:AE:30:6D:00:34
+Resident at vector 65h.
+```
+
+`AXPKT` enumerates the device over the CH375, brings the AX88179 up, and
+goes resident. Nothing has to be run before it. Point mTCP at it with a
+**copy** of your config — never the one your working network uses:
+
+```
+SET MTCPCFG=C:\CH375\MTCPAX.CFG      (packetint 0x65)
+PING 8.8.8.8
+SET MTCPCFG=c:\network\mtcp\mtcp.cfg
+```
+
+`AXPKT /U` unloads it, `/S` reports counters, `/?` explains the rest.
+
+### One thing to know first
+
+**Run `AXPKT` before `NETID` or `AXPROBE`, not after.** Those two enumerate
+the adapter in order to look at it, and an adapter that is already
+enumerated will not answer a fresh enumeration — `AXPKT` then stops at step
+23 with status FF, which reads like a dead card and is not one.
+
+Removing the adapter's power is what clears that: unplug it and plug it
+back in, or power-cycle the machine, which does the same thing because the
+card feeds VBUS off the ISA bus. Resetting the CH375 does not, so there is
+a limit to what any program here can do about it on its own. `AXPKT`
+unconfigures the device on `/U` for exactly this reason, which makes an
+unload-then-load usually work — usually, not always.
+
+This is not new and not specific to `AXPKT`; `AXPROBE` has always said
+"unplug it and plug it back in" for the same state. It is simply much more
+visible now that one program does the whole job.
+
 ## The programs
 
 | | |
 |---|---|
 | `src/ax179.pas` | everything that knows what an AX88179 is: the register map, the two vendor requests, the bring-up, and the bulk read |
-| `src/axprobe.pas` | `AXPROBE.EXE` — runs the bring-up and reports every stage. Step one, and the one that decided the rest was worth writing |
+| `src/axpkt.asm`, `src/axpktini.inc` | `AXPKT.COM` — **the one you run.** Enumerates the device, brings the adapter up, and installs a Crynwr packet driver. Needs nothing before it |
+| `src/axprobe.pas` | `AXPROBE.EXE` — runs the same bring-up and reports every stage. Step one historically, and the one that decided the rest was worth writing. Now a diagnostic rather than a prerequisite |
 | `src/axrecv.pas` | `AXRECV.EXE` — reads the bulk endpoint and makes sense of what comes back. Deliberately an **investigation**, not a parser |
 | `src/axsend.pas` | `AXSEND.EXE` — sends an ARP request and waits for a real machine to answer it |
 | `src/pktscan.pas` | `PKTSCAN.EXE` — which interrupt vectors hold a packet driver and which are free. Read-only, and the safety net for everything below |
 
-All take `/?`. `/P=hex` sets the CH375 I/O base.
+All take `/?`. `/P=hex` sets the CH375 I/O base (`@hex` for `AXPKT`).
+
+`AXPKT /N` skips the bring-up and takes the adapter as it stands, which is
+the old two-program arrangement and still the way to tell a fault in the
+bring-up apart from a fault in the driver.
 
 ## Transmit, proved the only way that counts
 

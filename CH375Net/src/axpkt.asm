@@ -129,6 +129,24 @@ RX_CTL_ACCEPT_PHY equ 0x0020
 RX_CTL_START     equ 0x0080
 RX_CTL_DROP_CRC  equ 0x0100
 
+; ---- MEDIUM_MODE bits ----
+MED_GIGA         equ 0x0001
+MED_FULL_DUPLEX  equ 0x0002
+MED_ALWAYS_ONE   equ 0x0004
+MED_EN_125MHZ    equ 0x0008
+MED_RXFLOW_EN    equ 0x0010
+MED_TXFLOW_EN    equ 0x0020
+MED_RECEIVE_EN   equ 0x0100
+
+; ---- the standard MII registers, for the autonegotiation step ----
+MII_BMCR         equ 0
+MII_BMSR         equ 1
+MII_ANAR         equ 4
+MII_GBCR         equ 9
+BMCR_ANRESTART   equ 0x0200
+BMCR_ANENABLE    equ 0x1000
+BMSR_LINK        equ 0x0004
+
 EP_BULK_IN       equ 2
 EP_BULK_OUT      equ 3
 
@@ -182,6 +200,14 @@ tx_chunk:   dw  0
 ; them.  The only way to tell a send that failed from a send that carried
 ; rubbish is to look at the bytes.
 tx_peek:    times 16 db 0
+
+; And the same for a burst the parser threw away.  A counter says how often
+; something went wrong; it never says what.  These sixteen bytes plus the
+; length are the difference between "546 bursts made no sense" and knowing
+; which field of the AX88179 trailer disagreed with the data.
+rx_peek:    times 16 db 0
+rx_peeklen: dw  0
+
 cfg_val:    db  1
 
 ; ---- state ----
@@ -727,6 +753,7 @@ rx_done:
 rx_deliver:
         cmp     cx, 8
         jae     short rxd_ok
+        call    rx_keep
         inc     word [n_short]
         ret
 rxd_ok:
@@ -812,7 +839,23 @@ rxd_skip:
 rxd_pop_bad:
         pop     ax
 rxd_bad:
+        call    rx_keep
         inc     word [n_short]
+        ret
+
+; Keep CX and the first 16 bytes of the burst for /S.  Only called on a
+; rejection, so it may clobber what it likes.
+rx_keep:
+        mov     [cs:rx_peeklen], cx
+        push    cs
+        pop     es
+        push    cs
+        pop     ds
+        mov     si, rxbuf
+        mov     di, rx_peek
+        mov     cx, 16
+        cld
+        rep     movsb
         ret
 
 ; --------------------------------------------------------------------------
