@@ -130,10 +130,19 @@ came up on the other card.
 
 ### What to expect from it
 
-512 KB fetched over HTTP, verified byte for byte against the original
-(CRC-32 `9EBAF22E`), with every one of the driver's error counters still at
-zero afterwards: no nonsense bursts, no impossible lengths, no overflows, no
-toggle rescues. 64 KB before that, also byte-exact.
+Real volume, checksummed on the DOS box itself with `HD.EXE` and compared
+against the source:
+
+| size | CRC-32 | result |
+|---|---|---|
+| 64 KB | `8156EC0D` | exact |
+| 512 KB | `9EBAF22E` | exact |
+| 1 MB | `04D0E435` | exact |
+| 5 MB | `BDBF684D` | exact |
+
+On the 5 MB run that is 5,684 frames delivered and 4,442 sent, with every
+one of the driver's error counters still at zero afterwards: no nonsense
+bursts, no impossible lengths, no overflows, no toggle rescues.
 
 **About 18 KB/s.** That is what it is, and `/R` will not change it — 512 KB
 took 39s at `/R=1`, 39s at `/R=2` and 37s at `/R=4`. Nor does `/R` help
