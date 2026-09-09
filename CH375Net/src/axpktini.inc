@@ -1231,7 +1231,13 @@ __buv4:
         ; LIMIT -- the chip then appends frames for as long as traffic
         ; arrives and the transfer never ends. 07 enables all three limits.
         mov     [cs:bu_data+0], byte 0x07
-        mov     [cs:bu_data+1], byte 0x04        ; timer low
+        ; 0080, which is what ax179.pas writes.  This said 0004, and the
+        ; two have to agree: it is the timer that makes the adapter flush
+        ; a part-full burst instead of holding it, and the flush is what
+        ; produces the SHORT packet that ends a USB transfer.  Get it
+        ; wrong and the transfer simply never ends -- which is exactly
+        ; the symptom: full 64-byte packets for ever and no boundary.
+        mov     [cs:bu_data+1], byte 0x80        ; timer low
         mov     [cs:bu_data+2], byte 0x00        ; timer high
         mov     [cs:bu_data+3], byte 0x01        ; burst size, in KB, and
                                          ; it must be SMALLER than rxbuf

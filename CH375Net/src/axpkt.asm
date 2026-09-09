@@ -95,14 +95,13 @@ RX_BUDGET       equ 31           ; 64-byte reads per tick once data flows
 ; client opened a handle -- not a crash, just no time left for anything
 ; else.  A mid-burst NAK on a 12 Mbps link clears in microseconds; if it
 ; has not cleared in four, the next tick can have another go.
-RX_NAKWAIT      equ 2            ; mid-burst NAKs to sit through
+RX_NAKWAIT      equ 200          ; mid-burst NAKs to wait out, in one go
 ; The same budget as a normal tick, and it was a mistake to make it less.
 ; The hunt is precisely when reading FAST matters -- there is a backlog
 ; and nothing useful happens until it is gone.  At four reads a tick this
 ; drained 9KB/s while the normal path managed 71KB/s, so a hunt that
 ; started never finished and the adapter never recovered.
-RX_DRAINMAX     equ RX_BUDGET    ; reads to spend per tick hunting a boundary
-RX_FLUSHTICKS   equ 300          ; ticks to keep hunting before giving up
+RX_DRAINMAX     equ 64           ; reads to spend emptying a burst we cannot use
 RXBUF_SZ        equ 2048         ; one burst; the chip is held to small ones
 TXBUF_SZ        equ 1536         ; 8-byte header plus a full frame
 MAXHANDLE       equ 4
@@ -259,7 +258,13 @@ cfg_val:    db  1
 ; PIT runs fast, and the handler that was in the vector before us is called
 ; only every nth tick, so the BIOS clock and everything hooked in ahead of
 ; us still see 18.2 Hz.
-tick_n:     db  2
+; 1 -- leave the PIT alone at 18.2 Hz.  AXTICK proved the reference
+; receive path is perfectly happy polled from INT 08h at exactly this
+; rate, and rate was separately shown not to matter, so there is no
+; reason left to reprogram the timer and every reason not to: a burst
+; is now read to completion in one call, and the longer the tick the
+; more comfortably that fits.
+tick_n:     db  1
 tick_ctr:   db  0
 pit_fast_on: db 0                ; did we actually change the timer
 
@@ -314,7 +319,6 @@ bi_flip:    db  0            ; already retried this read with the other PID
 n_toggle:   dw  0            ; reads recovered by flipping the toggle
 rx_pos:     dw  0            ; bytes of a part-read burst carried between
                              ; ticks -- see rx_go
-rx_flush:   dw  0            ; ticks left hunting for a packet boundary
 n_flush:    dw  0            ; times we have had to go hunting
 rx_st:      db  0            ; status the last bulk IN reported
 rx_len:     db  0            ; length the last RD_USB_DATA claimed
@@ -425,6 +429,11 @@ ch_read:
         ja      short ch_read_over
         or      bl, bl
         je      short ch_read_done
+; Extra settling was tried inside this loop on 2026-09-09, on the theory
+; that the tight call/stosb pace outran the chip where ReadUsb's
+; per-byte Pascal call overhead did not.  It changed nothing, so the
+; pace is not the reason and the delay is not worth its cost in an
+; interrupt.
 ch_read_loop:
         call    ch_rd
         cmp     bh, cl
@@ -930,53 +939,43 @@ rx_poll:
         je      short rx_free
         ret
 rx_free:
-        cmp     byte [n_handles], 0
-        jne     short rx_live
-        ret                              ; nobody is listening; do not even
-                                         ; touch the chip
+        ; Poll even when nobody is listening, and throw the result away.
+        ;
+        ; This used to return here without touching the chip, on the
+        ; reasoning that an idle driver should cost nothing.  What it
+        ; actually costs is the adapter: with nothing draining it the
+        ; AX88179 keeps filling, and by the time a client opens a handle
+        ; the driver starts already behind and never catches up.  Closing
+        ; that gap by hand -- loading and opening a handle back to back
+        ; with no pause -- took frames delivered in a fifteen second run
+        ; from 2 to 18.
+        ;
+        ; An idle poll is a NAK and returns almost at once, so the price
+        ; is the couple of percent this driver already spends looking.
 rx_live:
-        ; Still hunting for a packet boundary from an earlier overrun?
-        ; Then that is all this tick does.
-        ;
-        ; The adapter can stream for a very long time without ever
-        ; sending a short packet -- ax179.pas records a capture of 55,680
-        ; bytes without one -- and until a boundary is found every read
-        ; lands in the middle of a transfer and nothing can be parsed.
-        ; 12 reads in one tick is nowhere near enough to catch up, so the
-        ; hunt is spread over as many ticks as it takes.  Four reads a
-        ; tick keeps the interrupt short; 300 ticks of them is about 77KB
-        ; of runway, comfortably past the worst case ever measured.
-        cmp     word [rx_flush], 0
-        je      short rx_go
-        call    rx_drain
-        jnc     short rx_flushed         ; boundary found: back in step
-        dec     word [rx_flush]
-        ret
-rx_flushed:
-        mov     word [rx_flush], 0
-        ret
-
 rx_go:
-        ; A burst is collected ACROSS ticks, not within one.
+        ; One burst, start to finish, inside this one call -- exactly as
+        ; AxRxBurst does it, because that is the version that works.
         ;
-        ; This used to give up when the read budget ran out and throw the
-        ; partial burst away.  That is the worst of both worlds: the frames
-        ; already read are lost, AND the remainder is still sitting in the
-        ; chip, so the next tick starts mid-transfer and has to hunt for a
-        ; boundary.  On this machine a 64-byte read costs enough that the
-        ; budget ran out on nearly every burst, so nearly every burst was
-        ; discarded -- 1159 of them in eight seconds, two frames delivered.
+        ; This used to spread a burst over several ticks, saving the
+        ; position and carrying on next time.  It seemed the polite thing to
+        ; do from inside an interrupt, and it is why the adapter wedged: it
+        ; puts 27ms and a return to the foreground in the MIDDLE of a USB
+        ; transfer, every time.  ax179.pas never does that, and AXTICK
+        ; settled the question -- it ran AxRxBurst itself from a hook on
+        ; INT 08h and got 9 bursts and 0 errors, so interrupt context was
+        ; never the problem.  Finishing what we start is.
         ;
-        ; There is no need to finish inside one tick.  The chip holds the
-        ; rest quite happily, so the position is saved and the next tick
-        ; carries on from it.  The interrupt stays short and no data is
-        ; thrown away.
+        ; So a NAK part-way through is waited out HERE rather than deferred.
+        ; A NAK does not end a bulk transfer -- only a short packet does --
+        ; and one comes back in microseconds, so the wait is cheap even
+        ; though the count looks large.
         push    cs
         pop     es
-        mov     bp, [rx_pos]             ; bytes carried over from last tick
         mov     di, rxbuf
-        add     di, bp
+        xor     bp, bp                   ; BP = bytes collected
         mov     dx, RX_BUDGET
+        mov     word [rx_naks], RX_NAKWAIT
 rx_loop:
         mov     cl, 64
         call    bulk_in
@@ -985,63 +984,49 @@ rx_loop:
         or      bp, bp
         je      short rx_done            ; nothing in hand: the wire is idle,
                                          ; which is the usual answer
-        ; Mid-burst.  A NAK does not end a USB bulk transfer -- only a SHORT
-        ; packet does -- it just means 'not ready yet'.  So keep what we have
-        ; and ask again on the next tick rather than sitting here spinning
-        ; inside the interrupt.
         cmp     ah, INT_RET_NAK
         jne     short rx_wedged
-        mov     [rx_pos], bp
-        ret
+        dec     word [rx_naks]
+        jnz     short rx_loop            ; not ready yet -- ask again
 
 rx_wedged:
-        ; A real error with a transfer half read.  This is the only case
-        ; that has to discard, because the chip is left somewhere unknown.
-        ;
-        ; Only a STALL gets CLEAR_FEATURE, which is what ax179.pas does
-        ; and all it does.  Clearing on every overflow -- a control
-        ; transfer issued from inside the timer interrupt, on an endpoint
-        ; with a bulk transfer still in flight -- was mine, not the
-        ; reference's, and there is no reason to believe the device
-        ; enjoys it.  AXRECV polls this adapter at the same 28ms and
-        ; never issues one, and never wedges.
+        ; Out of patience, or a real error, with a transfer half read.
+        ; Only a STALL gets CLEAR_FEATURE, which is what ax179.pas does and
+        ; all it does.
         inc     word [cs:n_flush]
         cmp     ah, INT_RET_STALL
         jne     short rx_wedged_go
         call    rx_unwedge
 rx_wedged_go:
-        mov     word [rx_flush], RX_FLUSHTICKS
-        mov     word [rx_pos], 0
+        call    rx_drain
         ret
 
 rx_got:
         xor     ah, ah
         add     bp, ax
+        mov     word [rx_naks], RX_NAKWAIT   ; progress: patience resets
         cmp     al, 64
         jb      short rx_have            ; short packet ends the transfer
         cmp     bp, RXBUF_SZ - 64
         jae     short rx_full            ; no room for another
         dec     dx
         jnz     short rx_loop
-        ; Budget spent and the transfer is still running.  Save where we are
-        ; and pick it up next tick.
-        mov     [rx_pos], bp
-        ret
 
 rx_full:
-        ; The buffer really is full and the transfer STILL has not ended.
-        ; Now there is no choice: drop it and hunt for the next boundary.
+        ; Out of room, or out of budget, with the transfer still running.
+        ; Read the rest and drop it: half a burst is worth nothing, and a
+        ; transfer left part-read is what poisons every burst after it.
         inc     word [cs:n_over]
-        inc     word [cs:n_flush]
-        mov     word [rx_flush], RX_FLUSHTICKS
-        mov     word [rx_pos], 0
+        call    rx_drain
+        xor     bp, bp
         ret
 
 rx_have:
-        mov     word [rx_pos], 0
         or      bp, bp
         je      short rx_done
         inc     word [n_bursts]
+        cmp     byte [n_handles], 0
+        je      short rx_done            ; drained, and nobody wants it
         mov     cx, bp
         call    rx_deliver
 rx_done:

@@ -6,6 +6,93 @@ Versions live in the `VER` constant of each program. Nothing here has been
 released; the project is in progress.
 
 
+## It works
+
+An IBM PS/2 Model 30 -- 8086, 1987 -- on the internet through a USB
+Ethernet adapter, driven by a CH375 on the ISA bus.
+
+```
+AXPKT /I=65
+Bringing the adapter up... link up.
+MAC address: 40:AE:30:6D:00:34
+Resident at vector 65h.
+```
+
+```
+ping 192.168.50.1     3/3    ttl=64     49.30 ms
+ping 8.8.8.8          3/3    ttl=118    49.30 ms
+ping google.com       3/3    ttl=106    55.25 ms   (resolved to 192.179.24.113)
+HTGET example.com     559 bytes of HTML
+NC test.rebex.net 21  220-Welcome to test.rebex.net!
+NC pocbbs...net 23    Net2BBS - Resolving your IP Address...
+```
+
+And the driver's own counters after all of that, which are the part worth
+looking at:
+
+```
+bursts collected                = 967
+frames delivered                = 154
+frames sent                     = 108
+frames nobody wanted            = 0
+bursts that made no sense       = 0
+reads with an impossible length = 0
+bursts too big for the buffer   = 0
+```
+
+### The last bug was one line, and it was an optimisation
+
+`rx_poll` opened with this:
+
+```
+cmp     byte [n_handles], 0
+jne     short rx_go
+ret                              ; nobody is listening; do not even
+                                 ; touch the chip
+```
+
+Perfectly reasonable, and completely wrong. Nothing is listening between
+the driver going resident and an application opening a handle -- and during
+that gap the AX88179 keeps receiving, with nobody draining it. By the time a
+client arrives the adapter is backed up, the driver starts already behind,
+and it never catches up: every read returns another full 64-byte packet,
+the transfer never ends, the buffer fills, the burst is discarded, and the
+next one starts mid-transfer. That is the whole of the "endless stream of
+FF" that took the previous four sessions.
+
+It now polls whether or not anyone is listening, and throws the result away
+if not. An idle poll is a NAK and returns almost at once, so it costs the
+couple of percent this driver already spent looking. Overflows in a
+ten-second run went from 182 to **0**, and the ARP reply that had never once
+come back arrived on the first try, three times out of three.
+
+The measurement that pointed at it was crude and worth remembering: loading
+the driver and opening a handle back to back in one batch file, with no
+pause between them, took frames delivered from 2 to 18. That was the whole
+clue.
+
+### What was eliminated to get there
+
+Worth listing, because each one cost an experiment and none of them was the
+answer:
+
+- **Polling rate.** `AXRECV` gained a `/D=ms` switch and ran at 28 ms
+  between polls, exactly AXPKT's rate: 20 bursts, 0 errors.
+- **Interrupt context.** `AXTICK` ran the reference `AxRxBurst` from a hook
+  on INT 08h: 9 bursts, 0 errors, 0 overruns.
+- **The receive filter.** `RX_CTL_PROMISC` set as a probe changed nothing.
+- **Transmit.** A listen-only run from fresh power wedged just the same.
+- **Read pacing.** Extra settling inside the payload loop changed nothing.
+- **The bring-up path.** AXPROBE's Pascal bring-up and AXPKT's own assembly
+  one both wedged identically.
+- **Aggregation size and timer.** Both were separately wrong and both were
+  fixed; neither was the cause.
+
+`AXTICK.EXE` is kept. It is the tool that killed the interrupt-context
+theory and it will be the right tool the next time something only goes
+wrong inside the ISR.
+
+
 ## AXPKT brings the adapter up on its own at last
 
 `AXPKT /I=65` with no `AXPROBE` in front of it:

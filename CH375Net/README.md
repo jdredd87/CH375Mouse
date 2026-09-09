@@ -91,15 +91,19 @@ SET MTCPCFG=c:\network\mtcp\mtcp.cfg
 
 `AXPKT /U` unloads it, `/S` reports counters, `/?` explains the rest.
 
-> **What does not work yet.** `AXPKT` transmits correctly — confirmed from
-> another machine, which learned this adapter's address from an ARP request
-> sent through it — and the frames it does receive parse correctly. But
-> after the first frame or two the adapter starts returning full 64-byte
-> packets of `FF` and never sends a short packet again, and nothing
-> recovers it. Not the hardware: `AXRECV.EXE` reads the same adapter
-> minutes later with 0 errors. The one measured difference is polling rate
-> — `AXRECV` polls ~850 times a second, `AXPKT` 36 — and that is the next
-> thing to chase. Until then, `AXPROBE` + `AXRECV` is the pair that works.
+Verified end to end on the hardware, from one command:
+
+```
+ping 192.168.50.1     3/3    ttl=64
+ping 8.8.8.8          3/3    ttl=118
+ping google.com       3/3    ttl=106     (DNS)
+HTGET example.com     559 bytes of HTML
+NC test.rebex.net 21  220-Welcome to test.rebex.net!
+NC <a telnet BBS> 23  Net2BBS - Resolving your IP Address...
+```
+
+with the driver reporting 967 bursts, 154 frames delivered, 108 sent, and
+zero of every error counter it keeps.
 
 ### Testing it: use our tools, not mTCP
 
