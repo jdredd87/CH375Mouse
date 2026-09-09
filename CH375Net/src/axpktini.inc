@@ -1462,7 +1462,11 @@ pa_s4:
         mov     byte [op_giga], 1
         jmp     near pa_more
 pa_s5:
-        cmp     al, 'N'
+        ; /A, not /N: /N already means "do not hook the timer" and has
+        ; done since before this switch existed.  Taking a letter that is
+        ; already spoken for makes the old switch silently do something
+        ; else, which is a nasty way to break a documented option.
+        cmp     al, 'A'
         jne     short pa_s5n
         mov     byte [op_nobring], 1
         jmp     near pa_more
@@ -2167,6 +2171,8 @@ msg_help:
         db '            18.2*n Hz and it IS the latency: 1 leaves the', 13, 10
         db '            clock alone and answers in about 55ms', 13, 10
         db '       /T   check the adapter and STOP, installing nothing', 13, 10
+        db '       /A   take the adapter as it stands: skip the bring-up', 13, 10
+        db '            because AXPROBE or an earlier run already did it', 13, 10
         db '       /N   install but do not hook the timer: no packets are', 13, 10
         db '            collected, which tells an install fault from an', 13, 10
         db '            ISR one when both just look like a dead machine', 13, 10
@@ -2197,7 +2203,7 @@ msg_nomac:
         db 'The adapter did not return its MAC address.', 13, 10, '$'
 msg_mac:       db 'MAC address: $'
 msg_bringup:   db 'Bringing the adapter up...$'
-msg_nobring:   db 'Taking the adapter as it stands (/N).', 13, 10, '$'
+msg_nobring:   db 'Taking the adapter as it stands (/A).', 13, 10, '$'
 msg_buok:      db ' link up.', 13, 10, '$'
 msg_bufail:    db ' FAILED at step $'
 msg_bureg:     db ', register $'

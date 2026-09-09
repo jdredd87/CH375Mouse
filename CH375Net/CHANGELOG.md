@@ -38,7 +38,9 @@ was being handed 300 raw iterations: four hundred times too short.
 **A teardown that overwrote its own diagnostic**, so a failure at step 3
 reported a register the teardown had touched on the way out.
 
-Also: `/N` takes the adapter as it stands, `/U` unconfigures the device
+Also: `/A` takes the adapter as it stands (`/N` was already taken -- it
+means "do not hook the timer", and binding a second meaning to it made a
+documented switch silently do something else), `/U` unconfigures the device
 before releasing memory, and the failure message now names the real cause
 of the common step-23 failure and the only thing that actually fixes it.
 

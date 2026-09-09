@@ -122,9 +122,10 @@ visible now that one program does the whole job.
 
 All take `/?`. `/P=hex` sets the CH375 I/O base (`@hex` for `AXPKT`).
 
-`AXPKT /N` skips the bring-up and takes the adapter as it stands, which is
+`AXPKT /A` skips the bring-up and takes the adapter as it stands, which is
 the old two-program arrangement and still the way to tell a fault in the
-bring-up apart from a fault in the driver.
+bring-up apart from a fault in the driver.  (`/N` is a different switch and
+always has been: install the vector but do not hook the timer.)
 
 ## Transmit, proved the only way that counts
 
