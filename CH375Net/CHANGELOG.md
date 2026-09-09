@@ -6,6 +6,44 @@ Versions live in the `VER` constant of each program. Nothing here has been
 released; the project is in progress.
 
 
+## Latency measured properly, and it was never 50 ms
+
+`AXNET` grew `/N=count`: it sends an ARP, waits for the answer, repeats, and
+divides the elapsed BIOS ticks by the count. One exchange is far shorter
+than the 55 ms tick, so a single timing is meaningless and a few hundred is
+not.
+
+That was worth building, because mTCP's `PING` reports about 50 ms over this
+adapter *at every poll rate*, and I spent a while hunting a fixed 46 ms
+delay on the strength of it. The AX88179's aggregation timer was the prime
+suspect -- the adapter holds a part-full burst until it expires -- so `/Q=n`
+was added to sweep it. `/Q=2` and `/Q=128` measure identically. Not that.
+
+Timed honestly, there is no anomaly to explain:
+
+```
+            /R=1    /R=4    /R=8   /R=16    NE2000
+round trip  ~55ms    13ms     6ms     6ms      1ms
+```
+
+It tracks the poll interval and floors at 6 ms. mTCP's 50 ms is its own
+timing granularity. **Measure a driver with something that is not the thing
+you are trying to measure through.**
+
+**`/R` now defaults to 8** rather than 4. Throughput stops improving after
+4, but latency does not, and latency is what a telnet session or a BBS
+feels -- which is most of what this machine does. It fits because bursts are
+1 KB: 17 reads at about 5.3 µs a byte is 5.7 ms inside a 6.9 ms tick.
+
+Verified at the new default: 6 ms round trip over 200 exchanges with none
+lost, three boots (two warm, one cold) all coming up at 6-7 ms, 1 MB and
+5 MB fetched and CRC-32'd on the box (`04D0E435`, `BDBF684D`) both exact,
+every error counter zero, and `TICKCHK` showing INT 08h at 145 Hz with
+INT 1Ch still at 18 Hz so DOS timekeeping is untouched.
+
+`/Q` is kept. It is a real knob and now a documented dead end.
+
+
 ## Twice as fast, and a measurement I had to withdraw
 
 1 MB now takes 36s where it took 73s. The ISA NE2000 in the same machine

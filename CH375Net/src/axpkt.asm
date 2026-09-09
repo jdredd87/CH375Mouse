@@ -258,7 +258,19 @@ cfg_val:    db  1
 ; PIT runs fast, and the handler that was in the vector before us is called
 ; only every nth tick, so the BIOS clock and everything hooked in ahead of
 ; us still see 18.2 Hz.
-; 4 -- 72.8 Hz, and it is worth four times the throughput.
+; 8 -- 145.6 Hz.  Throughput stops improving at 4, but LATENCY does not:
+; timed with AXNET /N=200, which does the round trip itself rather than
+; believing mTCP about it,
+;
+;     /R=1  ~55ms   /R=4  13ms   /R=8  6ms   /R=16  6ms   NE2000 1ms
+;
+; 6ms is the floor, so 8 buys everything 16 would and asks less of the
+; interrupt.  Latency is what a BBS session or a telnet feels, and this
+; machine spends most of its time doing exactly that.
+;
+; It fits because bursts are 1 KB: 17 reads at about 5.3us a byte is
+; 5.7ms inside a 6.9ms tick.  Raise AxBulkSize and that stops being
+; true -- the two constants are related and neither travels alone.
 ;
 ; This was 1 on the strength of a measurement that turned out to be
 ; worthless: the rate looked to make no difference, but the test wrote
@@ -275,7 +287,7 @@ cfg_val:    db  1
 ; Latency is about 50ms at every setting and always has been -- but
 ; the 480ms outliers /R=4 used to produce are gone, because the read
 ; loop no longer costs what it did.
-tick_n:     db  4
+tick_n:     db  8
 tick_ctr:   db  0
 pit_fast_on: db 0                ; did we actually change the timer
 

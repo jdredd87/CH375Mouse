@@ -22,6 +22,10 @@ program axnet;
       /I=hex      vector, default 65
       /T=a.b.c.d  ARP for this address and wait for the answer
       /S=secs     how long to wait or listen, default 5
+      /N=count    repeat the ARP this many times and report the
+                  average round trip.  One exchange is far shorter
+                  than the 55ms BIOS tick, so the only honest way
+                  to time it is to do a lot of them.
       /L          listen instead: show every frame that arrives
       /R          listen AND answer: reply to ARP for /M, and to pings.
                   With this running the adapter is pingable from another
@@ -54,6 +58,7 @@ var
   Target:  TIp;
   HaveMy:  Boolean = False;
   HaveTgt: Boolean = False;
+  Reps:    Word    = 1;
   Listen:  Boolean = False;
   Dump:    Boolean = False;
   Respond: Boolean = False;
@@ -68,6 +73,7 @@ begin
   WriteLn('  /I=hex      vector, default 65');
   WriteLn('  /T=a.b.c.d  ARP for this address and wait for the answer');
   WriteLn('  /S=secs     how long to wait or listen, default 5');
+  WriteLn('  /N=count    repeat and report the average round trip');
   WriteLn('  /L          listen: show every frame that arrives');
   WriteLn('  /R          listen and answer ARP and pings for /M');
   WriteLn('  /X          hex-dump each frame too');
@@ -100,6 +106,11 @@ begin
       begin
         Val('$' + R, V, Code);
         if Code = 0 then Vec := Byte(V);
+      end
+      else if K = '/N=' then
+      begin
+        Val(R, V, Code);
+        if Code = 0 then Reps := Word(V);
       end
       else if K = '/S=' then
       begin
@@ -257,6 +268,8 @@ var
   Frames:   LongInt;
   Answered: Boolean;
   Sender:   TMac;
+  T0, T1:   LongInt;
+  Done, Lost: Word;
   I:        Integer;
 
 begin
@@ -340,6 +353,36 @@ begin
   else
   begin
     BuildArp;
+    if Reps > 1 then
+    begin
+      { Timing our own round trip, because mTCP's ping says about 50ms over
+        this adapter and 4ms over the NE2000, and that number decides where
+        to look next.  One exchange is far below the 55ms tick, so time a
+        few hundred and divide. }
+      WriteLn('Timing ', Reps, ' ARP round trips to ', IpStr(Target), '...');
+      T0 := Ticks;
+      Done := 0;
+      Lost := 0;
+      for I := 1 to Reps do
+      begin
+        PktSend(Tx, 60);
+        Answered := False;
+        Deadline := Ticks + 18;          { a second is generous }
+        while (Ticks < Deadline) and not Answered do
+          if PktPoll(Rx, SizeOf(Rx), Got) then
+            if IsOurReply(Rx, Got) then Answered := True;
+        if Answered then Inc(Done) else Inc(Lost);
+      end;
+      T1 := Ticks;
+      WriteLn('  answered   : ', Done, ' of ', Reps, '   lost ', Lost);
+      WriteLn('  elapsed    : ', T1 - T0, ' BIOS ticks');
+      if Done > 0 then
+        WriteLn('  round trip : ', ((T1 - T0) * 549) div (LongInt(Done) * 10),
+                ' ms average');
+      PktClose;
+      if Done = 0 then Halt(3);
+      Halt(0);
+    end;
     WriteLn('ARP who-has ', IpStr(Target), '?');
     { 60 bytes, not 42: an Ethernet frame is padded to the minimum and some
       drivers will not do it for you. }

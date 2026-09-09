@@ -1237,7 +1237,8 @@ __buv4:
         ; produces the SHORT packet that ends a USB transfer.  Get it
         ; wrong and the transfer simply never ends -- which is exactly
         ; the symptom: full 64-byte packets for ever and no boundary.
-        mov     [cs:bu_data+1], byte 0x80        ; timer low
+        mov     al, [cs:op_qtimer]               ; timer low, /Q sets it
+        mov     [cs:bu_data+1], al
         mov     [cs:bu_data+2], byte 0x00        ; timer high
         mov     [cs:bu_data+3], byte 0x01        ; burst size, in KB, and
                                          ; it must be SMALLER than rxbuf
@@ -1515,6 +1516,14 @@ op_help:    db 0
 op_giga:    db 0
 op_test:    db 0
 
+; /Q -- the AX88179's bulk-in aggregation timer, low byte, decimal.
+; The adapter holds a part-full burst until this expires, so it sets a
+; floor under the latency of every single frame that arrives on a quiet
+; link.  ax179.pas uses 80h and so did this; whether that is the right
+; number for a machine that drains 64 bytes at a time is a separate
+; question from whether it is the right number for Linux.
+op_qtimer:  db 0x80
+
 ; /N -- take the adapter as it stands instead of bringing it up.  This is
 ; the old two-program arrangement, where AXPROBE did the bring-up and this
 ; program only went resident over the top of it.  Worth keeping: it is the
@@ -1610,6 +1619,12 @@ pa_s5n:
 pa_r_done:
         jmp     near pa_more
 pa_s5r:
+        cmp     al, 'Q'
+        jne     short pa_s5q
+        call    pa_decnum
+        mov     [op_qtimer], al
+        jmp     near pa_more
+pa_s5q:
         cmp     al, 'T'
         jne     short pa_s6
         mov     byte [op_test], 1

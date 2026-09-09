@@ -167,12 +167,31 @@ safe on an 8086 because `IN`+`STOSB`+`LOOP` already leaves ~5 µs between
 reads, far more than the chip asks for. On a faster machine it would want
 the delay back.
 
-`/R` now defaults to **4**. `/R=8` ties on throughput but its 6.9 ms tick
-cannot hold a full 31-read burst; 4 gives a 13.7 ms tick that can.
+**Latency needs its own measurement, and mTCP is not it.** `PING` reports
+about 50 ms over this adapter at every setting, which sent me looking for a
+fixed 46 ms delay that does not exist. `AXNET /N=200` does the round trip
+itself and divides by the count, which is the only honest way to time
+something far shorter than the 55 ms BIOS tick:
 
-Latency is about 50 ms at every setting and always was — but the 480 ms
-outliers `/R=4` used to throw are gone, because the interrupt no longer
-costs what it did.
+| | `/R=1` | `/R=4` | `/R=8` | `/R=16` | NE2000 |
+|---|---|---|---|---|---|
+| round trip | ~55 ms | 13 ms | **6 ms** | 6 ms | 1 ms |
+
+The real figure tracks the poll interval and floors at 6 ms. mTCP's 50 ms is
+its own timing granularity, not the wire.
+
+So `/R` defaults to **8**. Throughput stops improving after 4, but latency
+does not, and latency is what a telnet or a BBS session actually feels.
+`/R=16` buys nothing over 8 and asks more of the interrupt.
+
+It fits because bursts are 1 KB: 17 reads at ~5.3 µs a byte is 5.7 ms inside
+a 6.9 ms tick. Raise `AxBulkSize` and that stops being true — the two
+constants are related and neither travels alone.
+
+`/Q=n` sets the AX88179's bulk-in aggregation timer (default 128), which
+decides how long the adapter holds a part-full burst. It was a suspect for
+the latency and is not: 2 and 128 measure the same. The switch is kept
+because it is a real knob and now a documented dead end.
 
 `TICKCHK` confirms the timer stays honest: INT 08h at 72 Hz, INT 1Ch at
 18 Hz. DOS timekeeping is unaffected. Anything that hooks INT 08h *after*
