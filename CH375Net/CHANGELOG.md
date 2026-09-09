@@ -2,8 +2,32 @@
 
 CH375Net -- StevenC -- https://github.com/jdredd87/CH375USBTools
 
-Versions live in the `VER` constant of each program. Nothing here has been
-released; the project is in progress.
+Versions live in the `VER` constant of each program.
+
+## 1.0.0 — it works, and a stranger can install it
+
+The whole suite goes to 1.0.0 together. `AXPKT` had been sitting at 0.1.0
+while it grew into something that enumerates the device, brings the adapter
+up, goes resident, survives a boot and moves ten megabytes without an error.
+The version had stopped describing it.
+
+- `AXPKT` 0.1.0 → **1.0.0**
+- `AXPROBE` 0.2.0 → **1.0.0**
+- `AXRECV` 0.1.0 → **1.0.0**
+- `AXSEND` 0.1.0 → **1.0.0**
+- `NETID`, `PKTSCAN`, `AXNET`, `AXTICK` already 1.0.0
+
+**[INSTALL.md](INSTALL.md) is new** and is the front door: what hardware you
+need, four steps, how to load it at boot safely, and what to do when it does
+not work. Written for somebody who has never seen this project — the test
+being whether it reads as *one command like `NE2000.COM`*, because that is
+what it now is.
+
+The README has grown into a 750-line engineering notebook. That content is
+worth keeping and is not what a new reader wants first, so it now says so
+and points at the install guide.
+
+Everything below this line is that notebook, newest first.
 
 
 ## Suite regression pass, and AXSEND stops guessing

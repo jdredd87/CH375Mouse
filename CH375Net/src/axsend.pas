@@ -40,7 +40,7 @@ program axsend;
 uses ch375, chtool, ax179;
 
 const
-  VER   = '0.1.0';
+  VER   = '1.0.0';
   BUFSZ = 16384;
 
   ETH_ARP = $0806;

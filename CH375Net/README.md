@@ -24,11 +24,34 @@ CH375 ISA card. Bring-up, link negotiation, receive, transmit and a Crynwr
 packet driver, all working, with the machine's own network at INT 60h
 untouched throughout.
 
-The ~50 ms is almost entirely the driver's own poll interval, not the
-internet. The ISR collects on the 18.2 Hz timer, so a reply waits up to
-55 ms before anyone looks at it — which is why the gateway, one hop away,
-and Google, a dozen hops away, both answer in about the same time. The wire
-is not the slow part; we are.
+That ~50 ms is mTCP's own timing granularity rather than the wire — timed
+properly with `AXNET /N=200` the round trip is **6 ms**. Which is a
+reasonable illustration of this project generally: most of what looked wrong
+turned out to be the instrument.
+
+---
+
+## Start here
+
+**[INSTALL.md](INSTALL.md)** — how to actually use this. It is short.
+
+The whole of it, if you have used a packet driver before:
+
+```
+C:\CH375> AXPKT              <- one command, like NE2000.COM
+C:\CH375> (mtcp.cfg: packetint 0x65)
+C:\CH375> PING 8.8.8.8
+```
+
+Nothing to add to `CONFIG.SYS`, nothing to configure. `AXPKT` enumerates the
+device over the CH375, brings the AX88179 up, and goes resident. `AXPKT /U`
+unloads it again.
+
+The rest of this file is the engineering: what was measured, what was tried
+and thrown away, and why the code looks the way it does. It is a notebook,
+not a manual.
+
+---
 
 A USB-to-RJ45 adapter, an ISA card from a different decade, and an IBM PS/2
 Model 30 with an 8086 in it. The question this project answers is whether a

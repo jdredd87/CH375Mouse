@@ -153,8 +153,17 @@ begin
   WriteLn;
   if Id.Supported then
   begin
-    WriteLn('SUPPORTED.  AXPROBE brings it up, AXPKT loads the packet');
-    WriteLn('driver, and mTCP runs over that.');
+    { AXPROBE used to be named here as a prerequisite.  It is not one:
+      AXPKT enumerates and brings the adapter up itself.  Saying
+      otherwise sent people through two commands where one does, and
+      running AXPROBE first actively gets in the way -- it leaves the
+      device enumerated, which is the state AXPKT then has to fight. }
+    WriteLn('SUPPORTED.  Run AXPKT and point mTCP at it:');
+    WriteLn;
+    WriteLn('    AXPKT                       (loads on vector 65h)');
+    WriteLn('    packetint 0x65              (one line in your mTCP config)');
+    WriteLn;
+    WriteLn('AXPKT needs nothing run before it.  See INSTALL.md.');
     Halt(0);
   end;
 

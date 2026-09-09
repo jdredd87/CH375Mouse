@@ -46,7 +46,7 @@ program axrecv;
 uses ch375, chtool, ax179;
 
 const
-  VER    = '0.1.0';
+  VER    = '1.0.0';
   { Linux gives this chip a 20 KB receive buffer.  It aggregates whether
     or not the queue-control register is zeroed -- the first run of this
     program filled a 2 KB buffer solidly and the trailer it then read was

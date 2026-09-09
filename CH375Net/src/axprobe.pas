@@ -39,7 +39,7 @@ program axprobe;
 uses ch375, chtool, ax179;
 
 const
-  VER = '0.2.0';
+  VER = '1.0.0';
 
 var
   Giga:   Boolean = False;
