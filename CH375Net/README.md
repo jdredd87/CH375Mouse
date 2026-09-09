@@ -139,8 +139,10 @@ against the source:
 | 512 KB | `9EBAF22E` | exact |
 | 1 MB | `04D0E435` | exact |
 | 5 MB | `BDBF684D` | exact |
+| 10 MB | `2B11D791` | exact |
 
-On the 5 MB run that is 5,684 frames delivered and 4,442 sent, with every
+The 10 MB run is 18,439 bursts collected, 15,858 frames delivered and 11,977
+sent -- call it twenty-eight thousand frames through an 8086 -- with every
 one of the driver's error counters still at zero afterwards: no nonsense
 bursts, no impossible lengths, no overflows, no toggle rescues.
 

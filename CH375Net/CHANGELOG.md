@@ -11,17 +11,23 @@ released; the project is in progress.
 Everything up to here had been small packets -- pings, a 559-byte page,
 protocol banners -- which is not evidence that a receive path works.
 
-512 KB fetched over HTTP from a server on the LAN, written to disk on the
-DOS box, pulled back and compared: **byte for byte identical**, CRC-32
-`9EBAF22E`. 64 KB before it, also exact. The driver's counters afterwards:
+Fetched over HTTP onto the DOS box and checksummed there with `HD.EXE`
+against the source -- 64 KB `8156EC0D`, 512 KB `9EBAF22E`, 1 MB `04D0E435`,
+5 MB `BDBF684D`, 10 MB `2B11D791`. **Every one exact.**
+
+The 10 MB run:
 
 ```
-bursts collected 1569   frames delivered 540   frames sent 412
+bursts collected 18439   frames delivered 15858   frames sent 11977
 bursts that made no sense       = 0
 reads with an impossible length = 0
 bursts too big for the buffer   = 0
 reads rescued by flipping toggle= 0
 ```
+
+Twenty-eight thousand frames through an 8086 without a single counted
+error. Verifying on the box rather than pulling the file back matters above
+about half a megabyte: a megabyte does not fit in one bridge job.
 
 Throughput is about 18 KB/s and the poll rate does not change it: 39s at
 `/R=1`, 39s at `/R=2`, 37s at `/R=4`. Nor does it change latency. Both were
