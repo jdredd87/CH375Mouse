@@ -91,6 +91,14 @@ SET MTCPCFG=c:\network\mtcp\mtcp.cfg
 
 `AXPKT /U` unloads it, `/S` reports counters, `/?` explains the rest.
 
+> **What does not work yet.** `AXPKT` brings the adapter up and sends, but
+> the bulk endpoint does not read back as frames: `/S` reports nearly every
+> burst rejected, 1536 bytes of a repeating four-byte pattern. This is not
+> the hardware — `AXRECV.EXE` reads the same adapter on the same machine
+> with 0 errors and every layout check passing. The fault is in `rx_poll`
+> in `axpkt.asm`, and `AXRECV` is the reference to diff it against. Until
+> that is fixed, `AXPROBE` + `AXRECV` is the pair that works.
+
 ### One thing to know first
 
 **Run `AXPKT` before `NETID` or `AXPROBE`, not after.** Those two enumerate
@@ -283,7 +291,12 @@ So the rules for anything in this project that goes resident:
    loads at boot, so a hard reset always comes back with working
    networking — *provided `AUTOEXEC.BAT` is never touched.*
 2. **Never add anything from this project to `AUTOEXEC.BAT`.** A TSR that
-   hangs at boot is not recoverable remotely at any price.
+   hangs at boot is not recoverable remotely at any price. This was tried
+   anyway on 2026-09-09, with an `IF ERRORLEVEL` fallback that was supposed
+   to make it safe. On four boots out of five, cold power cycles included,
+   `AXPROBE` hung before the machine became reachable — and a hang sets no
+   errorlevel, so the fallback never ran. Every recovery needed the power
+   switch. The rule stands, and now it is measured rather than assumed.
 3. **Never install on INT 60h.** `PKTSCAN` says what is free; on this
    machine that is `61-66`, `68-6C`, `6E-6F` and `78-7E`. The driver here
    defaults to **65h** and refuses 60h outright.

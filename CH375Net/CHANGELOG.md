@@ -6,6 +6,75 @@ Versions live in the `VER` constant of each program. Nothing here has been
 released; the project is in progress.
 
 
+## The MAC read had to let the chip absorb NAKs
+
+`AXPKT /A` — take the adapter exactly as `AXPROBE` left it — failed on its
+very first act, reading the MAC, on hardware `AXPROBE` had finished with
+seconds earlier:
+
+```
+Taking the adapter as it stands (/A).
+The adapter did not return its MAC address.
+Chip status on the last try: 2A
+```
+
+`2A` is `INT_RET_NAK`: the device is awake and saying "not now". `read_mac`
+set retry to `00` — report a NAK rather than retry it — which is right for
+polling an idle endpoint and wrong for a control transfer, as the comment
+above `set_retry` in this very file already said. It now sets `8F` for the
+transfer and puts it back to `00` on every exit, so nothing is left retrying
+in the background for the next program to trip over. That is the whole fix,
+and `/A` has been reliable since.
+
+Three things found alongside it:
+
+**`ctrl_in` never recorded the chip status.** `bu_st` held whatever the last
+high-level command had put there, so `read_mac`'s "only a stall needs
+clearing" test — and every error message — was reading a status belonging to
+an unrelated operation. There is now a `ch_waitst` wrapper that records it,
+with `FF` for no interrupt at all. Until this was fixed no failure in a
+control transfer could be diagnosed at all, which is why the NAK above went
+unseen for so long.
+
+**`delay_ticks 1` guarantees nothing.** It waits for the BIOS counter to
+*change*, so `1` is anywhere from 0 to 55 ms depending on where in the tick
+you arrive; `n` guarantees `n-1` whole ticks. The 20 ms the AX88179 needs
+between the two PHY reset writes was sometimes not happening at all. Callers
+now pass `n+1` and the routine's comment says so.
+
+**A comment here was simply wrong.** The entry below says "the Pascal
+bring-up clears a stall only after one happens". It does not: `Setup8` in
+`ch375.pas` opens *every* control transfer, in and out, with `ClrStall(0)`.
+The claim had never been checked against the source it described. The clear
+is back where the reference has it.
+
+### Still broken: the receive path
+
+`AXPKT` brings the adapter up and sends, but what comes back off the bulk
+endpoint is not frames. A cold boot, a clean `AXPROBE`, `/A` loading and
+reading the MAC, and then 521 of 522 bursts rejected, each 1536 bytes of a
+repeating four-byte pattern.
+
+It is not the hardware and it is not the adapter. `AXRECV.EXE` — the Pascal
+receiver — was run on the same machine minutes later and read 20 bursts, 20
+frames, 4104 bytes, 0 errors, layout checks all passing. The fault is in
+`rx_poll` in `axpkt.asm`, and `AXRECV` is the working reference to diff it
+against.
+
+### AXPROBE can hang the machine, so nothing USB belongs in AUTOEXEC.BAT
+
+Loading the adapter from `AUTOEXEC.BAT` was tried and has been taken out
+again. On four boots out of five — cold power cycles included — `AXPROBE`
+hung outright, before the point where the machine becomes reachable over the
+network. A hang is not something `IF ERRORLEVEL` can catch, so the fallback
+that was supposed to make this safe never ran. Recovering needed the power
+switch each time, and on a machine administered remotely that is the one
+failure mode worth designing against.
+
+`NET.BAT` from the prompt costs a power cycle at worst. That is where this
+stays until the bring-up cannot hang.
+
+
 ## AXPKT does the whole job
 
 `AXPKT.COM` now enumerates the device and brings the adapter up itself, so

@@ -82,6 +82,23 @@ set_retry:                               ; AL = the retry byte
         call    ch_wr
         ret
 
+;--------------------------------------------------------------------------
+; ch_wait, recording what came back.  ctrl_in used to leave bu_st holding
+; whatever the last high-level command had put there, so both the failure
+; message and read_mac's "only a stall needs clearing" test were reading a
+; status belonging to an unrelated operation.  FF means no interrupt at all.
+;--------------------------------------------------------------------------
+ch_waitst:
+        call    ch_wait
+        jc      short cws_none
+        mov     [cs:bu_st], al
+        clc
+        ret
+cws_none:
+        mov     byte [cs:bu_st], 0xFF
+        stc
+        ret
+
 ; --------------------------------------------------------------------------
 ; A control transfer with an IN data stage.  DS:SI -> 8 setup bytes,
 ; ES:DI -> where the data goes, BL = how many bytes are wanted.
@@ -89,20 +106,20 @@ set_retry:                               ; AL = the retry byte
 ; --------------------------------------------------------------------------
 ctrl_in:
         push    bp
-        ; NO clr_ep0 here, and that is deliberate.
+        ; clr_ep0 before the SETUP, because that is what the reference
+        ; does.  Setup8 in ch375.pas opens with ClrStall(0) on EVERY
+        ; control transfer, in and out alike.
         ;
-        ; CMD_CLR_STALL is not a local chip operation: the CH375 issues a
-        ; real CLEAR_FEATURE(ENDPOINT_HALT) transfer to the device.  Doing
-        ; that before every register access doubles the control traffic and
-        ; leaves the device busy when the write it was clearing the way for
-        ; arrives -- so the write gets a NAK.  That is the whole story
-        ; behind a bring-up that failed at step 7, then step 9, then step 3,
-        ; always with status 2A, always blaming whichever register happened
-        ; to be next.
-        ;
-        ; The Pascal bring-up clears a stall only after one actually
-        ; happens, and never NAKs.  This now does the same: see the failure
-        ; paths below and the retry wrappers.
+        ; This used to say the opposite -- that the Pascal clears only
+        ; after a stall actually happens, and that clearing up front was
+        ; what caused a bring-up to fail at step 7, then 9, then 3, always
+        ; with status 2A.  The claim about the Pascal was simply wrong; it
+        ; had never been checked against Setup8.  Taking the clear out did
+        ; make that particular run go further, which is what made the
+        ; mistake stick, but it left AXPKT unable to read the MAC at all
+        ; from a device AXPROBE had just finished talking to: NAK, 2A,
+        ; every time, twenty tries 10 ms apart.
+        call    clr_ep0
         mov     al, CMD_WR_USB_DATA7
         call    ch_cmd
         mov     al, 8
@@ -122,7 +139,7 @@ ci_setup:
         mov     al, PID_SETUP
         call    ch_wr
         mov     cx, 0xFFFF
-        call    ch_wait
+        call    ch_waitst
         pushf
         push    ax
         mov     al, 'S'
@@ -154,7 +171,7 @@ ci_data:
         mov     al, PID_IN
         call    ch_wr
         mov     cx, 0xFFFF
-        call    ch_wait
+        call    ch_waitst
         pushf
         push    ax
         mov     al, 'I'
@@ -202,7 +219,7 @@ ci_status:
         mov     al, PID_OUT
         call    ch_wr
         mov     cx, 0xFFFF
-        call    ch_wait
+        call    ch_waitst
         pop     bp
         clc
         ret
@@ -240,12 +257,16 @@ read_mac:
         ; which is a far more confusing thing to debug.
         ;
         ; With 00 the chip answers immediately and is idle between tries,
-        ; so eight attempts here cost the same patience and leave nothing
-        ; outstanding when they run out.  Every attempt starts with
-        ; clr_ep0 inside ctrl_in, which resets the endpoint toggle.
-        xor     al, al
+        ; so twenty attempts, 10 ms apart, cost the same patience and
+        ; leave nothing outstanding when they run out.
+        ; 8F -- let the CHIP absorb the NAKs.  A device that is busy
+        ; answers NAK, and with 00 that is reported as a failed transfer,
+        ; which is what 'did not return its MAC address, status 2A' was.
+        ; Set back to 00 on every exit below, so nothing is left retrying
+        ; in the background for the next program to trip over.
+        mov     al, 0x8F
         call    set_retry
-        mov     bp, 8
+        mov     bp, 20
 rm_try:
         push    cs
         pop     es
@@ -262,15 +283,29 @@ rm_again:
         jne     short rm_next
         call    clr_ep0
 rm_next:
+        ; Wait before trying again, which this did not do.  With retry
+        ; set to 00 a NAK comes back immediately, so eight attempts back
+        ; to back took microseconds and asked a busy device the same
+        ; question eight times in the time it needed to answer once.
+        ; That is the whole of 'the adapter did not return its MAC
+        ; address' after a clean AXPROBE: status 2A, a NAK, every time.
+        ; ctrl_out_r and ctrl_in_r have always paused here; this had
+        ; simply been missed.
+        mov     cx, 10
+        call    delay_ms
         dec     bp
         jnz     short rm_try
 
-        ; Out of tries.  Leave the endpoint clear so whatever runs next
-        ; opens a quiet chip.
+        ; Out of tries.  Back to 00 and leave the endpoint clear, so
+        ; whatever runs next opens a quiet chip with nothing in flight.
+        xor     al, al
+        call    set_retry
         call    clr_ep0
         stc
         ret
 rm_good:
+        xor     al, al
+        call    set_retry
         clc
         ret
 
@@ -755,20 +790,10 @@ ue_bad:
 
 ; DS:SI -> 8 setup bytes, ES:DI -> data to send, BL = how many (0 = none).
 ctrl_out_n:
-        ; NO clr_ep0 here, and that is deliberate.
-        ;
-        ; CMD_CLR_STALL is not a local chip operation: the CH375 issues a
-        ; real CLEAR_FEATURE(ENDPOINT_HALT) transfer to the device.  Doing
-        ; that before every register access doubles the control traffic and
-        ; leaves the device busy when the write it was clearing the way for
-        ; arrives -- so the write gets a NAK.  That is the whole story
-        ; behind a bring-up that failed at step 7, then step 9, then step 3,
-        ; always with status 2A, always blaming whichever register happened
-        ; to be next.
-        ;
-        ; The Pascal bring-up clears a stall only after one actually
-        ; happens, and never NAKs.  This now does the same: see the failure
-        ; paths below and the retry wrappers.
+        ; clr_ep0 before the SETUP, matching Setup8 in ch375.pas, which
+        ; opens every control transfer with ClrStall(0).  See the longer
+        ; note in ctrl_in for why this was taken out and put back.
+        call    clr_ep0
         mov     al, CMD_WR_USB_DATA7
         call    ch_cmd
         mov     al, 8
@@ -1045,9 +1070,15 @@ apr_bad:
         stc
         ret
 
-; Wait AL BIOS ticks. Coarse -- a tick is 55 ms -- and deliberately so:
-; every delay in this sequence is a minimum the chip needs rather than a
-; maximum, and the PIT has not been touched yet at this point.
+; Wait for the BIOS tick counter to change AL times.  Coarse -- a tick is
+; 55 ms -- and deliberately so: every delay in this sequence is a minimum
+; the chip needs rather than a maximum, and the PIT has not been touched
+; yet at this point.
+;
+; Note what AL actually buys you.  The first change can come immediately,
+; so AL=1 guarantees NOTHING; AL=n guarantees n-1 whole ticks.  Callers
+; here pass n+1 for that reason.  Getting this wrong cost an evening of
+; intermittent step-2 failures.
 delay_ticks:
         push    ax
         push    bx
@@ -1117,7 +1148,15 @@ bu_enumok:
         jnc     short __buv1
         jmp     near bu_bad
 __buv1:
-        mov     al, 1
+        ; 2, not 1.  delay_ticks waits for the BIOS counter to CHANGE
+        ; that many times, so 1 is anything from 0 to 55 ms depending on
+        ; where in the tick we happened to arrive -- and on the short
+        ; draws the PHY had not seen the reset line low yet, so the write
+        ; below timed out: step 2, register 26, status 28, intermittently
+        ; and with nothing to show for it.  2 is the first value that is
+        ; a guaranteed minimum, and 55 ms comfortably covers the 20 ms
+        ; ax179.pas has always waited here.
+        mov     al, 2
         call    delay_ticks
 
         mov     byte [cs:bu_step], 2
@@ -1127,7 +1166,9 @@ __buv1:
         jnc     short __buv2
         jmp     near bu_bad
 __buv2:
-        mov     al, 4
+        ; 5 for at least 220 ms.  Before that the PHY is still coming out
+        ; of reset and answers MDIO with all ones.  4 guaranteed only 165.
+        mov     al, 5
         call    delay_ticks
 
         mov     byte [cs:bu_step], 3
@@ -1137,7 +1178,9 @@ __buv2:
         jnc     short __buv3
         jmp     near bu_bad
 __buv3:
-        mov     al, 2
+        ; 3 for at least 110 ms after the clock select, matching the 100
+        ; in ax179.pas.
+        mov     al, 3
         call    delay_ticks
 
         mov     byte [cs:bu_step], 4
@@ -1791,6 +1834,16 @@ init_chip:
         jnc     short init_gotmac
         mov     dx, msg_nomac
         call    puts
+        ; The status matters here.  2A is a NAK -- the device is awake
+        ; and busy; 20/24/28/2C are timeouts -- it is not answering at
+        ; all; 2E is a stall.  Without it this message says only that
+        ; something went wrong, which is where an evening went.
+        mov     dx, msg_macst
+        call    puts
+        mov     al, [bu_st]
+        call    puthex
+        mov     dx, msg_crlf
+        call    puts
         mov     al, 6
         jmp     near die
 init_dobring:
@@ -2236,6 +2289,8 @@ msg_nochip:
         db 'No CH375 answers at that address.  USBSCAN finds the card.', 13, 10, '$'
 msg_nomac:
         db 'The adapter did not return its MAC address.', 13, 10, '$'
+msg_macst:     db 'Chip status on the last try: $'
+msg_crlf:      db 13, 10, '$'
 msg_mac:       db 'MAC address: $'
 msg_bringup:   db 'Bringing the adapter up...$'
 msg_nobring:   db 'Taking the adapter as it stands (/A).', 13, 10, '$'
