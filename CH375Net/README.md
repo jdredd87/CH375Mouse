@@ -91,6 +91,49 @@ SET MTCPCFG=c:\network\mtcp\mtcp.cfg
 
 `AXPKT /U` unloads it, `/S` reports counters, `/?` explains the rest.
 
+### Loading it at boot
+
+This works now, and on the machine it was written for it is what
+`AUTOEXEC.BAT` does. One rule makes it safe:
+
+```
+IF EXIST C:\CH375\TRYING.FLG GOTO USBWEDGED
+ECHO trying > C:\CH375\TRYING.FLG
+C:\CH375\AXPKT.COM /I=65
+IF ERRORLEVEL 1 GOTO NOUSB
+DEL C:\CH375\TRYING.FLG
+SET MTCPCFG=C:\CH375\MTCPAX.CFG
+GOTO NETOK
+:USBWEDGED
+DEL C:\CH375\TRYING.FLG
+ECHO Last boot hung bringing the adapter up - skipped this time.
+GOTO NETOK
+:NOUSB
+IF EXIST C:\CH375\TRYING.FLG DEL C:\CH375\TRYING.FLG
+ECHO USB adapter did not come up - staying on the other card.
+:NETOK
+```
+
+`IF ERRORLEVEL` catches a bring-up that **fails**. Nothing catches one that
+**hangs** — and if the machine is administered over the network, a hang in
+`AUTOEXEC.BAT` happens before anything is listening, so it costs a walk to
+the keyboard. The flag is the answer: drop it before trying, delete it
+after, and a boot that finds it still there knows the last attempt never
+came back. Worst case becomes one power cycle.
+
+Do not put `AXPROBE` in `AUTOEXEC.BAT`. `AXPKT` needs it for nothing, and
+`AXPROBE` is what used to hang.
+
+Verified over eight consecutive boots — warm and cold — plus a deliberate
+test with the flag planted by hand, which correctly skipped the block and
+came up on the other card.
+
+**Latency, if you are tempted to tune it.** A ping over this is about 50 ms
+against 3 ms on an ISA NE2000 in the same machine, and raising the poll rate
+does not fix it: `/R=4` gives the same 46-51 ms plus occasional 480 ms
+outliers, because the interrupt then takes enough of the CPU to starve the
+stack. Leave `/R` alone.
+
 Verified end to end on the hardware, from one command:
 
 ```
