@@ -56,6 +56,12 @@ const
 
 var
   Secs:    Word    = 20;
+  { /D -- milliseconds to wait between polls, to imitate a driver that
+    can only look at the endpoint on a timer tick.  AXRECV normally
+    polls flat out, several hundred times a second, and never sees the
+    state AXPKT falls into.  This is here to answer whether that rate
+    is the reason or merely a coincidence. }
+  PollGap: Word    = 0;
   MaxN:    Word    = 20;
   DumpAll: Boolean = False;
   Promisc: Boolean = False;
@@ -235,6 +241,8 @@ begin
   WriteLn;
   HelpBaseLine;
   WriteLn('  /S=dec   how long to watch, default 20 seconds');
+  WriteLn('  /D=dec   ms between polls (default 0, flat out).  Imitates');
+  WriteLn('           a driver that can only poll on a timer tick.');
   WriteLn('  /N=dec   stop after this many bursts, default 20');
   WriteLn('  /A       accept everything: promiscuous and all multicast.');
   WriteLn('           Without it only broadcast and frames addressed to');
@@ -285,6 +293,7 @@ begin
       K := Copy(A, 1, 3); A := Copy(A, 4, 250);
       if      K = '/P=' then begin Val('$' + A, V, Code); if Code = 0 then Base := Word(V); end
       else if K = '/S=' then begin Val(A, V, Code); if Code = 0 then Secs := Word(V); end
+      else if K = '/D=' then begin Val(A, V, Code); if Code = 0 then PollGap := Word(V); end
       else if K = '/N=' then begin Val(A, V, Code); if Code = 0 then MaxN := Word(V); end
       else if K = '/B=' then begin Val('$' + A, V, Code); if Code = 0 then AxBulkSize := Byte(V); end
       else if K = '/C=' then begin Val('$' + A, V, Code); if Code = 0 then AxBulkCtrl := Byte(V); end;
@@ -372,6 +381,7 @@ begin
   while (Ticks < TEnd) and (Bursts < MaxN) do
   begin
     if KeyWaiting then begin EatKey; Break; end;
+    if PollGap > 0 then DelayMs(PollGap);
 
     St := AxRxBurst(Buf, BUFSZ, Len);
 

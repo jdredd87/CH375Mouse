@@ -26,9 +26,9 @@ INT_STALL        equ 0x2E
 ; next one is stalled by the device.  Control transfers then work every
 ; other time, which reads as a flaky device and is not one.
 ; --------------------------------------------------------------------------
-; AL = the endpoint ADDRESS, direction bit included: 82h for bulk IN on
-; endpoint 2, 03h for bulk OUT on 3.  Endpoint 0 has no direction and is
-; simply 0, which is what clr_ep0 below passes.
+; AL = the endpoint NUMBER.  Not the USB endpoint address -- no direction
+; bit -- because that is what the CH375 wants and what ch375.pas passes:
+; ClrStall(AX_EP_BULK_IN) with AX_EP_BULK_IN = 2.
 clr_ep:
         push    ax
         mov     al, CMD_CLR_STALL
@@ -914,6 +914,14 @@ save_st:    db 0
 ; --------------------------------------------------------------------------
 ctrl_out_r:
         push    bp
+        ; Let the CHIP absorb NAKs for the duration, and put it back to
+        ; 00 before returning.  A register access is a control transfer,
+        ; and a device that is busy answers NAK -- with the chip set to
+        ; report those rather than retry them, one NAK is a failed
+        ; transfer.  Same fix, same reason, as read_mac; the comment
+        ; above set_retry has said 'control transfers want 8F' all along.
+        mov     al, 0x8F
+        call    set_retry
         mov     bp, 12
 cor_try:
         push    si
@@ -940,6 +948,8 @@ cor_wait:
         dec     bp
         jnz     short cor_try
         call    clr_ep0
+        xor     al, al
+        call    set_retry
         pop     bp
         stc
         ret
@@ -957,12 +967,22 @@ cor_ok:
         ; slower again, so this is sized for the slower of the two.
         mov     cx, 5
         call    delay_ms
+        xor     al, al
+        call    set_retry
         pop     bp
         clc
         ret
 
 ctrl_in_r:
         push    bp
+        ; Let the CHIP absorb NAKs for the duration, and put it back to
+        ; 00 before returning.  A register access is a control transfer,
+        ; and a device that is busy answers NAK -- with the chip set to
+        ; report those rather than retry them, one NAK is a failed
+        ; transfer.  Same fix, same reason, as read_mac; the comment
+        ; above set_retry has said 'control transfers want 8F' all along.
+        mov     al, 0x8F
+        call    set_retry
         mov     bp, 8
 cir_try:
         push    si
@@ -989,10 +1009,14 @@ cir_wait:
         dec     bp
         jnz     short cir_try
         call    clr_ep0
+        xor     al, al
+        call    set_retry
         pop     bp
         stc
         ret
 cir_ok:
+        xor     al, al
+        call    set_retry
         pop     bp
         clc
         ret
@@ -1260,6 +1284,11 @@ __buv10:
         ; frame by two so an IP header lands aligned, which matters to a
         ; CPU that faults on unaligned access and not at all to an 8086.
         mov     al, AX_RX_CTL
+        ; Promiscuous was tried here as a probe on 2026-09-09, on the
+        ; theory that the missing ARP replies were being filtered out by
+        ; the adapter.  It changed nothing, so that is not the reason,
+        ; and it is the wrong default anyway: this machine cannot drain
+        ; the traffic it already asks for.  /R mode 6 still sets it.
         mov     bx, (RX_CTL_START | RX_CTL_ACCEPT_PHY | RX_CTL_BROADCAST | RX_CTL_DROP_CRC)
         call    ax_wr16
         jnc     short __buv11
@@ -1901,8 +1930,8 @@ init_gotmac:
         ; CLEAR_FEATURE(ENDPOINT_HALT) resets the toggle at BOTH ends,
         ; which is exactly the handshake needed to adopt an endpoint
         ; somebody else was already using.
-        mov     al, 0x80 | EP_BULK_IN
-        call    clr_ep
+        mov     al, EP_BULK_IN           ; the endpoint NUMBER -- ch375.pas
+        call    clr_ep                   ; passes 2, not 82h
         mov     al, EP_BULK_OUT
         call    clr_ep
         mov     byte [rx_tog], 0x80
@@ -2088,6 +2117,12 @@ stat_macskip:
         mov     dx, msg_s_over
         call    puts
         mov     ax, [es:n_over]
+        call    putdecw
+        call    crlf
+
+        mov     dx, msg_s_tog
+        call    puts
+        mov     ax, [es:n_toggle]
         call    putdecw
         call    crlf
 
@@ -2423,6 +2458,7 @@ msg_s_nohandle:db '  frames nobody wanted=$'
 msg_s_short:   db '  bursts that made no sense=$'
 msg_s_junk:    db '  reads with an impossible length=$'
 msg_s_over:    db '  bursts too big for the buffer=$'
+msg_s_tog:     db '  reads rescued by flipping the toggle=$'
 msg_s_rxst:    db '  last bulk IN: status $'
 msg_s_rxlen:   db ', length $'
 msg_s_sent:    db '  frames sent=$'

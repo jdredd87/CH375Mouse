@@ -132,6 +132,7 @@ INT_CONNECT      equ 0x15
 INT_DISCONNECT   equ 0x16
 INT_RET_NAK      equ 0x2A
 INT_RET_STALL    equ 0x2E
+INT_RET_TOGGLE   equ 0x2B         ; the device sent the other DATAx
 
 PID_OUT          equ 0x01
 PID_IN           equ 0x09
@@ -309,6 +310,8 @@ n_nohandle: dw  0
 n_junk:     dw  0            ; reads the chip claimed were impossibly long
 n_over:     dw  0            ; bursts bigger than the buffer, drained
 rx_naks:    dw  0
+bi_flip:    db  0            ; already retried this read with the other PID
+n_toggle:   dw  0            ; reads recovered by flipping the toggle
 rx_pos:     dw  0            ; bytes of a part-read burst carried between
                              ; ticks -- see rx_go
 rx_flush:   dw  0            ; ticks left hunting for a packet boundary
@@ -454,6 +457,8 @@ ch_read_over:
 ; anything but success.
 ; --------------------------------------------------------------------------
 bulk_in:
+        mov     byte [cs:bi_flip], 0
+bulk_in_go:
         mov     al, CMD_SET_ENDP6
         call    ch_cmd
         mov     al, [cs:rx_tog]
@@ -490,6 +495,27 @@ bulk_in_junk:
         stc
         ret
 bulk_in_status:
+        ; A toggle mismatch is not a lost packet.  The device sent the
+        ; other DATAx, meaning our idea of the toggle has drifted from
+        ; its own -- the data is still sitting there, we simply asked
+        ; with the wrong PID.  Flip and ask again; the packet arrives.
+        ;
+        ; Worth saying how this stayed hidden.  CLR_STALL was being given
+        ; 82h, the USB endpoint address, where the CH375 wants the bare
+        ; endpoint number 2 -- so the resynchronise did nothing, the chip
+        ; never reported the mismatch, and every read came back as a
+        ; successful 64 bytes of FF instead.  Fixing the endpoint number
+        ; turned a silent wedge into this, which says exactly what is
+        ; wrong.  Once only: if flipping does not help, it is not this.
+        cmp     al, INT_RET_TOGGLE
+        jne     short bulk_in_st2
+        cmp     byte [cs:bi_flip], 0
+        jne     short bulk_in_st2
+        mov     byte [cs:bi_flip], 1
+        inc     word [cs:n_toggle]
+        xor     byte [cs:rx_tog], 0x40
+        jmp     short bulk_in_go
+bulk_in_st2:
         mov     ah, al
         xor     al, al
         stc
@@ -820,7 +846,12 @@ isr_ours:
 rx_unwedge:
         push    ax
         push    cx
-        mov     al, 0x80 | EP_BULK_IN
+        ; The bare endpoint NUMBER, not the USB address with the direction
+        ; bit on it.  ch375.pas calls ClrStall(AX_EP_BULK_IN) and that
+        ; constant is 2, not 82h.  Passing 82h here asked the chip to clear
+        ; an endpoint that does not exist, which is why the unwedge below
+        ; never unwedged anything.
+        mov     al, EP_BULK_IN
         call    res_clr_ep
         mov     byte [cs:rx_tog], 0x80
         pop     cx
@@ -964,10 +995,21 @@ rx_loop:
         ret
 
 rx_wedged:
-        ; A real error with a transfer half read.  This is the only case that
-        ; has to discard, because the chip is left somewhere unknown.
+        ; A real error with a transfer half read.  This is the only case
+        ; that has to discard, because the chip is left somewhere unknown.
+        ;
+        ; Only a STALL gets CLEAR_FEATURE, which is what ax179.pas does
+        ; and all it does.  Clearing on every overflow -- a control
+        ; transfer issued from inside the timer interrupt, on an endpoint
+        ; with a bulk transfer still in flight -- was mine, not the
+        ; reference's, and there is no reason to believe the device
+        ; enjoys it.  AXRECV polls this adapter at the same 28ms and
+        ; never issues one, and never wedges.
         inc     word [cs:n_flush]
+        cmp     ah, INT_RET_STALL
+        jne     short rx_wedged_go
         call    rx_unwedge
+rx_wedged_go:
         mov     word [rx_flush], RX_FLUSHTICKS
         mov     word [rx_pos], 0
         ret
@@ -991,7 +1033,6 @@ rx_full:
         ; Now there is no choice: drop it and hunt for the next boundary.
         inc     word [cs:n_over]
         inc     word [cs:n_flush]
-        call    rx_unwedge
         mov     word [rx_flush], RX_FLUSHTICKS
         mov     word [rx_pos], 0
         ret

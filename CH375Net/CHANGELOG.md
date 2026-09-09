@@ -6,6 +6,73 @@ Versions live in the `VER` constant of each program. Nothing here has been
 released; the project is in progress.
 
 
+## AXPKT brings the adapter up on its own at last
+
+`AXPKT /I=65` with no `AXPROBE` in front of it:
+
+```
+Bringing the adapter up... link up.
+MAC address: 40:AE:30:6D:00:34
+Resident at vector 65h.
+```
+
+That had failed every single time before, always at step 2 -- the second
+PHY power write -- with status 28, a timeout. The cause was the one already
+found in `read_mac` and not yet applied anywhere else: `ctrl_out_r` and
+`ctrl_in_r` ran with the chip set to **report** NAKs rather than absorb
+them, so a device that was merely busy failed the transfer outright. They
+now set `8F` for the duration and put it back to `00` before returning.
+
+The comment above `set_retry` in that file has said "control transfers want
+8F" since it was written. It took three separate bugs to notice it applied
+to the code underneath it.
+
+**`CLR_STALL` was being given the wrong endpoint.** `82h` -- the USB
+endpoint address with the direction bit -- where the CH375 wants the bare
+number `2`. `ch375.pas` calls `ClrStall(AX_EP_BULK_IN)` and that constant is
+2. So every attempt to resynchronise the bulk endpoint was clearing an
+endpoint that does not exist, silently. Fixing it changed the symptom
+immediately: instead of returning a "successful" 64 bytes of FF, the chip
+started reporting `2B`, `INT_RET_TOGGLE_MISMATCH`, which says exactly what
+is wrong.
+
+**A toggle mismatch is now recovered rather than treated as a lost packet.**
+The device sent the other DATAx; the data is still there and we asked with
+the wrong PID. `bulk_in` flips and asks again, once. Overflows in a
+ten-second run went from 181 to 4.
+
+### Two theories killed, which is worth as much as a fix
+
+**Polling rate is not the cause.** `AXRECV` polls flat out -- about 850
+times a second -- and `AXPKT` manages 36, because it polls from the timer
+and a 64-byte read off this bus is expensive. That looked like the whole
+story. So `AXRECV` grew a `/D=ms` switch and was run at 28 ms between
+polls, exactly AXPKT's rate, against the same adapter: **20 bursts, 20
+frames, 0 errors, 0 layout wrong.** The reference is perfectly happy at
+AXPKT's speed. Whatever the difference is, it is not the rate.
+
+**Nor is it the receive filter.** `RX_CTL_PROMISC` was set as a probe, on
+the theory that unicast replies were being dropped by the adapter while
+broadcasts got through. It changed nothing. Reverted -- and it is the wrong
+default regardless, on a machine that cannot drain what it already asks for.
+
+### Where the remaining fault stands
+
+Transmit is correct and confirmed from another machine. Frames that arrive
+parse correctly. But after a frame or two the bulk endpoint starts
+returning full 64-byte packets of FF, reported as `INT_SUCCESS` with length
+40h, and never sends a short packet again -- so the burst never ends, the
+buffer fills, and everything after it is discarded.
+
+Not the hardware, not the poll rate, not the filter, not the aggregation
+size, not the toggle alone, and `CLEAR_FEATURE` on the correct endpoint
+does not clear it. What is left is something `rx_poll` does that
+`AxRxBurst` does not, and the two now agree on every point that has been
+checked line by line. The next thing to try is running the reference code
+itself from the timer interrupt -- if `AxRxBurst` wedges there and not in
+the foreground, the difference is interrupt context, not logic.
+
+
 ## Our own test tools, and mTCP off the CH375 entirely
 
 `AXNET.EXE` and the `PktApi` unit. A Crynwr packet-driver client that talks
