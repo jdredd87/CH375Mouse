@@ -67,7 +67,42 @@
 SIG_OFS         equ 0x0103
 VER_OFS         equ 0x010B
 
-RX_BUDGET       equ 24           ; 64-byte reads per tick once data flows
+; Twelve, and the ceiling is arithmetic rather than taste.  A byte off the
+; CH375 costs two settling reads plus the read itself -- call it 3.5us on
+; this bus -- so a 64-byte packet is about 224us and the tick is 6.9ms at
+; 145 Hz.  Twenty-four reads was already 5.4ms of a 6.9ms tick; thirty-one
+; plus an upcall does not fit at all, and a receive loop that overruns its
+; own tick leaves the foreground no time to run.  The machine does not
+; crash when that happens, it simply stops getting anywhere, which looks
+; exactly like a hang and took a power cycle to clear.
+; Big enough for a whole burst, because half a burst is worth nothing:
+; the remainder has to be thrown away to find the next boundary, so a
+; budget that stops short of a typical burst discards ALL the traffic,
+; not some of it.  Measured at 12: an overflow every single tick, 1159
+; of them in eight seconds, and two frames delivered.
+;
+; 31 reads is RXBUF_SZ less one packet, and it does not fit in a 145 Hz
+; tick -- which is why tick_n now defaults to 2 rather than 8.  The two
+; constants are a pair: raise the budget without slowing the tick and the
+; interrupt overruns its own period and the machine stops dead.
+RX_BUDGET       equ 31           ; 64-byte reads per tick once data flows
+; These two are deliberately tiny, and the reason is worth stating: this
+; loop runs inside the timer interrupt, 145 times a second, not in a
+; program's main loop.  ax179.pas can afford 2000 NAK retries and a 1024
+; read drain because it is a foreground program and the worst it can do
+; is take a while.  The same numbers here ate more than a tick each time
+; round, so the machine stopped making forward progress the instant a
+; client opened a handle -- not a crash, just no time left for anything
+; else.  A mid-burst NAK on a 12 Mbps link clears in microseconds; if it
+; has not cleared in four, the next tick can have another go.
+RX_NAKWAIT      equ 2            ; mid-burst NAKs to sit through
+; The same budget as a normal tick, and it was a mistake to make it less.
+; The hunt is precisely when reading FAST matters -- there is a backlog
+; and nothing useful happens until it is gone.  At four reads a tick this
+; drained 9KB/s while the normal path managed 71KB/s, so a hunt that
+; started never finished and the adapter never recovered.
+RX_DRAINMAX     equ RX_BUDGET    ; reads to spend per tick hunting a boundary
+RX_FLUSHTICKS   equ 300          ; ticks to keep hunting before giving up
 RXBUF_SZ        equ 2048         ; one burst; the chip is held to small ones
 TXBUF_SZ        equ 1536         ; 8-byte header plus a full frame
 MAXHANDLE       equ 4
@@ -205,7 +240,7 @@ tx_peek:    times 16 db 0
 ; something went wrong; it never says what.  These sixteen bytes plus the
 ; length are the difference between "546 bursts made no sense" and knowing
 ; which field of the AX88179 trailer disagreed with the data.
-rx_peek:    times 16 db 0
+rx_peek:    times 64 db 0     ; a whole bulk packet, not a glimpse of one
 rx_peeklen: dw  0
 
 cfg_val:    db  1
@@ -223,10 +258,12 @@ cfg_val:    db  1
 ; PIT runs fast, and the handler that was in the vector before us is called
 ; only every nth tick, so the BIOS clock and everything hooked in ahead of
 ; us still see 18.2 Hz.
-tick_n:     db  8
+tick_n:     db  2
 tick_ctr:   db  0
 pit_fast_on: db 0                ; did we actually change the timer
 
+chip_busy:  db  0                ; the foreground is mid-transaction with
+                                 ; the CH375 -- the timer must keep off it
 in_isr:     db  0                ; re-entry guard: the ISR can take
                                  ; milliseconds and the next tick will
                                  ; arrive on top of it
@@ -269,6 +306,16 @@ n_bursts:   dw  0
 n_frames:   dw  0
 n_short:    dw  0
 n_nohandle: dw  0
+n_junk:     dw  0            ; reads the chip claimed were impossibly long
+n_over:     dw  0            ; bursts bigger than the buffer, drained
+rx_naks:    dw  0
+rx_pos:     dw  0            ; bytes of a part-read burst carried between
+                             ; ticks -- see rx_go
+rx_flush:   dw  0            ; ticks left hunting for a packet boundary
+n_flush:    dw  0            ; times we have had to go hunting
+rx_st:      db  0            ; status the last bulk IN reported
+rx_len:     db  0            ; length the last RD_USB_DATA claimed
+rx_scratch: times 64 db 0    ; somewhere to throw a drained packet
 
 ; Scratch the receive path keeps across the upcall.  It has to live in CS
 ; memory rather than in registers or on the stack: the receiver is the
@@ -352,14 +399,27 @@ ch_wait_got:
 ; reported, AL = bytes stored.  Everything is read out of the chip even
 ; when the caller cannot take it: bytes left behind desynchronise the next
 ; read, which is a fault that shows up much later and looks like nothing.
+; CL = how many bytes the caller has room for.  Returns AL = bytes
+; stored, and CF set if the chip reported MORE than CL -- which for a
+; bulk read means the length cannot be believed.
+;
+; The check earns its place.  When the CH375 stops driving the ISA data
+; bus every read returns FF, so the length byte reads as 255: this
+; drained 255 bytes, stored the first 64, and told the caller it had a
+; full 64-byte packet.  rx_poll then kept asking for more until its
+; 24-read budget ran out, and handed up 1536 bytes of FF as a burst.
+; 4657 bursts out of 4659 in one run, all of them manufactured here.
 ch_read:
         push    bx
         mov     al, CMD_RD_USB_DATA
         call    ch_cmd
         call    ch_rd
         mov     ah, al
+        mov     [cs:rx_len], al
         mov     bl, al
         xor     bh, bh
+        cmp     bl, cl
+        ja      short ch_read_over
         or      bl, bl
         je      short ch_read_done
 ch_read_loop:
@@ -374,6 +434,18 @@ ch_read_skip:
 ch_read_done:
         mov     al, bh
         pop     bx
+        clc
+        ret
+
+; Drain what it claimed anyway -- bytes left behind desynchronise every
+; later read -- but store none of them and say so.
+ch_read_over:
+        call    ch_rd
+        dec     bl
+        jne     short ch_read_over
+        xor     al, al
+        pop     bx
+        stc
         ret
 
 ; --------------------------------------------------------------------------
@@ -395,14 +467,27 @@ bulk_in:
         call    ch_wait
         pop     cx
         jc      short bulk_in_bad
+        mov     [cs:rx_st], al           ; whatever it was, on the record
         cmp     al, INT_SUCCESS
         jne     short bulk_in_status
+        mov     ah, al
+        call    ch_read                  ; AL = stored, CF = not believable
+        jc      short bulk_in_junk
         push    ax
         xor     byte [cs:rx_tog], 0x40
         pop     ax
-        mov     ah, al
-        call    ch_read                  ; AL = stored
         clc
+        ret
+
+; The toggle is deliberately NOT advanced here.  Advancing it on a read
+; that was never a packet is what turned a single bad read into a dead
+; adapter: from then on every IN asked for the wrong DATAx, so nothing
+; ever matched again and the garbage was permanent.  Leaving it alone
+; means the next real packet still lines up.
+bulk_in_junk:
+        inc     word [cs:n_junk]
+        mov     ah, 0                    ; not a NAK -- do not retry it
+        stc
         ret
 bulk_in_status:
         mov     ah, al
@@ -410,6 +495,7 @@ bulk_in_status:
         stc
         ret
 bulk_in_bad:
+        mov     byte [cs:rx_st], 0xFF    ; no interrupt at all
         mov     ah, 0
         xor     al, al
         stc
@@ -542,6 +628,18 @@ pit_slow:
 ; ==========================================================================
 setup_buf:  times 8 db 0
 val_buf:    dw 0
+
+; AL = endpoint address, direction bit included.  The resident twin of
+; clr_ep in the transient half.
+res_clr_ep:
+        push    ax
+        mov     al, CMD_CLR_STALL
+        call    ch_cmd
+        pop     ax
+        call    ch_wr
+        mov     cx, 0x4000
+        call    ch_wait
+        ret
 
 res_clr_ep0:
         mov     al, CMD_CLR_STALL
@@ -704,34 +802,202 @@ isr_ours:
         iret
 
 ; --------------------------------------------------------------------------
+; Read the rest of a transfer that is not going to be used, so the chip is
+; left on a packet boundary.  Bounded, and it has to be: the adapter can
+; stream without a short packet for a long time, and an unbounded loop in
+; here is an unbounded loop inside a timer interrupt.
+; --------------------------------------------------------------------------
+; CLEAR_FEATURE(ENDPOINT_HALT) on the bulk IN, which resets the data
+; toggle at BOTH ends and is the only thing that restarts an endpoint the
+; device has given up on.  Without it the hunt below never finds a
+; boundary: the chip keeps reporting a successful full 64-byte packet
+; whose contents are entirely FF, for as long as you care to ask, and no
+; amount of reading gets past it.
+;
+; It is a real control transfer and it costs milliseconds inside a timer
+; interrupt, so it happens once when the hunt starts and not once per
+; tick of it.
+rx_unwedge:
+        push    ax
+        push    cx
+        mov     al, 0x80 | EP_BULK_IN
+        call    res_clr_ep
+        mov     byte [cs:rx_tog], 0x80
+        pop     cx
+        pop     ax
+        ret
+
+; CF clear = a boundary was reached, CF set = still mid-stream, come back
+; next tick.
+rx_drain:
+        push    di
+        push    dx
+        push    bp
+        push    cs
+        pop     es
+        mov     dx, RX_DRAINMAX
+rx_dr_loop:
+        mov     di, rx_scratch
+        mov     cl, 64
+        call    bulk_in
+        jc      short rx_dr_edge         ; NAK or error: nothing left
+        ; Keep a copy of what the hunt is wading through.  Whether this
+        ; is real traffic we are simply too slow for, or the same bytes
+        ; over and over, is the difference between a throughput problem
+        ; and a lost-sync one, and they need opposite fixes.
+        push    ax
+        push    cx
+        push    si
+        push    di
+        push    ds
+        push    cs
+        pop     ds
+        mov     si, rx_scratch
+        mov     di, rx_peek
+        mov     cx, 64
+        cld
+        rep     movsb
+        mov     word [cs:rx_peeklen], 0xFFFF   ; marker: a flush sample
+        pop     ds
+        pop     di
+        pop     si
+        pop     cx
+        pop     ax
+        cmp     al, 64
+        jb      short rx_dr_edge         ; short packet: boundary reached
+        dec     dx
+        jnz     short rx_dr_loop
+        pop     bp
+        pop     dx
+        pop     di
+        stc
+        ret
+rx_dr_edge:
+        pop     bp
+        pop     dx
+        pop     di
+        clc
+        ret
+
+; --------------------------------------------------------------------------
 ; Collect at most one burst, then hand each frame in it to whoever asked.
 ; The first read is speculative: NAK means the wire is quiet, which is the
 ; usual answer, and the tick ends there having cost about a millisecond.
 ; --------------------------------------------------------------------------
 rx_poll:
+        ; A send is a long conversation with the chip: write 64 bytes,
+        ; issue a token, wait for the interrupt.  The timer fires 145
+        ; times a second and lands in the middle of it, and then two
+        ; transactions are interleaved on one chip -- which loses the
+        ; reply to whatever was just sent, and often the next several.
+        ; in_isr below only stops the ISR re-entering ITSELF; it says
+        ; nothing about the foreground.  Measured: an ARP request went
+        ; out correctly -- the far end learned our address -- and the
+        ; reply was never seen, along with every broadcast for seconds
+        ; afterwards.
+        cmp     byte [chip_busy], 0
+        je      short rx_free
+        ret
+rx_free:
         cmp     byte [n_handles], 0
-        jne     short rx_go
+        jne     short rx_live
         ret                              ; nobody is listening; do not even
                                          ; touch the chip
+rx_live:
+        ; Still hunting for a packet boundary from an earlier overrun?
+        ; Then that is all this tick does.
+        ;
+        ; The adapter can stream for a very long time without ever
+        ; sending a short packet -- ax179.pas records a capture of 55,680
+        ; bytes without one -- and until a boundary is found every read
+        ; lands in the middle of a transfer and nothing can be parsed.
+        ; 12 reads in one tick is nowhere near enough to catch up, so the
+        ; hunt is spread over as many ticks as it takes.  Four reads a
+        ; tick keeps the interrupt short; 300 ticks of them is about 77KB
+        ; of runway, comfortably past the worst case ever measured.
+        cmp     word [rx_flush], 0
+        je      short rx_go
+        call    rx_drain
+        jnc     short rx_flushed         ; boundary found: back in step
+        dec     word [rx_flush]
+        ret
+rx_flushed:
+        mov     word [rx_flush], 0
+        ret
+
 rx_go:
+        ; A burst is collected ACROSS ticks, not within one.
+        ;
+        ; This used to give up when the read budget ran out and throw the
+        ; partial burst away.  That is the worst of both worlds: the frames
+        ; already read are lost, AND the remainder is still sitting in the
+        ; chip, so the next tick starts mid-transfer and has to hunt for a
+        ; boundary.  On this machine a 64-byte read costs enough that the
+        ; budget ran out on nearly every burst, so nearly every burst was
+        ; discarded -- 1159 of them in eight seconds, two frames delivered.
+        ;
+        ; There is no need to finish inside one tick.  The chip holds the
+        ; rest quite happily, so the position is saved and the next tick
+        ; carries on from it.  The interrupt stays short and no data is
+        ; thrown away.
         push    cs
         pop     es
+        mov     bp, [rx_pos]             ; bytes carried over from last tick
         mov     di, rxbuf
-        xor     bp, bp                   ; BP = bytes collected
+        add     di, bp
         mov     dx, RX_BUDGET
 rx_loop:
         mov     cl, 64
         call    bulk_in
-        jc      short rx_done            ; NAK or error: nothing more now
+        jnc     short rx_got
+
+        or      bp, bp
+        je      short rx_done            ; nothing in hand: the wire is idle,
+                                         ; which is the usual answer
+        ; Mid-burst.  A NAK does not end a USB bulk transfer -- only a SHORT
+        ; packet does -- it just means 'not ready yet'.  So keep what we have
+        ; and ask again on the next tick rather than sitting here spinning
+        ; inside the interrupt.
+        cmp     ah, INT_RET_NAK
+        jne     short rx_wedged
+        mov     [rx_pos], bp
+        ret
+
+rx_wedged:
+        ; A real error with a transfer half read.  This is the only case that
+        ; has to discard, because the chip is left somewhere unknown.
+        inc     word [cs:n_flush]
+        call    rx_unwedge
+        mov     word [rx_flush], RX_FLUSHTICKS
+        mov     word [rx_pos], 0
+        ret
+
+rx_got:
         xor     ah, ah
         add     bp, ax
         cmp     al, 64
         jb      short rx_have            ; short packet ends the transfer
         cmp     bp, RXBUF_SZ - 64
-        jae     short rx_have            ; no room for another
+        jae     short rx_full            ; no room for another
         dec     dx
         jnz     short rx_loop
+        ; Budget spent and the transfer is still running.  Save where we are
+        ; and pick it up next tick.
+        mov     [rx_pos], bp
+        ret
+
+rx_full:
+        ; The buffer really is full and the transfer STILL has not ended.
+        ; Now there is no choice: drop it and hunt for the next boundary.
+        inc     word [cs:n_over]
+        inc     word [cs:n_flush]
+        call    rx_unwedge
+        mov     word [rx_flush], RX_FLUSHTICKS
+        mov     word [rx_pos], 0
+        ret
+
 rx_have:
+        mov     word [rx_pos], 0
         or      bp, bp
         je      short rx_done
         inc     word [n_bursts]
@@ -853,7 +1119,7 @@ rx_keep:
         pop     ds
         mov     si, rxbuf
         mov     di, rx_peek
-        mov     cx, 16
+        mov     cx, 64
         cld
         rep     movsb
         ret
@@ -1263,6 +1529,11 @@ __ovr11:
         jbe     short __ovr12
         jmp     near psend_bad
 __ovr12:
+        ; Claim the chip before touching it.  Setting the flag with one
+        ; instruction is enough: the timer can only land between
+        ; instructions, so it either sees the flag and leaves, or it ran
+        ; to completion before we started.
+        mov     byte [cs:chip_busy], 1
 
         ; Build the 8-byte header in front of a copy of the frame.  Two
         ; little-endian 32-bit words: the length, then zero -- except when
@@ -1338,6 +1609,7 @@ psend_last:
         call    bulk_out
         jc      short psend_fail
 psend_ok:
+        mov     byte [cs:chip_busy], 0
         add     word [cs:st_pkts_out], 1
         adc     word [cs:st_pkts_out+2], 0
         sub     bx, 8                    ; BX was length + header
@@ -1358,6 +1630,7 @@ psend_fail:
         add     word [cs:st_err_out], 1
         adc     word [cs:st_err_out+2], 0
 psend_bad:
+        mov     byte [cs:chip_busy], 0
         pop     es
         pop     ds
         pop     bp

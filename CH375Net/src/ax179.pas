@@ -113,7 +113,15 @@ var
     drains it 64 bytes at a time; Linux uses 0x18 here because it has 20 KB
     of URB to fill and can absorb it. }
   AxBulkCtrl: Byte = $07;
-  AxBulkSize: Byte = $02;
+  { 01, not 02.  This is the adapter's aggregation buffer in KB, and it has
+    to be smaller than the driver's receive buffer with room for the metadata
+    that follows the frames -- not merely equal to it.  AXPKT's rxbuf is 2048
+    bytes, so at 02 every single burst overflowed it by the width of the
+    trailer, and an overflowed burst is not a truncated burst: the remainder
+    has to be read and thrown away to find the next boundary, so the whole
+    thing is lost.  1 KB bursts also read inside one timer tick on an 8086,
+    which 2 KB does not. }
+  AxBulkSize: Byte = $01;
   AxBulkTimer: Word = $0080;   { flush early rather than wait for a full
                                  burst -- latency matters more than
                                  efficiency at these speeds }

@@ -91,13 +91,36 @@ SET MTCPCFG=c:\network\mtcp\mtcp.cfg
 
 `AXPKT /U` unloads it, `/S` reports counters, `/?` explains the rest.
 
-> **What does not work yet.** `AXPKT` brings the adapter up and sends, but
-> the bulk endpoint does not read back as frames: `/S` reports nearly every
-> burst rejected, 1536 bytes of a repeating four-byte pattern. This is not
-> the hardware — `AXRECV.EXE` reads the same adapter on the same machine
-> with 0 errors and every layout check passing. The fault is in `rx_poll`
-> in `axpkt.asm`, and `AXRECV` is the reference to diff it against. Until
-> that is fixed, `AXPROBE` + `AXRECV` is the pair that works.
+> **What does not work yet.** `AXPKT` transmits correctly — confirmed from
+> another machine, which learned this adapter's address from an ARP request
+> sent through it — and the frames it does receive parse correctly. But
+> after the first frame or two the adapter starts returning full 64-byte
+> packets of `FF` and never sends a short packet again, and nothing
+> recovers it. Not the hardware: `AXRECV.EXE` reads the same adapter
+> minutes later with 0 errors. The one measured difference is polling rate
+> — `AXRECV` polls ~850 times a second, `AXPKT` 36 — and that is the next
+> thing to chase. Until then, `AXPROBE` + `AXRECV` is the pair that works.
+
+### Testing it: use our tools, not mTCP
+
+mTCP is for sanity checks on whatever network the machine is administered
+over, and nothing else. It finds its driver through a config file, so
+pointing it at a second adapter means editing that file for the duration of
+a test and remembering to put it back.
+
+`AXNET` takes the vector as an argument instead, so it cannot reach the
+wrong card:
+
+```
+AXNET /M=<a free address> /I=65 /T=<address to ARP>   ask, and wait
+AXNET /M=<a free address> /I=65 /L                    show what arrives
+AXNET /M=<a free address> /I=65 /R                    ...and answer ARP and pings
+```
+
+`/R` makes the adapter answer to its address, so another machine can ping
+it. That matters more than it sounds: a driver can receive every broadcast
+on the wire and still drop everything addressed to itself, and only unicast
+traffic tells the two apart.
 
 ### One thing to know first
 

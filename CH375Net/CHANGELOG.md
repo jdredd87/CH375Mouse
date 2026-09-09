@@ -6,6 +6,98 @@ Versions live in the `VER` constant of each program. Nothing here has been
 released; the project is in progress.
 
 
+## Our own test tools, and mTCP off the CH375 entirely
+
+`AXNET.EXE` and the `PktApi` unit. A Crynwr packet-driver client that talks
+to **the vector you name** -- no scan, no config file, no default that can
+reach the wrong card.
+
+The reason is a rule for this project from here on: **mTCP is for sanity
+checks on the working NE2000 at 60h, and nothing else.** Testing the CH375
+adapter through mTCP meant pointing `MTCPCFG` at a second config for the
+duration of a test and pointing it back afterwards -- two adapters, one
+environment variable, and a machine administered over the other one. That
+arrangement only has to be got wrong once. Everything that touches the
+CH375 is now ours.
+
+```
+AXNET /M=<my ip> [/I=hex] [/T=<target ip>] [/S=secs] [/L] [/R] [/X]
+```
+
+`/T` ARPs an address and waits. `/L` listens and prints every frame. `/R`
+listens *and answers* -- ARP for `/M`, and ICMP echo -- so the adapter is
+pingable from another machine, which is the only way to prove it takes
+unicast traffic. A driver can receive every broadcast on the wire and still
+drop everything addressed to itself.
+
+It asks the driver for every protocol and picks out what it wants in
+software, deliberately: a tool that exists to diagnose a driver must not
+depend on that driver's type filtering being right.
+
+### What now works
+
+Measured with AXNET against a live network:
+
+- **Transmit is correct**, and confirmed from outside the machine rather
+  than by trusting our own counters: an ARP request sent through AXPKT
+  reached the wire and the far end learned `192.168.50.222` at the
+  adapter's MAC.
+- **Receive parses correctly.** Real frames arrive through the packet
+  driver with the right addresses and ethertypes, and `bursts that made no
+  sense` is 0 where it used to be 4657 out of 4659.
+
+### Four receive faults fixed on the way
+
+**A length the chip could not have meant.** When the CH375 stops driving
+the ISA data bus every read returns FF, so the length byte reads as 255.
+`ch_read` drained 255 bytes, stored the first 64, and reported a full
+packet. `rx_poll` then kept asking until its budget ran out and handed up
+1536 bytes of FF as a burst. A bulk packet cannot exceed 64 bytes, so a
+length above that is now refused outright.
+
+**One bad read poisoned the endpoint for ever.** `bulk_in` advanced the
+data toggle on *every* success, including reads that were not packets.
+After one, every IN asked for the wrong DATAx and nothing matched again.
+The toggle now only advances on a read we believe.
+
+**The toggle was never resynchronised when adopting an adapter.** `rx_tog`
+is assembled as DATA0, but after `AXPROBE` the adapter has been receiving
+and the device's toggle has moved on. `/A` now clears both bulk endpoints,
+which resets the toggle at both ends.
+
+**A budget that discarded what it had already read.** Ending a burst when
+the read budget ran out lost the frames already collected *and* left the
+remainder in the chip, so the next tick began mid-transfer. Bursts are now
+collected across ticks -- the chip holds the rest quite happily -- and only
+a genuinely full buffer discards.
+
+Two constants are a pair and must move together: `RX_BUDGET` and `tick_n`.
+A 64-byte read costs enough on this bus that 31 of them do not fit in a
+145 Hz tick, and a receive loop that overruns its own period leaves the
+foreground no time to run at all. That is not a crash; the machine simply
+stops getting anywhere, and it took a power cycle to clear. `tick_n` now
+defaults to 2.
+
+### Still open: an endless stream of FF
+
+After the first frame or two, the adapter starts returning full 64-byte
+packets of FF, reported as `INT_SUCCESS` with length 40h, and never sends a
+short packet again. Nothing recovers it -- not draining, not
+`CLEAR_FEATURE(ENDPOINT_HALT)` on the bulk endpoint, not a bigger buffer,
+not smaller aggregation.
+
+It is emphatically not the hardware. `AXRECV.EXE` was run against the same
+adapter minutes later and read 20 frames with 0 errors and every layout
+check passing.
+
+The one measured difference is the polling pattern, and it is stark:
+**AXRECV made 5083 idle polls in six seconds -- about 850 a second -- and
+got clean NAKs whenever the wire was quiet. AXPKT polls 36 times a second**,
+because it polls from the timer and each 64-byte read is expensive. Whatever
+this state is, AXRECV never stays still long enough to enter it. That is
+where to look next.
+
+
 ## The MAC read had to let the chip absorb NAKs
 
 `AXPKT /A` — take the adapter exactly as `AXPROBE` left it — failed on its

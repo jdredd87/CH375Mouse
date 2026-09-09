@@ -26,6 +26,19 @@ INT_STALL        equ 0x2E
 ; next one is stalled by the device.  Control transfers then work every
 ; other time, which reads as a flaky device and is not one.
 ; --------------------------------------------------------------------------
+; AL = the endpoint ADDRESS, direction bit included: 82h for bulk IN on
+; endpoint 2, 03h for bulk OUT on 3.  Endpoint 0 has no direction and is
+; simply 0, which is what clr_ep0 below passes.
+clr_ep:
+        push    ax
+        mov     al, CMD_CLR_STALL
+        call    ch_cmd
+        pop     ax
+        call    ch_wr
+        mov     cx, 0x4000
+        call    ch_wait
+        ret
+
 clr_ep0:
         mov     al, CMD_CLR_STALL
         call    ch_cmd
@@ -1196,7 +1209,9 @@ __buv4:
         mov     [cs:bu_data+0], byte 0x07
         mov     [cs:bu_data+1], byte 0x04        ; timer low
         mov     [cs:bu_data+2], byte 0x00        ; timer high
-        mov     [cs:bu_data+3], byte 0x02        ; burst size
+        mov     [cs:bu_data+3], byte 0x01        ; burst size, in KB, and
+                                         ; it must be SMALLER than rxbuf
+                                         ; -- see ax179.pas
         mov     [cs:bu_data+4], byte 0x08        ; inter-frame gap
         mov     al, AX_RX_BULK_QCTRL
         mov     bl, 5
@@ -1869,6 +1884,30 @@ init_dobring:
         mov     al, 6
         jmp     near die
 init_gotmac:
+        ; Put both bulk endpoints back to DATA0 before the resident half
+        ; starts polling, because rx_tog and tx_tog are assembled as 80h
+        ; and nothing else ever resynchronises them.
+        ;
+        ; After our own bring-up this is a no-op: SET_CONFIGURATION has
+        ; just reset every endpoint.  After /A it is the whole game.
+        ; AXPROBE says 'the adapter is initialised and receiving' and it
+        ; means it -- frames have been arriving and the device's toggle
+        ; has moved on, so the driver's first IN asked for DATA0 while
+        ; the device was sending DATA1.  The CH375 does not police that
+        ; on an IN token; it hands over whatever came back.  What came
+        ; back was the same packet again and again: 1536 bytes of a
+        ; repeating four-byte pattern, 521 bursts out of 522 rejected.
+        ;
+        ; CLEAR_FEATURE(ENDPOINT_HALT) resets the toggle at BOTH ends,
+        ; which is exactly the handshake needed to adopt an endpoint
+        ; somebody else was already using.
+        mov     al, 0x80 | EP_BULK_IN
+        call    clr_ep
+        mov     al, EP_BULK_OUT
+        call    clr_ep
+        mov     byte [rx_tog], 0x80
+        mov     byte [tx_tog], 0x80
+
         mov     dx, msg_buok
         call    puts
         mov     al, 'd'
@@ -2040,6 +2079,28 @@ stat_macskip:
         call    putdecw
         call    crlf
 
+        mov     dx, msg_s_junk
+        call    puts
+        mov     ax, [es:n_junk]
+        call    putdecw
+        call    crlf
+
+        mov     dx, msg_s_over
+        call    puts
+        mov     ax, [es:n_over]
+        call    putdecw
+        call    crlf
+
+        mov     dx, msg_s_rxst
+        call    puts
+        mov     al, [es:rx_st]
+        call    puthex
+        mov     dx, msg_s_rxlen
+        call    puts
+        mov     al, [es:rx_len]
+        call    puthex
+        call    crlf
+
         mov     dx, msg_s_sent
         call    puts
         mov     ax, [es:st_pkts_out]
@@ -2072,9 +2133,18 @@ stat_peek:
         call    putdecw
         mov     dx, msg_s_rxpk2
         call    puts
-        mov     cx, 16
+        call    crlf
+        mov     cx, 64
         xor     si, si
 stat_rxpeek:
+        test    si, 15
+        jnz     short stat_rxnowrap
+        call    crlf
+        mov     al, ' '
+        call    putc
+        mov     al, ' '
+        call    putc
+stat_rxnowrap:
         mov     al, [es:si+rx_peek]
         call    puthex
         mov     al, ' '
@@ -2351,6 +2421,10 @@ msg_s_bursts:  db '  bursts collected=$'
 msg_s_frames:  db '  frames delivered=$'
 msg_s_nohandle:db '  frames nobody wanted=$'
 msg_s_short:   db '  bursts that made no sense=$'
+msg_s_junk:    db '  reads with an impossible length=$'
+msg_s_over:    db '  bursts too big for the buffer=$'
+msg_s_rxst:    db '  last bulk IN: status $'
+msg_s_rxlen:   db ', length $'
 msg_s_sent:    db '  frames sent=$'
 msg_s_rate:    db '  timer divisor (/R)=$'
 msg_s_peek:    db '  last frame out=$'
