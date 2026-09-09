@@ -6,6 +6,51 @@ Versions live in the `VER` constant of each program. Nothing here has been
 released; the project is in progress.
 
 
+## Twice as fast, and a measurement I had to withdraw
+
+1 MB now takes 36s where it took 73s. The ISA NE2000 in the same machine
+does it in 18s, so this went from 4x that to 2x.
+
+**The retraction first.** The previous entry says the poll rate does not
+affect throughput -- 39s at `/R=1`, 39s at `/R=2`, 37s at `/R=4`. That was
+measured through a write to the PicoMEM disk, which hid the entire effect.
+Fetching to `NUL` instead shows it plainly:
+
+```
+                    /R=1   /R=2   /R=4   /R=8      NE2000
+before               73s    61s    60s    48s        18s
+after the read fix   71s    43s    36s    36s
+```
+
+The claim was wrong and the numbers it was based on were worthless. Fetch to
+`NUL` when measuring a driver; a disk on a machine this slow will happily
+absorb whatever you are trying to see.
+
+**The payload read loop was costing about 150 clocks a byte.** A `call
+ch_rd` per byte: call, push, two port-61h settling reads, the data read,
+pop, ret, plus the caller's bookkeeping. Around 19 µs a byte, which caps the
+whole driver near 50 KB/s however fast the wire is. It is now inlined, with
+the settling pair dropped -- in that loop only, nowhere else.
+
+That is safe here because of what the CPU is. `IN` is 14 clocks with the bus
+wait states, `STOSB` 11, `LOOP` 17: about 5 µs between consecutive reads on
+an 8 MHz 8086 with no help at all, already far longer than the CH375 asks
+for. `REP INSB` would be the obvious answer and is not available -- `INS` is
+80186 and up, and this is an 8086. On anything faster the delay wants
+putting back.
+
+Correctness was checked before speed, and again after: 1 MB fetched to disk
+and CRC-32'd on the box, `04D0E435`, exact, with every error counter at
+zero.
+
+**`/R` now defaults to 4** rather than 1. `/R=8` ties on throughput but its
+6.9 ms tick cannot hold a full 31-read burst at 10.5 ms; `/R=4` gives 13.7
+ms, which can. The 480 ms latency outliers `/R=4` used to produce are gone
+now the interrupt is cheap -- 6/6 pings, average 50.29 ms, no spikes.
+`TICKCHK` confirms INT 08h at 72 Hz and INT 1Ch still at 18 Hz, so DOS
+timekeeping is untouched.
+
+
 ## Proved with real volume, not just pings
 
 Everything up to here had been small packets -- pings, a 559-byte page,

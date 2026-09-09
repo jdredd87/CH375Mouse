@@ -258,13 +258,24 @@ cfg_val:    db  1
 ; PIT runs fast, and the handler that was in the vector before us is called
 ; only every nth tick, so the BIOS clock and everything hooked in ahead of
 ; us still see 18.2 Hz.
-; 1 -- leave the PIT alone at 18.2 Hz.  AXTICK proved the reference
-; receive path is perfectly happy polled from INT 08h at exactly this
-; rate, and rate was separately shown not to matter, so there is no
-; reason left to reprogram the timer and every reason not to: a burst
-; is now read to completion in one call, and the longer the tick the
-; more comfortably that fits.
-tick_n:     db  1
+; 4 -- 72.8 Hz, and it is worth four times the throughput.
+;
+; This was 1 on the strength of a measurement that turned out to be
+; worthless: the rate looked to make no difference, but the test wrote
+; its download to disk and the disk hid it.  Fetching 1 MB to NUL
+; instead, with the payload read loop inlined:
+;
+;     /R=1  71s    /R=2  43s    /R=4  36s    /R=8  36s
+;
+; against 18s for the ISA NE2000 in the same machine, which is the
+; ceiling worth aiming at.  4 and 8 tie, so take 4: at 8 the tick is
+; 6.9ms and a full 31-read burst is 10.5ms, which does not fit.  At 4
+; the tick is 13.7ms and it does.
+;
+; Latency is about 50ms at every setting and always has been -- but
+; the 480ms outliers /R=4 used to produce are gone, because the read
+; loop no longer costs what it did.
+tick_n:     db  4
 tick_ctr:   db  0
 pit_fast_on: db 0                ; did we actually change the timer
 
@@ -418,10 +429,11 @@ ch_wait_got:
 ; 4657 bursts out of 4659 in one run, all of them manufactured here.
 ch_read:
         push    bx
+        push    cx
+        push    dx
         mov     al, CMD_RD_USB_DATA
         call    ch_cmd
-        call    ch_rd
-        mov     ah, al
+        call    ch_rd                    ; the length, with its full delay
         mov     [cs:rx_len], al
         mov     bl, al
         xor     bh, bh
@@ -429,22 +441,36 @@ ch_read:
         ja      short ch_read_over
         or      bl, bl
         je      short ch_read_done
-; Extra settling was tried inside this loop on 2026-09-09, on the theory
-; that the tight call/stosb pace outran the chip where ReadUsb's
-; per-byte Pascal call overhead did not.  It changed nothing, so the
-; pace is not the reason and the delay is not worth its cost in an
-; interrupt.
-ch_read_loop:
-        call    ch_rd
-        cmp     bh, cl
-        jae     short ch_read_skip
+
+        ; The payload, inline and without the port 61h settling pair.
+        ;
+        ; ch_rd keeps that pair and so does every other caller; it is only
+        ; dropped HERE, in the one loop that runs 64 times per packet and
+        ; thousands of times a second.  The call version cost about 150
+        ; clocks a byte -- call, push, two settling reads, the read, pop,
+        ; ret, and the caller's own bookkeeping -- which works out at 19us
+        ; a byte and caps the whole driver near 50 KB/s however fast the
+        ; wire is.
+        ;
+        ; Dropping the delay is safe because of what this CPU is.  IN is
+        ; 14 clocks with the bus wait states, STOSB 11, LOOP 17: about 5us
+        ; between consecutive reads on an 8 MHz 8086 without any help,
+        ; which is already far longer than the chip needs.  On something
+        ; faster this would want the delay back, or a REP INSB it cannot
+        ; have here -- INS is 80186 and up.
+        mov     dx, [cs:io_dat]
+        mov     cl, bl
+        xor     ch, ch
+        mov     bh, bl                   ; all of it lands in the buffer
+ch_read_fast:
+        in      al, dx
         stosb
-        inc     bh
-ch_read_skip:
-        dec     bl
-        jne     short ch_read_loop
+        loop    ch_read_fast
+
 ch_read_done:
         mov     al, bh
+        pop     dx
+        pop     cx
         pop     bx
         clc
         ret
@@ -452,10 +478,15 @@ ch_read_done:
 ; Drain what it claimed anyway -- bytes left behind desynchronise every
 ; later read -- but store none of them and say so.
 ch_read_over:
-        call    ch_rd
-        dec     bl
-        jne     short ch_read_over
+        mov     dx, [cs:io_dat]
+        mov     cl, bl
+        xor     ch, ch
+ch_read_ovl:
+        in      al, dx
+        loop    ch_read_ovl
         xor     al, al
+        pop     dx
+        pop     cx
         pop     bx
         stc
         ret

@@ -146,18 +146,42 @@ sent -- call it twenty-eight thousand frames through an 8086 -- with every
 one of the driver's error counters still at zero afterwards: no nonsense
 bursts, no impossible lengths, no overflows, no toggle rescues.
 
-**About 18 KB/s.** That is what it is, and `/R` will not change it — 512 KB
-took 39s at `/R=1`, 39s at `/R=2` and 37s at `/R=4`. Nor does `/R` help
-latency: a ping is 46-51 ms at any setting (against 3 ms on an ISA NE2000 in
-the same machine), and `/R=4` adds occasional 480 ms outliers because the
-interrupt starts taking enough of the CPU to starve the stack. **Leave `/R`
-alone.** Both of those were measured rather than assumed, twice, because
-both looked like obvious wins beforehand.
+**About 29 KB/s**, fetching 1 MB in 36 seconds. For scale, the ISA NE2000 in
+the same machine does the same megabyte in 18s, so this is within about a
+factor of two of a card with hardware interrupts and a 16-bit data path.
 
-The ceiling is the ISA bus, not the wire. Every byte off the CH375 costs two
-settling reads plus the read itself, so the link is already about ten times
-faster than the driver can drain it — which is also why the PHY is held at
-10BASE-T and why a faster cable buys nothing.
+Getting there took correcting a measurement. `/R` looked to make no
+difference at all, and that was wrong: the test wrote its download to disk,
+and the disk hid the whole effect. Fetching to `NUL` instead:
+
+| | `/R=1` | `/R=2` | `/R=4` | `/R=8` |
+|---|---|---|---|---|
+| before | 73s | 61s | 60s | 48s |
+| after inlining the read loop | 71s | 43s | **36s** | 36s |
+
+Two separate things there. The poll rate matters (it always did), and the
+payload read loop was costing about 150 clocks a byte in call overhead and
+port-61h settling reads — roughly 19 µs a byte, which capped the driver near
+50 KB/s regardless of the wire. Inlining it without the settling pair is
+safe on an 8086 because `IN`+`STOSB`+`LOOP` already leaves ~5 µs between
+reads, far more than the chip asks for. On a faster machine it would want
+the delay back.
+
+`/R` now defaults to **4**. `/R=8` ties on throughput but its 6.9 ms tick
+cannot hold a full 31-read burst; 4 gives a 13.7 ms tick that can.
+
+Latency is about 50 ms at every setting and always was — but the 480 ms
+outliers `/R=4` used to throw are gone, because the interrupt no longer
+costs what it did.
+
+`TICKCHK` confirms the timer stays honest: INT 08h at 72 Hz, INT 1Ch at
+18 Hz. DOS timekeeping is unaffected. Anything that hooks INT 08h *after*
+this driver will see the faster rate, which is inherent to any packet driver
+that speeds up the PIT.
+
+The remaining ceiling is the ISA bus rather than the wire — the link is
+still several times faster than the driver can drain it, which is why the
+PHY is held at 10BASE-T and why a faster cable buys nothing.
 
 Verified end to end on the hardware, from one command:
 
