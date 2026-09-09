@@ -2,6 +2,29 @@
 
 Which chipsets this driver handles, which it could, and which it cannot.
 
+## Short answer: try it anyway
+
+**`USBPKT` does not look at the USB ID at all.** It enumerates whatever is
+plugged in and runs the bring-up. `NETID`'s verdict is advisory — it reads a
+table, and the table cannot know about every rebadge.
+
+That matters more than it sounds, because **an adapter can be an ASIX part
+wearing somebody else's USB ID**. Dock stations and own-brand dongles very
+often are: the silicon is an AX88179, the ID says Lenovo or Dell or a house
+brand, and no table has heard of it. On one of those, `USBPKT` simply works
+while `NETID` calls it unknown.
+
+So if `NETID` does not recognise your adapter, **run `USBPKT` regardless.**
+A wrong guess costs nothing: the bring-up fails at a numbered step, says so,
+and nothing is left in a bad state. `USBLINK /F` does the same with the full
+step-by-step narration, which is what you want if it fails and you care why.
+
+What this cannot do is make a genuinely different chip work. An RTL8153
+under any ID will stop at step 1 or 2, because the register writes go
+nowhere. That is a missing driver, not a detection problem.
+
+---
+
 **Run `NETID` before believing any of it.** It reads the USB descriptors and
 prints the vendor and product ID, which is the only thing that actually
 identifies what you have. A box that says "AX88179" and a chip that is an

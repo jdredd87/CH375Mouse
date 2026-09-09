@@ -8,7 +8,7 @@ program usblink;
   receive path, negotiate a link -- and prints what came back at every
   stage.  Nothing goes resident and no frames are moved; USBRECV does that.
 
-    USBLINK [/P=260] [/G] [/V] [/W=secs]
+    USBLINK [/P=260] [/F] [/G] [/V] [/W=secs]
 
       /P=hex   CH375 I/O base, default 260
       /G       leave the PHY in gigabit mode.  The default forces 10BASE-T,
@@ -43,6 +43,7 @@ const
 
 var
   Giga:   Boolean = False;
+  Force:  Boolean = False;
   WaitS:  Word    = 15;
   Bad:    Integer = 0;
 
@@ -59,9 +60,12 @@ procedure Usage;
 begin
   Banner('USBLINK', VER, 'bring up an ASIX AX88179 over a CH375');
   WriteLn;
-  WriteLn('  USBLINK [/P=260] [/G] [/V] [/W=secs]');
+  WriteLn('  USBLINK [/P=260] [/F] [/G] [/V] [/W=secs]');
   WriteLn;
   HelpBaseLine;
+  WriteLn('  /F       try the AX88179 bring-up even if the USB vendor ID');
+  WriteLn('           is not ASIX.  Rebadged parts are common and USBPKT');
+  WriteLn('           never checks the ID anyway');
   WriteLn('  /G       leave the PHY in gigabit mode.  The default forces');
   WriteLn('           10BASE-T, and that is not a mistake -- see below');
   WriteLn('  /V       print every register access');
@@ -105,6 +109,7 @@ begin
     for Code := 1 to Length(A) do A[Code] := UpCase(A[Code]);
     if      (A = '/V') or (A = '-V') then AxTrace := True
     else if (A = '/G') or (A = '-G') then Giga := True
+    else if (A = '/F') or (A = '-F') then Force := True
     else if Length(A) >= 4 then
     begin
       K := Copy(A, 1, 3); A := Copy(A, 4, 250);
@@ -137,13 +142,31 @@ begin
   Vid := DevDesc[8]  or (Word(DevDesc[9])  shl 8);
   Pid := DevDesc[10] or (Word(DevDesc[11]) shl 8);
   WriteLn('device   : ', Hex4(Vid), ':', Hex4(Pid));
-  if Vid <> AX_VENDOR then
+  { USBPKT does not check this at all -- it enumerates whatever is there
+    and runs the bring-up.  That is deliberate, and it is why a rebadged
+    ASIX part works: plenty of adapters, docks especially, ship AX88179
+    silicon under the vendor's own USB ID.
+
+    So this refusing to look was the wrong way round.  USBLINK is the
+    tool you reach for when USBPKT fails, and on exactly the adapter
+    where that question is interesting it would not start.  /F says try
+    anyway.  The worst case is a register write that times out, which is
+    information rather than damage. }
+  if (Vid <> AX_VENDOR) and not Force then
   begin
     WriteLn;
-    WriteLn('That is not an ASIX adapter.  This program only knows the');
-    WriteLn('AX88179 register map; USBINFO will say what you have.');
+    WriteLn('That is not an ASIX vendor ID, and this only knows the');
+    WriteLn('AX88179 register map.');
+    WriteLn;
+    WriteLn('If you believe it is an ASIX part under somebody else''s');
+    WriteLn('ID -- docks and own-brand dongles often are -- then /F');
+    WriteLn('tries the bring-up regardless.  USBPKT never checks the ID');
+    WriteLn('at all, so it will already have tried.  USBINFO dumps what');
+    WriteLn('the device says about itself.');
     Halt(5);
   end;
+  if Vid <> AX_VENDOR then
+    WriteLn('not an ASIX ID -- trying the AX88179 bring-up anyway (/F)');
   if LowSpeed then WriteLn('bus      : low speed -- that cannot be right for a NIC')
               else WriteLn('bus      : full speed (12 Mbps)');
   WriteLn;

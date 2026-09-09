@@ -63,8 +63,15 @@ bus      : full speed (12 Mbps)
 SUPPORTED.
 ```
 
-If it says something else, this driver will not drive it. `NETID` reads the
-USB descriptors and nothing more, so it is safe to run at any time.
+`NETID` reads the USB descriptors and nothing more, so it is safe to run at
+any time.
+
+**If it does not recognise your adapter, try `USBPKT` anyway.** The driver
+never looks at the USB ID — it brings up whatever enumerates — so an ASIX
+part sold under somebody else's ID works fine despite `NETID` calling it
+unknown, which docks and own-brand dongles frequently are. A wrong guess
+fails at a numbered step and harms nothing. [ADAPTERS.md](ADAPTERS.md) has
+the detail.
 
 If it finds no CH375 at all, your board is on a different I/O address —
 `NETID /P=<hex>` and `USBPKT /P=<hex>` both take one.

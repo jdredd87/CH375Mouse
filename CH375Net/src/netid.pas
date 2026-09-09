@@ -175,6 +175,17 @@ begin
     WriteLn('communications class, so there is nothing to go on.  USBINFO');
     WriteLn('dumps everything the device will say about itself, and HIDREP');
     WriteLn('decodes it if it turns out to be something else entirely.');
+    WriteLn;
+    { Worth saying, because this verdict is advisory and gets taken as
+      final.  USBPKT does not look at the USB ID at all -- it brings up
+      whatever enumerates -- so an ASIX part wearing somebody else's ID,
+      which docks and own-brand dongles very often are, works fine
+      despite this message. }
+    WriteLn('This verdict is advisory.  USBPKT does not check the USB ID');
+    WriteLn('at all, so if you suspect a rebadged ASIX part -- docks and');
+    WriteLn('own-brand dongles often are -- just run it.  A wrong guess');
+    WriteLn('fails at a numbered step and harms nothing.  ADAPTERS.md');
+    WriteLn('has the detail.');
     Halt(6);
   end;
 

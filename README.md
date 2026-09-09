@@ -17,6 +17,9 @@ which is rather the point.
 > **[Read GUIDE.md](GUIDE.md)** — the complete guide: every tool, what works
 > and what does not, the hardware limits and why they are limits, and
 > troubleshooting. If you only read one file, read that one.
+>
+> **Just want the network working?** [CH375Net/INSTALL.md](CH375Net/INSTALL.md)
+> is four steps and assumes nothing.
 
 | | |
 |---|---|
@@ -24,7 +27,7 @@ which is rather the point.
 | **[CH375USBTOOLS](CH375USBTOOLS/)** | Seven probe tools. What is plugged in, what it says about itself, and what it puts on the wire — for any device, of any class, whether or not anything here can drive it |
 | **[CH375Keyboard](CH375Keyboard/)** | `USBKBD.COM`, a resident keyboard driver, plus six diagnostics. Enumerates a USB HID keyboard, translates usages to PC scancodes, and writes them into the BIOS keyboard buffer where DOS expects to find them |
 | **[CH375Combo](CH375Combo/)** | `USBCOMBO.COM`, both of the above in one image, for a **USB-to-PS/2 adapter** — one USB device with a keyboard interface and a mouse interface on it. About 5.3 KB resident |
-| **[CH375Net](CH375Net/)** | **it browses a BBS.** USB Ethernet through an ASIX AX88179, with a Crynwr packet driver at INT 65h. ARP, ICMP, DNS and TCP all work: an 8086 pings 8.8.8.8 and telnets to a BBS in Italy |
+| **[CH375Net](CH375Net/)** | **1.0.0 — it is on the internet.** `USBPKT.COM`, a Crynwr packet driver for a USB Ethernet adapter. One command, like `NE2000.COM`. Pings 8.8.8.8, resolves DNS, fetches web pages, telnets to a BBS, and has moved 10 MB byte-exact. [INSTALL.md](CH375Net/INSTALL.md) · [ADAPTERS.md](CH375Net/ADAPTERS.md) |
 
 Each project has its own `README.md`, `CHANGELOG.md`, `build.cmd` and
 `bin\`. The binaries are committed deliberately: the machine this targets
@@ -37,6 +40,7 @@ they actually want.
 |---|---|---|---|
 | USB mouse | **yes**, INT 33h | **yes**, via `/W` | **untested** |
 | USB keyboard | **yes**, BIOS buffer | **no** | **untested** |
+| USB Ethernet | **yes**, packet driver at INT 65h | n/a | **untested** |
 | USB storage, hubs | no — out of scope | no | no |
 
 Two limits are worth knowing before you start. Neither is a missing feature,
