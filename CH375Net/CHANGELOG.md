@@ -4,6 +4,43 @@ CH375Net -- StevenC -- https://github.com/jdredd87/CH375USBTools
 
 Versions live in the `VER` constant of each program.
 
+## /R defaults to 1 again: the fast timer breaks MS-DOS EDIT
+
+Reverting a default I set two entries ago, and the reason is a good one.
+
+`/R=8` runs the receive poll at 145 Hz. It is worth twice the throughput and
+drops the round trip from ~55 ms to 6 ms, and on those numbers it was the
+obvious default. **Then EDIT wedged the machine hard enough to need the power
+switch.**
+
+The mechanism is the interrupt chain, and `TICKCHK` had already said it in
+so many words without my joining the dots. The driver hooks INT 08h and
+reprograms the PIT, then chains onward 1 tick in 8, so the BIOS clock and
+INT 1Ch stay correct — 145 Hz on 08h, 18 Hz on 1Ch, DOS keeps perfect time.
+What that does not cover:
+
+- a program hooking INT 08h **after** this driver sits in **front** of it and
+  sees all 145 interrupts, so its own timing runs eight times fast;
+- a program reprogramming the PIT for itself leaves the 1-in-8 chaining
+  dividing the wrong thing, which starves the BIOS clock eightfold and looks
+  precisely like a hang.
+
+Neither is something a packet driver gets to do to the rest of the machine
+uninvited. **The default now touches the PIT not at all.** `/R` remains, for
+when you know what else is running: `/R=8` while shifting a large file is
+sensible, `/R=8` in `AUTOEXEC.BAT` on a machine somebody uses is not.
+
+The cost is real and is the right trade: ~55 ms round trip instead of 6 ms,
+1 MB in 71 s instead of 36 s. A network driver that breaks the text editor
+is not a working network driver.
+
+Worth recording how this was missed. `TICKCHK` printed *"INT 08h runs fast.
+Anything hooking it after the driver runs its timers this much too fast"* and
+I quoted that line approvingly as evidence the timer was **healthy** — which
+it was, for DOS. The warning was about everything else, and I read past it
+because the measurement I cared about had come out well.
+
+
 ## Second adapter, and the tools stop being called AX
 
 **A second, physically different AX88179 works, with nothing changed.** It

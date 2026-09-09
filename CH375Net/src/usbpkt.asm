@@ -258,36 +258,33 @@ cfg_val:    db  1
 ; PIT runs fast, and the handler that was in the vector before us is called
 ; only every nth tick, so the BIOS clock and everything hooked in ahead of
 ; us still see 18.2 Hz.
-; 8 -- 145.6 Hz.  Throughput stops improving at 4, but LATENCY does not:
-; timed with PKTTEST /N=200, which does the round trip itself rather than
-; believing mTCP about it,
+; 1 -- LEAVE THE PIT ALONE.  This is a compatibility default, and it was
+; not always the default; the story is worth keeping.
+;
+; Speeding the timer up is worth a great deal to this driver.  Measured
+; with PKTTEST /N=200, which times the round trip itself:
 ;
 ;     /R=1  ~55ms   /R=4  13ms   /R=8  6ms   /R=16  6ms   NE2000 1ms
 ;
-; 6ms is the floor, so 8 buys everything 16 would and asks less of the
-; interrupt.  Latency is what a BBS session or a telnet feels, and this
-; machine spends most of its time doing exactly that.
+; and 1 MB over HTTP goes from 71s at /R=1 to 36s at /R=8.  So 8 was
+; made the default.  That was wrong, and MS-DOS EDIT is what proved it:
+; with the timer at 145 Hz, EDIT wedged the machine hard enough to need
+; the power switch.
 ;
-; It fits because bursts are 1 KB: 17 reads at about 5.3us a byte is
-; 5.7ms inside a 6.9ms tick.  Raise AxBulkSize and that stops being
-; true -- the two constants are related and neither travels alone.
+; The reason is the interrupt chain.  We hook INT 08h and reprogram the
+; PIT, then chain to whoever was there 1 tick in 8, so the BIOS clock
+; and INT 1Ch stay honest -- TICKCHK confirms 145 Hz on 08h and 18 Hz
+; on 1Ch.  But a program that hooks INT 08h AFTER us sits in FRONT of
+; us and sees all 145 interrupts, and a program that reprograms the PIT
+; for itself leaves our 1-in-8 chaining dividing the wrong thing --
+; which starves the BIOS clock by a factor of eight and looks exactly
+; like a hang.  Neither is something a packet driver gets to do to the
+; rest of the machine by default.
 ;
-; This was 1 on the strength of a measurement that turned out to be
-; worthless: the rate looked to make no difference, but the test wrote
-; its download to disk and the disk hid it.  Fetching 1 MB to NUL
-; instead, with the payload read loop inlined:
-;
-;     /R=1  71s    /R=2  43s    /R=4  36s    /R=8  36s
-;
-; against 18s for the ISA NE2000 in the same machine, which is the
-; ceiling worth aiming at.  4 and 8 tie, so take 4: at 8 the tick is
-; 6.9ms and a full 31-read burst is 10.5ms, which does not fit.  At 4
-; the tick is 13.7ms and it does.
-;
-; Latency is about 50ms at every setting and always has been -- but
-; the 480ms outliers /R=4 used to produce are gone, because the read
-; loop no longer costs what it did.
-tick_n:     db  8
+; So the default touches nothing, and /R is there for when you know
+; what else is running.  /R=8 while shifting a large file is a fine
+; idea; /R=8 in AUTOEXEC.BAT on a machine somebody uses is not.
+tick_n:     db  1
 tick_ctr:   db  0
 pit_fast_on: db 0                ; did we actually change the timer
 

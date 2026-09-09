@@ -207,23 +207,46 @@ something far shorter than the 55 ms BIOS tick:
 The real figure tracks the poll interval and floors at 6 ms. mTCP's 50 ms is
 its own timing granularity, not the wire.
 
-So `/R` defaults to **8**. Throughput stops improving after 4, but latency
-does not, and latency is what a telnet or a BBS session actually feels.
-`/R=16` buys nothing over 8 and asks more of the interrupt.
+### But `/R` defaults to 1, and that is deliberate
 
-It fits because bursts are 1 KB: 17 reads at ~5.3 µs a byte is 5.7 ms inside
-a 6.9 ms tick. Raise `AxBulkSize` and that stops being true — the two
-constants are related and neither travels alone.
+On the numbers above, 8 is obviously right. It was made the default, and
+that was wrong. **MS-DOS `EDIT` is what proved it: with the timer at 145 Hz,
+opening the editor wedged the machine hard enough to need the power switch.**
+
+The reason is the interrupt chain. This driver hooks INT 08h and reprograms
+the PIT, then chains to whoever was there 1 tick in 8, so the BIOS clock and
+INT 1Ch stay honest — `TICKCHK` confirms 145 Hz on 08h and 18 Hz on 1Ch, and
+DOS keeps perfect time. But:
+
+- a program that hooks INT 08h **after** this driver sits in **front** of it
+  and sees all 145 interrupts, so its own timing runs eight times fast;
+- a program that reprograms the PIT for itself leaves our 1-in-8 chaining
+  dividing the wrong thing, which starves the BIOS clock by a factor of
+  eight and looks exactly like a hang.
+
+Neither is something a packet driver gets to do to the rest of the machine
+without being asked. So **the default touches the PIT not at all**, and `/R`
+is there for when you know what else is running:
+
+```
+USBPKT /R=8        while shifting a large file -- 2x throughput, 6 ms
+USBPKT             everything else
+```
+
+`/R=8` in `AUTOEXEC.BAT` on a machine somebody actually uses is a bad idea,
+and this is the cost of the default: ~55 ms round trip instead of 6 ms, and
+1 MB in 71 s instead of 36 s. Correctness first. A network driver that
+breaks the text editor is not a working network driver.
+
+If you raise `/R`, note that the budget is sized for it: bursts are 1 KB, so
+17 reads at ~5.3 µs a byte is 5.7 ms, which fits inside `/R=8`'s 6.9 ms tick.
+Raise `AxBulkSize` as well and that stops being true — the two constants are
+related and neither travels alone.
 
 `/Q=n` sets the AX88179's bulk-in aggregation timer (default 128), which
 decides how long the adapter holds a part-full burst. It was a suspect for
 the latency and is not: 2 and 128 measure the same. The switch is kept
 because it is a real knob and now a documented dead end.
-
-`TICKCHK` confirms the timer stays honest: INT 08h at 72 Hz, INT 1Ch at
-18 Hz. DOS timekeeping is unaffected. Anything that hooks INT 08h *after*
-this driver will see the faster rate, which is inherent to any packet driver
-that speeds up the PIT.
 
 The remaining ceiling is the ISA bus rather than the wire — the link is
 still several times faster than the driver can drain it, which is why the

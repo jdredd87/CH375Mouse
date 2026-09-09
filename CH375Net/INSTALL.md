@@ -133,6 +133,19 @@ over it with no further changes.
 > One environment variable is a much smaller thing to get wrong than the
 > config file your only route into the machine depends on.
 
+## If you want it faster
+
+`USBPKT /R=8` speeds the receive poll up: about twice the throughput and a
+6 ms round trip instead of ~55 ms.
+
+**Do not leave it there.** The driver reprograms the PC's timer to do it, and
+anything that hooks the timer interrupt after the driver — or reprograms it
+for itself — then gets the wrong rate. MS-DOS `EDIT` is one: at `/R=8` it
+wedges the machine hard enough to need the power switch.
+
+The default leaves the timer completely alone, which is why it is the
+default. Use `/R=8` for a big transfer and unload it afterwards.
+
 ## Unloading
 
 ```
