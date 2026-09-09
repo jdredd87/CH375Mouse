@@ -284,11 +284,17 @@ So `AXSEND` does not check that the write succeeded. It asks the network a
 question and waits to be answered:
 
 ```
+AXSEND /I=<a free address> /T=<your router>
+
 Asking 192.168.50.1 who it is, claiming to be 192.168.50.222
   request 1 sent
 
 REPLY from 04:D4:C4:D2:2B:00 -- 192.168.50.1 answered us.
 ```
+
+Both addresses are required and neither is guessed. A tool that defaults to
+somebody else's subnet is a tool that puts an address you have never heard
+of on your wire.
 
 That reply cannot be manufactured at this end. A frame built on an 8086,
 pushed through an ISA card, put on the wire by the adapter, was received by

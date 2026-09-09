@@ -6,6 +6,36 @@ Versions live in the `VER` constant of each program. Nothing here has been
 released; the project is in progress.
 
 
+## Suite regression pass, and AXSEND stops guessing
+
+`AxBulkSize` went from `$02` to `$01` in `ax179.pas` during the receive
+hunt, and that file is shared -- `AXPROBE`, `AXRECV` and `AXSEND` all build
+on it and none had been run since. They have now:
+
+| | result |
+|---|---|
+| `PKTSCAN` | both drivers found, 60h and 65h |
+| `NETID` | `0B95:1790 ASIX AX88179`, supported |
+| `AXPROBE` | `bulk-in queue, size 01`, link up, 10 Mbps full duplex |
+| `AXRECV` | 17 bursts, 17 frames, 0 errors, 0 layout wrong |
+| `AXSEND` | `REPLY from 04:D4:C4:D2:2B:00` -- transmit works |
+| `AXTICK` | both phases, 0 errors |
+| `AXNET` | 100/100 round trips, 7 ms |
+| `AXPKT` | link up, resident, 0 in every counter |
+
+Nothing regressed.
+
+**`AXSEND` no longer defaults its addresses.** It shipped with
+`/I=192.168.50.222` and `/T=192.168.50.1` baked in -- this machine's
+network. On anybody else's it would quietly ARP a subnet they have never
+heard of, on a range that might well belong to someone. Both are required
+now, with a message that says why, which is how `AXNET` has always worked.
+
+The example in the README keeps the real addresses, because it is a
+transcript and transcripts should be true, but it now shows the invocation
+above the output so it is clear they were given rather than assumed.
+
+
 ## Latency measured properly, and it was never 50 ms
 
 `AXNET` grew `/N=count`: it sends an ARP, waits for the answer, repeats, and

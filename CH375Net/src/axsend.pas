@@ -19,10 +19,10 @@ program axsend;
            [/G] [/V] [/X]
 
       /P=hex   CH375 I/O base, default 260
-      /I=ip    the address to claim as ours, default 192.168.50.222.
+      /I=ip    the address to claim as ours.  Required.
                It only has to be free and on the right subnet -- nothing
                here keeps it, and nothing else will be using it
-      /T=ip    who to ask about, default 192.168.50.1.  A router is the
+      /T=ip    who to ask about.  Required.  A router is the
                safest bet: it is always up and it always answers ARP
       /N=dec   how many requests to send, default 3
       /S=dec   how long to wait for a reply, default 5 seconds
@@ -46,8 +46,15 @@ const
   ETH_ARP = $0806;
 
 var
-  OurIp:   array[0..3] of Byte = (192, 168, 50, 222);
-  TgtIp:   array[0..3] of Byte = (192, 168, 50, 1);
+  { No default addresses, deliberately.  This is somebody else's tool as
+    much as ours, and a default of 192.168.50.x is a tool that silently
+    ARPs a subnet the user has never heard of -- on a network where that
+    range might well belong to someone.  Both are required; AXNET has
+    worked this way since it was written. }
+  OurIp:   array[0..3] of Byte = (0, 0, 0, 0);
+  TgtIp:   array[0..3] of Byte = (0, 0, 0, 0);
+  HaveOur: Boolean = False;
+  HaveTgt: Boolean = False;
   Count:   Word    = 3;
   Secs:    Word    = 5;
   Giga:    Boolean = False;
@@ -197,9 +204,9 @@ begin
   WriteLn;
   HelpBaseLine;
   WriteLn('  /I=ip    the address to claim as ours, default');
-  WriteLn('           192.168.50.222.  It only has to be free and on the');
+  WriteLn('           has to be free and on the right subnet -- nothing');
   WriteLn('           right subnet -- nothing here keeps it');
-  WriteLn('  /T=ip    who to ask about, default 192.168.50.1.  A router is');
+  WriteLn('  /T=ip    who to ask about (required).  A router is');
   WriteLn('           the safest bet: always up, always answers ARP');
   WriteLn('  /N=dec   how many requests to send, default 3');
   WriteLn('  /S=dec   how long to wait for a reply, default 5 seconds');
@@ -242,8 +249,8 @@ begin
       if      K = '/P=' then begin Val('$' + Rest, V, Code); if Code = 0 then Base := Word(V); end
       else if K = '/N=' then begin Val(Rest, V, Code); if Code = 0 then Count := Word(V); end
       else if K = '/S=' then begin Val(Rest, V, Code); if Code = 0 then Secs := Word(V); end
-      else if K = '/I=' then ParseIp(Rest, OurIp)
-      else if K = '/T=' then ParseIp(Rest, TgtIp);
+      else if K = '/I=' then HaveOur := ParseIp(Rest, OurIp)
+      else if K = '/T=' then HaveTgt := ParseIp(Rest, TgtIp);
     end;
   end;
 end;
@@ -261,6 +268,18 @@ begin
   if HelpWanted then begin Usage; Halt(0); end;
   ParseArgs;
   Banner('AXSEND', VER, 'AX88179 transmit');
+
+  if not (HaveOur and HaveTgt) then
+  begin
+    WriteLn;
+    WriteLn('/I and /T are both required -- an address to speak as, and');
+    WriteLn('one to ask about.  This will not guess: a guess would put');
+    WriteLn('somebody else''s address on your wire.  Your router is the');
+    WriteLn('safest /T; any free address on the same subnet does for /I.');
+    WriteLn;
+    WriteLn('    AXSEND /I=<free address> /T=<your router>');
+    Halt(4);
+  end;
 
   Rc := BusUp;
   if Rc <> BU_OK then
