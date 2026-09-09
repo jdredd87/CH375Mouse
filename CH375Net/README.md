@@ -128,11 +128,25 @@ Verified over eight consecutive boots — warm and cold — plus a deliberate
 test with the flag planted by hand, which correctly skipped the block and
 came up on the other card.
 
-**Latency, if you are tempted to tune it.** A ping over this is about 50 ms
-against 3 ms on an ISA NE2000 in the same machine, and raising the poll rate
-does not fix it: `/R=4` gives the same 46-51 ms plus occasional 480 ms
-outliers, because the interrupt then takes enough of the CPU to starve the
-stack. Leave `/R` alone.
+### What to expect from it
+
+512 KB fetched over HTTP, verified byte for byte against the original
+(CRC-32 `9EBAF22E`), with every one of the driver's error counters still at
+zero afterwards: no nonsense bursts, no impossible lengths, no overflows, no
+toggle rescues. 64 KB before that, also byte-exact.
+
+**About 18 KB/s.** That is what it is, and `/R` will not change it — 512 KB
+took 39s at `/R=1`, 39s at `/R=2` and 37s at `/R=4`. Nor does `/R` help
+latency: a ping is 46-51 ms at any setting (against 3 ms on an ISA NE2000 in
+the same machine), and `/R=4` adds occasional 480 ms outliers because the
+interrupt starts taking enough of the CPU to starve the stack. **Leave `/R`
+alone.** Both of those were measured rather than assumed, twice, because
+both looked like obvious wins beforehand.
+
+The ceiling is the ISA bus, not the wire. Every byte off the CH375 costs two
+settling reads plus the read itself, so the link is already about ten times
+faster than the driver can drain it — which is also why the PHY is held at
+10BASE-T and why a faster cable buys nothing.
 
 Verified end to end on the hardware, from one command:
 

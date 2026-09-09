@@ -6,6 +6,29 @@ Versions live in the `VER` constant of each program. Nothing here has been
 released; the project is in progress.
 
 
+## Proved with real volume, not just pings
+
+Everything up to here had been small packets -- pings, a 559-byte page,
+protocol banners -- which is not evidence that a receive path works.
+
+512 KB fetched over HTTP from a server on the LAN, written to disk on the
+DOS box, pulled back and compared: **byte for byte identical**, CRC-32
+`9EBAF22E`. 64 KB before it, also exact. The driver's counters afterwards:
+
+```
+bursts collected 1569   frames delivered 540   frames sent 412
+bursts that made no sense       = 0
+reads with an impossible length = 0
+bursts too big for the buffer   = 0
+reads rescued by flipping toggle= 0
+```
+
+Throughput is about 18 KB/s and the poll rate does not change it: 39s at
+`/R=1`, 39s at `/R=2`, 37s at `/R=4`. Nor does it change latency. Both were
+measured because both looked like obvious wins; neither was. `/R` stays at
+its default and the README now says so, with the numbers.
+
+
 ## It works
 
 An IBM PS/2 Model 30 -- 8086, 1987 -- on the internet through a USB
