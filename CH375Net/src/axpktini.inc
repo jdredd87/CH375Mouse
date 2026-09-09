@@ -257,7 +257,11 @@ rm_try:
         cmp     bh, 6
         je      short rm_good
 rm_again:
-        call    clr_ep0                  ; the attempt failed; start clean
+        ; Again: only a stall needs clearing.  See ctrl_out_r.
+        cmp     byte [cs:bu_st], INT_RET_STALL
+        jne     short rm_next
+        call    clr_ep0
+rm_next:
         dec     bp
         jnz     short rm_try
 
@@ -506,6 +510,17 @@ ud_nodev:
         call    ch_cmd
         mov     cx, 60
         call    delay_ms
+
+        ; Give the caller back the failure that brought us here.  Without
+        ; this the teardown's own register writes are what gets reported,
+        ; and step 7 spent an evening blaming register 0B -- which is the
+        ; receiver-stop three lines above, not anything step 7 touches.
+        push    ax
+        mov     al, [cs:save_reg]
+        mov     ah, [cs:save_st]
+        mov     [cs:bu_reg], al
+        mov     [cs:bu_st], ah
+        pop     ax
         ret
 
 ; GET_DESCR for the device descriptor at whatever address the host side is
@@ -871,7 +886,17 @@ cor_try:
         pop     di
         pop     si
         jnc     short cor_ok
-        call    clr_ep0                  ; on the error path only
+        ; Clear the endpoint ONLY after a stall.  clr_ep0 makes the CH375
+        ; issue a real CLEAR_FEATURE transfer, and firing one at a device
+        ; that just answered NAK -- which means "busy, ask again" -- gives
+        ; it more work instead of less.  This is the same mistake that was
+        ; found and fixed in the main path; it sat here on the retry path
+        ; the whole time, which is why the bring-up still failed at a
+        ; different step every run.
+        cmp     byte [cs:bu_st], INT_RET_STALL
+        jne     short cor_wait
+        call    clr_ep0
+cor_wait:
         mov     cx, 10
         call    delay_ms
         dec     bp
@@ -910,7 +935,17 @@ cir_try:
         pop     di
         pop     si
         jnc     short cir_ok
+        ; Clear the endpoint ONLY after a stall.  clr_ep0 makes the CH375
+        ; issue a real CLEAR_FEATURE transfer, and firing one at a device
+        ; that just answered NAK -- which means "busy, ask again" -- gives
+        ; it more work instead of less.  This is the same mistake that was
+        ; found and fixed in the main path; it sat here on the retry path
+        ; the whole time, which is why the bring-up still failed at a
+        ; different step every run.
+        cmp     byte [cs:bu_st], INT_RET_STALL
+        jne     short cir_wait
         call    clr_ep0
+cir_wait:
         mov     cx, 10
         call    delay_ms
         dec     bp
