@@ -1,10 +1,10 @@
 ; ==========================================================================
-; AXPKT.COM -- a Crynwr packet driver for an ASIX AX88179 USB Ethernet
+; USBPKT.COM -- a Crynwr packet driver for an ASIX AX88179 USB Ethernet
 ;              adapter reached through a CH375 in host mode.
 ;
 ;   CH375Net, StevenC.  Public domain (the Unlicense).
 ;
-;   AXPKT [@260] [/I=65] [/S] [/U] [/V] [/G] [/?]
+;   USBPKT [@260] [/I=65] [/S] [/U] [/V] [/G] [/?]
 ;
 ;     @nnn    CH375 I/O base in hex, default 260
 ;     /I=nn   interrupt vector in hex, default 65.  60h is REFUSED
@@ -209,7 +209,7 @@ start:
 ; eight-byte signature at 0103 and an ASCII version at 010B, so a second
 ; copy can find the first and say what it is without guessing.
 ; --------------------------------------------------------------------------
-        db      'AXPKT001'                      ; 0103
+        db      'USBPKT01'                      ; 0103
 ver_str:
         db      '1.0.0$'                        ; 010B
 
@@ -259,7 +259,7 @@ cfg_val:    db  1
 ; only every nth tick, so the BIOS clock and everything hooked in ahead of
 ; us still see 18.2 Hz.
 ; 8 -- 145.6 Hz.  Throughput stops improving at 4, but LATENCY does not:
-; timed with AXNET /N=200, which does the round trip itself rather than
+; timed with PKTTEST /N=200, which does the round trip itself rather than
 ; believing mTCP about it,
 ;
 ;     /R=1  ~55ms   /R=4  13ms   /R=8  6ms   /R=16  6ms   NE2000 1ms
@@ -1004,7 +1004,7 @@ rx_go:
         ; position and carrying on next time.  It seemed the polite thing to
         ; do from inside an interrupt, and it is why the adapter wedged: it
         ; puts 27ms and a return to the foreground in the MIDDLE of a USB
-        ; transfer, every time.  ax179.pas never does that, and AXTICK
+        ; transfer, every time.  ax179.pas never does that, and PKTTICK
         ; settled the question -- it ran AxRxBurst itself from a hook on
         ; INT 08h and got 9 bursts and 0 errors, so interrupt context was
         ; never the problem.  Finishing what we start is.
@@ -1078,7 +1078,7 @@ rx_done:
 ; --------------------------------------------------------------------------
 ; Pull the frames out of a burst and pass them up.  CX = bytes in rxbuf.
 ;
-; The layout is the one AXRECV established on the hardware:
+; The layout is the one USBRECV established on the hardware:
 ;   [frame][pad to 8][frame][pad to 8]...[entry][entry]...[trailer]
 ; trailer = last 4 bytes, low word the packet count and high word the
 ; offset of the entry array; each entry is 4 bytes and bits 16..28 of it
@@ -1571,7 +1571,7 @@ prl_ok:
 ; ---- 5: terminate ----
 ; Refused.  Unloading has to put INT 08h back as well, and doing that from
 ; inside a call made by the program being unloaded is how a machine ends up
-; with a vector pointing at freed memory.  AXPKT /U does it properly, from
+; with a vector pointing at freed memory.  USBPKT /U does it properly, from
 ; the command line, with the checks that need a transient copy to make.
 pkt_terminate:
         mov     dh, E_CANT_TERMINATE
@@ -1719,4 +1719,4 @@ resident_end:
 ; TRANSIENT -- everything below here is released when the driver goes
 ; resident, and none of it may be reached from the ISR.
 ; ==========================================================================
-%include "axpktini.inc"
+%include "usbpktini.inc"

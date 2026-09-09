@@ -1,11 +1,11 @@
-program axrecv;
-{ AXRECV -- watch Ethernet frames arrive through an AX88179 on a CH375.
+program usbrecv;
+{ USBRECV -- watch Ethernet frames arrive through an AX88179 on a CH375.
   CH375Net, StevenC.  Public domain (the Unlicense).
 
-  Step two.  AXPROBE proved the control path; this proves the data path,
+  Step two.  USBLINK proved the control path; this proves the data path,
   and works out what the receive buffer actually looks like.
 
-    AXRECV [/P=260] [/S=secs] [/N=count] [/A] [/X] [/G] [/V] [/R]
+    USBRECV [/P=260] [/S=secs] [/N=count] [/A] [/X] [/G] [/V] [/R]
 
       /P=hex   CH375 I/O base, default 260
       /S=dec   how long to watch, default 20 seconds
@@ -13,7 +13,7 @@ program axrecv;
       /A       accept everything: promiscuous, all multicast.  Without it
                only broadcast and frames addressed to this adapter arrive
       /X       hex dump every burst in full
-      /G       leave the PHY in gigabit mode -- see AXPROBE
+      /G       leave the PHY in gigabit mode -- see USBLINK
       /V       print every register access
       /R       raw: do not try to interpret the buffer at all
 
@@ -57,9 +57,9 @@ const
 var
   Secs:    Word    = 20;
   { /D -- milliseconds to wait between polls, to imitate a driver that
-    can only look at the endpoint on a timer tick.  AXRECV normally
+    can only look at the endpoint on a timer tick.  USBRECV normally
     polls flat out, several hundred times a second, and never sees the
-    state AXPKT falls into.  This is here to answer whether that rate
+    state USBPKT falls into.  This is here to answer whether that rate
     is the reason or merely a coincidence. }
   PollGap: Word    = 0;
   MaxN:    Word    = 20;
@@ -235,9 +235,9 @@ end;
 
 procedure Usage;
 begin
-  Banner('AXRECV', VER, 'watch Ethernet frames arrive through an AX88179');
+  Banner('USBRECV', VER, 'watch Ethernet frames arrive through an AX88179');
   WriteLn;
-  WriteLn('  AXRECV [/P=260] [/S=secs] [/N=count] [/A] [/X] [/G] [/V] [/R]');
+  WriteLn('  USBRECV [/P=260] [/S=secs] [/N=count] [/A] [/X] [/G] [/V] [/R]');
   WriteLn;
   HelpBaseLine;
   WriteLn('  /S=dec   how long to watch, default 20 seconds');
@@ -248,7 +248,7 @@ begin
   WriteLn('           Without it only broadcast and frames addressed to');
   WriteLn('           this adapter arrive');
   WriteLn('  /X       hex dump every burst in full');
-  WriteLn('  /G       leave the PHY in gigabit mode -- see AXPROBE /?');
+  WriteLn('  /G       leave the PHY in gigabit mode -- see USBLINK /?');
   WriteLn('  /V       print every register access');
   WriteLn('  /R       raw: do not try to interpret the buffer at all');
   WriteLn('  /B=hex   bulk-in burst size, default 02.  How much the chip');
@@ -325,7 +325,7 @@ var
 begin
   if HelpWanted then begin Usage; Halt(0); end;
   ParseArgs;
-  Banner('AXRECV', VER, 'AX88179 receive path');
+  Banner('USBRECV', VER, 'AX88179 receive path');
 
   Rc := BusUp;
   if Rc <> BU_OK then

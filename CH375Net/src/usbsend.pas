@@ -1,8 +1,8 @@
-program axsend;
-{ AXSEND -- transmit through an AX88179 on a CH375, and prove it landed.
+program usbsend;
+{ USBSEND -- transmit through an AX88179 on a CH375, and prove it landed.
   CH375Net, StevenC.  Public domain (the Unlicense).
 
-  Step three.  AXPROBE proved the control path and AXRECV proved receive;
+  Step three.  USBLINK proved the control path and USBRECV proved receive;
   this proves transmit, and it proves it the only way that counts.
 
   A write to the bulk endpoint returning "success" means the CH375 accepted
@@ -15,7 +15,7 @@ program axsend;
   manufactured at this end: it means another computer received our frame,
   parsed it, believed it, and addressed a response back to this MAC.
 
-    AXSEND [/P=260] [/I=a.b.c.d] [/T=a.b.c.d] [/N=count] [/S=secs]
+    USBSEND [/P=260] [/I=a.b.c.d] [/T=a.b.c.d] [/N=count] [/S=secs]
            [/G] [/V] [/X]
 
       /P=hex   CH375 I/O base, default 260
@@ -26,7 +26,7 @@ program axsend;
                safest bet: it is always up and it always answers ARP
       /N=dec   how many requests to send, default 3
       /S=dec   how long to wait for a reply, default 5 seconds
-      /G       leave the PHY at gigabit -- see AXPROBE /?
+      /G       leave the PHY at gigabit -- see USBLINK /?
       /V       print every register access
       /X       hex dump the frame being sent and any reply
 
@@ -49,7 +49,7 @@ var
   { No default addresses, deliberately.  This is somebody else's tool as
     much as ours, and a default of 192.168.50.x is a tool that silently
     ARPs a subnet the user has never heard of -- on a network where that
-    range might well belong to someone.  Both are required; AXNET has
+    range might well belong to someone.  Both are required; PKTTEST has
     worked this way since it was written. }
   OurIp:   array[0..3] of Byte = (0, 0, 0, 0);
   TgtIp:   array[0..3] of Byte = (0, 0, 0, 0);
@@ -132,7 +132,7 @@ begin
 end;
 
 { Walk a received burst looking for an ARP reply that answers ours.  The
-  buffer layout is the one AXRECV established: frames at the front padded
+  buffer layout is the one USBRECV established: frames at the front padded
   to 8 bytes, 4-byte entries at hdr_off, a count-and-offset trailer at the
   very end. }
 function FindArpReply(Len: Word; var Who: ShortString): Boolean;
@@ -197,9 +197,9 @@ end;
 
 procedure Usage;
 begin
-  Banner('AXSEND', VER, 'transmit through an AX88179 and prove it landed');
+  Banner('USBSEND', VER, 'transmit through an AX88179 and prove it landed');
   WriteLn;
-  WriteLn('  AXSEND [/P=260] [/I=a.b.c.d] [/T=a.b.c.d] [/N=count]');
+  WriteLn('  USBSEND [/P=260] [/I=a.b.c.d] [/T=a.b.c.d] [/N=count]');
   WriteLn('         [/S=secs] [/G] [/V] [/X]');
   WriteLn;
   HelpBaseLine;
@@ -210,7 +210,7 @@ begin
   WriteLn('           the safest bet: always up, always answers ARP');
   WriteLn('  /N=dec   how many requests to send, default 3');
   WriteLn('  /S=dec   how long to wait for a reply, default 5 seconds');
-  WriteLn('  /G       leave the PHY at gigabit -- see AXPROBE /?');
+  WriteLn('  /G       leave the PHY at gigabit -- see USBLINK /?');
   WriteLn('  /V       print every register access');
   WriteLn('  /X       hex dump the frame sent and any reply');
   WriteLn('  /?       this screen');
@@ -267,7 +267,7 @@ var
 begin
   if HelpWanted then begin Usage; Halt(0); end;
   ParseArgs;
-  Banner('AXSEND', VER, 'AX88179 transmit');
+  Banner('USBSEND', VER, 'AX88179 transmit');
 
   if not (HaveOur and HaveTgt) then
   begin
@@ -277,7 +277,7 @@ begin
     WriteLn('somebody else''s address on your wire.  Your router is the');
     WriteLn('safest /T; any free address on the same subnet does for /I.');
     WriteLn;
-    WriteLn('    AXSEND /I=<free address> /T=<your router>');
+    WriteLn('    USBSEND /I=<free address> /T=<your router>');
     Halt(4);
   end;
 
@@ -372,7 +372,7 @@ begin
     WriteLn;
     WriteLn('Nothing went out at all.  The bulk OUT endpoint refused every');
     WriteLn('write, which is a CH375 or configuration problem rather than');
-    WriteLn('a frame-format one -- AXPROBE /V will show the bring-up.');
+    WriteLn('a frame-format one -- USBLINK /V will show the bring-up.');
     Halt(8);
   end;
 
@@ -388,7 +388,7 @@ begin
     WriteLn('blaming the header:');
     WriteLn('  * is ', IpStr(TgtIp), ' really on this network and up?');
     WriteLn('  * is ', IpStr(OurIp), ' free, and on the same subnet?');
-    WriteLn('  * does AXRECV /A see other traffic?  If it sees nothing');
+    WriteLn('  * does USBRECV /A see other traffic?  If it sees nothing');
     WriteLn('    either, the problem is the link and not the transmit');
     WriteLn('    path.');
     Halt(9);

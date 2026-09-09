@@ -1,12 +1,12 @@
-program axtick;
-{ AXTICK -- is polling from a timer interrupt what breaks the receive path?
+program pkttick;
+{ PKTTICK -- is polling from a timer interrupt what breaks the receive path?
   CH375Net, StevenC.  Public domain (the Unlicense).
 
-  A controlled experiment, and nothing else.  AXPKT reads the bulk endpoint
-  from inside INT 08h and wedges after a frame or two; AXRECV reads it from
+  A controlled experiment, and nothing else.  USBPKT reads the bulk endpoint
+  from inside INT 08h and wedges after a frame or two; USBRECV reads it from
   a normal loop and never does.  Everything else that differed between them
-  has been tested and ruled out -- the polling rate (AXRECV was slowed to
-  AXPKT's 28ms and stayed clean), the receive filter, the aggregation size,
+  has been tested and ruled out -- the polling rate (USBRECV was slowed to
+  USBPKT's 28ms and stayed clean), the receive filter, the aggregation size,
   the data toggle, the endpoint clear.  What is left is where the code runs.
 
   So this runs ONE piece of code -- AxRxBurst, the reference, the one that
@@ -17,16 +17,16 @@ program axtick;
     phase 2   from a hook on INT 08h, at the BIOS tick rate
 
   If phase 1 is clean and phase 2 wedges, the answer is interrupt context
-  and AXPKT's receive logic is not the problem at all.  If both are clean,
-  the fault is something AXPKT's assembly does that ax179.pas does not, and
+  and USBPKT's receive logic is not the problem at all.  If both are clean,
+  the fault is something USBPKT's assembly does that ax179.pas does not, and
   this rules out the last structural difference between them.
 
   The PIT is deliberately NOT reprogrammed.  Rate has already been
   eliminated, and leaving the timer alone keeps this test about one thing.
-  18.2 polls a second is slower than AXPKT manages and slower than the
+  18.2 polls a second is slower than USBPKT manages and slower than the
   28ms that was already proven fine in the foreground.
 
-    AXTICK [/P=260] [/S=secs] [/G]
+    PKTTICK [/P=260] [/S=secs] [/G]
 
       /P=hex   CH375 I/O base, default 260
       /S=dec   seconds per phase, default 12
@@ -50,9 +50,9 @@ var
 
 procedure Usage;
 begin
-  Banner('AXTICK', VER, 'timer-interrupt vs foreground receive');
+  Banner('PKTTICK', VER, 'timer-interrupt vs foreground receive');
   WriteLn;
-  WriteLn('  AXTICK [/P=hex] [/S=dec] [/G]');
+  WriteLn('  PKTTICK [/P=hex] [/S=dec] [/G]');
   WriteLn;
   WriteLn('  /P=hex   CH375 I/O base, default 260');
   WriteLn('  /S=dec   seconds per phase, default 12');
@@ -61,7 +61,7 @@ begin
   WriteLn;
   WriteLn('Runs the SAME receive routine twice -- once from a normal loop,');
   WriteLn('once from a hook on the timer interrupt -- against one bring-up.');
-  WriteLn('Everything else that differed between AXPKT and AXRECV has');
+  WriteLn('Everything else that differed between USBPKT and USBRECV has');
   WriteLn('already been ruled out, so this is the last one standing.');
   HelpTail;
 end;
@@ -114,7 +114,7 @@ begin
 end;
 
 { Count a burst.  Frames are not parsed -- the layout checks live in
-  AXRECV and this is not trying to repeat them.  What matters here is
+  USBRECV and this is not trying to repeat them.  What matters here is
   whether bursts keep ARRIVING and keep ENDING, because the failure being
   chased is a transfer that never terminates. }
 procedure Tally(var T: TTally; St: Integer; Len: Word);
@@ -196,7 +196,7 @@ var
 begin
   if HelpWanted then begin Usage; Halt(0); end;
   ParseArgs;
-  Banner('AXTICK', VER, 'timer-interrupt vs foreground receive');
+  Banner('PKTTICK', VER, 'timer-interrupt vs foreground receive');
   WriteLn;
 
   Rc := BusUp;
@@ -207,7 +207,7 @@ begin
   end;
   if not AxInit(False) then
   begin
-    WriteLn('The adapter would not initialise.  AXPROBE /V says where.');
+    WriteLn('The adapter would not initialise.  USBLINK /V says where.');
     Halt(3);
   end;
   AxNegotiate(not Giga);
@@ -219,7 +219,7 @@ begin
   Clear(Fore);
   Clear(Intr);
 
-  { ---- phase 1: the foreground, as AXRECV does it ---- }
+  { ---- phase 1: the foreground, as USBRECV does it ---- }
   WriteLn('phase 1: polling from the foreground for ', Secs, 's');
   AxRxReset;
   TEnd := Ticks + LongInt(Secs) * 18;
@@ -261,11 +261,11 @@ begin
   begin
     WriteLn('The foreground received and the interrupt did not, with the');
     WriteLn('same code and the same adapter.  Interrupt context is the');
-    WriteLn('difference, and AXPKT''s receive logic is not the fault.');
+    WriteLn('difference, and USBPKT''s receive logic is not the fault.');
     Halt(1);
   end;
   WriteLn('Both phases received.  Polling from the timer is NOT what');
-  WriteLn('breaks it, so the fault is something AXPKT''s assembly does');
+  WriteLn('breaks it, so the fault is something USBPKT''s assembly does');
   WriteLn('that ax179.pas does not.');
   Halt(0);
 end.

@@ -283,7 +283,7 @@ begin
 
   { A zero-length type filter is "every protocol".  Some drivers want the
     class-1 promiscuous mode instead, but the empty filter is the portable
-    spelling and AXPKT honours it. }
+    spelling and USBPKT honours it. }
   AllProt := EtherType = $FFFF;
   if AllProt then TLen := 0
   else

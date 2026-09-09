@@ -4,7 +4,7 @@ unit ax179;
 
   Everything that knows what an AX88179 is lives here: the register map,
   the two vendor requests, the bring-up sequence, and the bulk read that
-  collects one transfer.  AXPROBE, AXRECV and eventually the packet driver
+  collects one transfer.  USBLINK, USBRECV and eventually the packet driver
   are all thin things sitting on top of it.
 
   The register numbers are the Linux ax88179_178a driver's, and they were
@@ -15,7 +15,7 @@ unit ax179;
 
   WHAT THIS UNIT DOES NOT DO.  Transmit.  It also does not interpret the
   receive buffer -- AxRxBurst hands back the bytes exactly as the chip
-  produced them, because the layout is the thing AXRECV exists to
+  produced them, because the layout is the thing USBRECV exists to
   establish rather than assume.  See the note above AxRxBurst.
 
   NO crt UNIT, here or anywhere in this repository: it bypasses stdout and
@@ -115,7 +115,7 @@ var
   AxBulkCtrl: Byte = $07;
   { 01, not 02.  This is the adapter's aggregation buffer in KB, and it has
     to be smaller than the driver's receive buffer with room for the metadata
-    that follows the frames -- not merely equal to it.  AXPKT's rxbuf is 2048
+    that follows the frames -- not merely equal to it.  USBPKT's rxbuf is 2048
     bytes, so at 02 every single burst overflowed it by the width of the
     trailer, and an overflowed burst is not a truncated burst: the remainder
     has to be read and thrown away to find the next boundary, so the whole
@@ -145,7 +145,7 @@ function AxPhyWr(Reg: Byte; V: Word): Integer;
 function  AxInit(Promisc: Boolean): Boolean;
 
 { Restrict the PHY's advertisement and restart autonegotiation.  TenOnly
-  withdraws the gigabit and 100 offers -- see AXPROBE's header for why
+  withdraws the gigabit and 100 offers -- see USBLINK's header for why
   that is the right default on an 8086 and not on a 486. }
 function  AxNegotiate(TenOnly: Boolean): Boolean;
 
@@ -168,7 +168,7 @@ function  MacStr(const M: TMac): ShortString;
   buffer ends with a count and an offset pointing at a metadata array
   earlier in the same buffer -- and establishing that layout empirically,
   rather than trusting a recollection of somebody else's driver, is the
-  whole job of AXRECV.
+  whole job of USBRECV.
 
   Returns INT_SUCCESS with Len > 0 when something arrived, INT_RET_NAK
   when the endpoint had nothing (which is the normal idle case and not an
@@ -356,7 +356,7 @@ begin
   { IP_ALIGN deliberately clear.  It pads every frame by two bytes so an
     IP header lands on a word boundary, which matters to a CPU that
     faults on unaligned access and not at all to an 8086.  Off means one
-    less thing between the wire and the parser -- and AXRECV checks that
+    less thing between the wire and the parser -- and USBRECV checks that
     the frames really do start where that implies. }
   W := RX_CTL_START or RX_CTL_ACCEPT_PHY or RX_CTL_BROADCAST or
        RX_CTL_DROP_CRC;

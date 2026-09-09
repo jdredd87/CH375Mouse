@@ -7,11 +7,11 @@ REM  at boot it costs a walk to the machine.
 REM
 REM  One program does the whole job now -- enumerate the device over
 REM  the CH375, bring the adapter up, and go resident -- the way
-REM  NE2000.COM does.  AXPROBE is still there and still useful, but
+REM  NE2000.COM does.  USBLINK is still there and still useful, but
 REM  it is a diagnostic, not a prerequisite.
 IF "%1"=="U" GOTO UNLOAD
 IF "%1"=="u" GOTO UNLOAD
-C:\CH375\AXPKT.COM
+C:\CH375\USBPKT.COM
 IF ERRORLEVEL 1 GOTO NOPE
 ECHO.
 ECHO Ready.  Point mTCP at it for this session with:
@@ -20,10 +20,10 @@ ECHO and put it back afterwards with:
 ECHO     SET MTCPCFG=c:\network\mtcp\mtcp.cfg
 GOTO END
 :UNLOAD
-C:\CH375\AXPKT.COM /U
+C:\CH375\USBPKT.COM /U
 GOTO END
 :NOPE
 ECHO.
-ECHO It did not come up.  NETID says what is plugged in; AXPROBE /V
+ECHO It did not come up.  NETID says what is plugged in; USBLINK /V
 ECHO walks the same sequence printing the chip status at every access.
 :END

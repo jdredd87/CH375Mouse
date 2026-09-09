@@ -6,8 +6,8 @@ If you have used `NE2000.COM` or any other packet driver, this works the same
 way: run one program, tell mTCP which interrupt it is on, done.
 
 ```
-C:\CH375> AXPKT
-AXPKT 1.0.0 -- StevenC
+C:\CH375> USBPKT
+USBPKT 1.0.0 -- StevenC
 Bringing the adapter up... link up.
 MAC address: 40:AE:30:6D:00:34
 Resident at vector 65h.
@@ -27,9 +27,15 @@ talks over eight data lines and an address line, which is why it can work on
 a machine this old. Its I/O address is set by jumpers on the board; the
 usual one, and this driver's default, is `260h`.
 
-**A USB Ethernet adapter built on an ASIX AX88179 or AX88178A.** Most cheap
-USB-3 gigabit dongles are one of these. `NETID` will tell you what you have
-before you commit to anything — see below.
+**A USB Ethernet adapter this driver knows.** Today that means an ASIX
+AX88179 or AX88178A; many cheap "USB 3.0 gigabit" dongles are one of these,
+and they fall back to full speed quite happily. **[ADAPTERS.md](ADAPTERS.md)
+is the list** — what works, what only needs a bring-up written, and what
+cannot work at all.
+
+Do not trust the box it came in. `NETID` reads the USB ID off the device,
+which is the only thing that actually identifies it, and packaging that says
+AX88179 over an RTL8153 inside is common.
 
 **DOS, and mTCP if you want TCP/IP.** Any DOS. The driver is a Crynwr packet
 driver, so anything that speaks to a packet driver can use it.
@@ -61,7 +67,7 @@ If it says something else, this driver will not drive it. `NETID` reads the
 USB descriptors and nothing more, so it is safe to run at any time.
 
 If it finds no CH375 at all, your board is on a different I/O address —
-`NETID /P=<hex>` and `AXPKT /P=<hex>` both take one.
+`NETID /P=<hex>` and `USBPKT /P=<hex>` both take one.
 
 ## Step 2: pick an interrupt vector
 
@@ -84,11 +90,11 @@ step entirely.
 ## Step 3: load the driver
 
 ```
-C:\CH375> AXPKT
+C:\CH375> USBPKT
 ```
 
 Add `/I=<hex>` for a different vector, `/P=<hex>` for a different card
-address. `AXPKT /?` lists the rest.
+address. `USBPKT /?` lists the rest.
 
 **It will refuse to install on `60h`, and it will refuse any vector that
 already has a packet driver on it.** That is deliberate and cannot be
@@ -123,7 +129,7 @@ over it with no further changes.
 ## Unloading
 
 ```
-C:\CH375> AXPKT /U
+C:\CH375> USBPKT /U
 ```
 
 It puts the interrupt vector and the timer back, and shuts the adapter down.
@@ -136,7 +142,7 @@ It works, and one rule makes it safe:
 ```
 IF EXIST C:\CH375\TRYING.FLG GOTO USBWEDGED
 ECHO trying > C:\CH375\TRYING.FLG
-C:\CH375\AXPKT.COM /I=65
+C:\CH375\USBPKT.COM /I=65
 IF ERRORLEVEL 1 GOTO NOUSB
 DEL C:\CH375\TRYING.FLG
 SET MTCPCFG=C:\CH375\MTCPAX.CFG
@@ -159,17 +165,17 @@ boot that finds it still there knows the last attempt never came back. Worst
 case becomes one power cycle.
 
 `AUTOEXEC.SAMPLE.BAT` is the real file from the machine this was developed
-on. Do not put `AXPROBE` in `AUTOEXEC.BAT` — `AXPKT` needs it for nothing,
-and `AXPROBE` is the one that used to hang.
+on. Do not put `USBLINK` in `AUTOEXEC.BAT` — `USBPKT` needs it for nothing,
+and `USBLINK` is the one that used to hang.
 
 ## When it does not work
 
 **"No CH375 answers at that address."** The board is on a different I/O
-address, or it is not seated. `AXPKT /P=<hex>` to try another.
+address, or it is not seated. `USBPKT /P=<hex>` to try another.
 
 **"a device is attached but nothing answers."** Usually the adapter is
-already enumerated by something that ran before — `NETID` and `AXPROBE` both
-enumerate it just to look at it. Run `AXPKT` **first**, before either of
+already enumerated by something that ran before — `NETID` and `USBLINK` both
+enumerate it just to look at it. Run `USBPKT` **first**, before either of
 them. If it is already in that state, the only reliable cure is removing the
 adapter's power: unplug it and plug it back in, or power-cycle the machine.
 Resetting the CH375 does not do it, because the adapter is fed off the ISA
@@ -178,11 +184,11 @@ bus.
 **"FAILED at step 10."** Step 10 is waiting for a link. That is the cable or
 the far end, not the adapter.
 
-**Any other step number.** `AXPROBE /V` walks the same sequence and prints
+**Any other step number.** `USBLINK /V` walks the same sequence and prints
 the chip status at every register access, which is usually enough to see
 where it stops.
 
-**It loads but nothing arrives.** `AXPKT /S` prints the driver's counters.
+**It loads but nothing arrives.** `USBPKT /S` prints the driver's counters.
 Everything should be zero except the ones counting real traffic:
 
 ```
@@ -193,13 +199,13 @@ Everything should be zero except the ones counting real traffic:
   bursts too big for the buffer=0
 ```
 
-**Testing without mTCP.** `AXNET` talks to a packet driver on a vector you
+**Testing without mTCP.** `PKTTEST` talks to a packet driver on a vector you
 name, so it can never reach the wrong card:
 
 ```
-AXNET /I=65 /M=<a free address> /T=<your router>     ARP and wait
-AXNET /I=65 /M=<a free address> /L                   show what arrives
-AXNET /I=65 /M=<a free address> /T=<router> /N=200   time the round trip
+PKTTEST /I=65 /M=<a free address> /T=<your router>     ARP and wait
+PKTTEST /I=65 /M=<a free address> /L                   show what arrives
+PKTTEST /I=65 /M=<a free address> /T=<router> /N=200   time the round trip
 ```
 
 ## What to expect
@@ -223,14 +229,14 @@ on the DOS box and compared against the source. All exact.
 
 | | |
 |---|---|
-| `AXPKT.COM` | the packet driver. This is the one you need. |
+| `USBPKT.COM` | the packet driver. This is the one you need. |
 | `NETID.EXE` | what USB adapter is plugged in, and is it supported |
 | `PKTSCAN.EXE` | which interrupt vectors are free |
-| `AXPROBE.EXE` | brings the adapter up and narrates every step. Diagnostic. |
-| `AXNET.EXE` | ARP, listen and time round trips on a named vector |
-| `AXRECV.EXE` | read the adapter directly, no packet driver involved |
-| `AXSEND.EXE` | send an ARP directly and prove something answered |
-| `AXTICK.EXE` | foreground vs timer-interrupt receive, for driver work |
+| `USBLINK.EXE` | brings the adapter up and narrates every step. Diagnostic. |
+| `PKTTEST.EXE` | ARP, listen and time round trips on a named vector |
+| `USBRECV.EXE` | read the adapter directly, no packet driver involved |
+| `USBSEND.EXE` | send an ARP directly and prove something answered |
+| `PKTTICK.EXE` | foreground vs timer-interrupt receive, for driver work |
 
-Only `AXPKT.COM` is needed to use the adapter. The rest are for finding out
+Only `USBPKT.COM` is needed to use the adapter. The rest are for finding out
 why it is not working.

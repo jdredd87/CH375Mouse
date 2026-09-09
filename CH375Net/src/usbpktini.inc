@@ -1,5 +1,5 @@
 ; ==========================================================================
-; AXPKT -- the transient half: arguments, the safety checks, install,
+; USBPKT -- the transient half: arguments, the safety checks, install,
 ;          unload and status.  Everything here is released when the driver
 ;          goes resident and none of it may be reached from the ISR.
 ;
@@ -9,9 +9,9 @@
 ; receive path, autonegotiation, link -- and then goes resident, so loading
 ; the network is a single command the way NE2000.COM is.
 ;
-; It used to require AXPROBE to have run first, which was a real limitation
+; It used to require USBLINK to have run first, which was a real limitation
 ; and never a design: a driver you have to prepare with a second program is
-; one somebody will forget to prepare. AXPROBE still exists and is still
+; one somebody will forget to prepare. USBLINK still exists and is still
 ; the better tool when something is wrong, because it narrates every
 ; register access; this just gets the machine on the network.
 ; ==========================================================================
@@ -61,7 +61,7 @@ clr_ep0:
 ;   retrying instead of reporting, the caller's own wait expires, and a
 ;   poll takes seconds.
 ;
-; AXPROBE leaves the chip on 00 because that is what its receive loop
+; USBLINK leaves the chip on 00 because that is what its receive loop
 ; needs, so this has to put it back to 8F for its own control transfer and
 ; then set it to 00 again before going resident.  Getting that wrong is
 ; what made read_mac fail here while the identical request from Pascal
@@ -129,8 +129,8 @@ ctrl_in:
         ; with status 2A.  The claim about the Pascal was simply wrong; it
         ; had never been checked against Setup8.  Taking the clear out did
         ; make that particular run go further, which is what made the
-        ; mistake stick, but it left AXPKT unable to read the MAC at all
-        ; from a device AXPROBE had just finished talking to: NAK, 2A,
+        ; mistake stick, but it left USBPKT unable to read the MAC at all
+        ; from a device USBLINK had just finished talking to: NAK, 2A,
         ; every time, twenty tries 10 ms apart.
         call    clr_ep0
         mov     al, CMD_WR_USB_DATA7
@@ -266,7 +266,7 @@ read_mac:
         ; but when our own wait then expires we walk away from a chip that
         ; is still retrying in the background, and the NEXT program to open
         ; it finds a transaction in flight that its bring-up does not
-        ; expect.  That did not hang AXPKT.  It hung AXPROBE, afterwards,
+        ; expect.  That did not hang USBPKT.  It hung USBLINK, afterwards,
         ; which is a far more confusing thing to debug.
         ;
         ; With 00 the chip answers immediately and is idle between tries,
@@ -301,7 +301,7 @@ rm_next:
         ; to back took microseconds and asked a busy device the same
         ; question eight times in the time it needed to answer once.
         ; That is the whole of 'the adapter did not return its MAC
-        ; address' after a clean AXPROBE: status 2A, a NAK, every time.
+        ; address' after a clean USBLINK: status 2A, a NAK, every time.
         ; ctrl_out_r and ctrl_in_r have always paused here; this had
         ; simply been missed.
         mov     cx, 10
@@ -346,7 +346,7 @@ mark_out:
 ; ==========================================================================
 ; USB ENUMERATION.
 ;
-; The step the driver was missing when it still expected AXPROBE to have
+; The step the driver was missing when it still expected USBLINK to have
 ; gone first: reset the chip, bring the bus up, find the device, give it an
 ; address and select its configuration. Until that has happened the device
 ; is not addressable and even the first vendor request fails -- which is
@@ -791,7 +791,7 @@ ue_bad:
 ; ==========================================================================
 ; THE BRING-UP, so this is one program and not two.
 ;
-; It used to require AXPROBE to have run first. That is a fine way to
+; It used to require USBLINK to have run first. That is a fine way to
 ; develop and a poor thing to ship: a driver you have to prepare with a
 ; second program is one somebody will forget to prepare, and the failure
 ; when they do is a machine with no network and no clue why.
@@ -1525,7 +1525,7 @@ op_test:    db 0
 op_qtimer:  db 0x80
 
 ; /N -- take the adapter as it stands instead of bringing it up.  This is
-; the old two-program arrangement, where AXPROBE did the bring-up and this
+; the old two-program arrangement, where USBLINK did the bring-up and this
 ; program only went resident over the top of it.  Worth keeping: it is the
 ; way to tell a fault in the bring-up apart from a fault in the driver,
 ; which is not a distinction the failure message can make on its own.
@@ -1534,7 +1534,7 @@ op_nobring: db 0
 ; Set the moment this program first speaks to the chip.  Any exit that does
 ; NOT go resident has to hand the chip back in a state the next program's
 ; bring-up can start from, and the only state that qualifies is "just
-; reset".  Leaving it configured-but-idle is what wedged AXPROBE on the
+; reset".  Leaving it configured-but-idle is what wedged USBLINK on the
 ; following invocation -- its enumeration begins by waiting for a connect
 ; interrupt that a chip already past that point never raises again.
 touched:    db 0
@@ -1800,7 +1800,7 @@ fr_none:
         mov     ax, [cs:res_seg]
         ret
 
-sig_self:   db 'AXPKT001'
+sig_self:   db 'USBPKT01'
 
 ; ==========================================================================
 ; INIT
@@ -1940,7 +1940,7 @@ init_gotmac:
         ;
         ; After our own bring-up this is a no-op: SET_CONFIGURATION has
         ; just reset every endpoint.  After /A it is the whole game.
-        ; AXPROBE says 'the adapter is initialised and receiving' and it
+        ; USBLINK says 'the adapter is initialised and receiving' and it
         ; means it -- frames have been arriving and the device's toggle
         ; has moved on, so the driver's first IN asked for DATA0 while
         ; the device was sending DATA1.  The CH375 does not police that
@@ -2365,7 +2365,7 @@ die_now:
 ; ==========================================================================
 ; MESSAGES
 ; ==========================================================================
-msg_prog:      db 'AXPKT $'
+msg_prog:      db 'USBPKT $'
 msg_by:        db ' -- StevenC', 13, 10, '$'
 
 msg_help:
@@ -2374,10 +2374,10 @@ msg_help:
         db 'so mTCP and anything else speaking the Crynwr interface can', 13, 10
         db 'use it.  One command: it brings the adapter up itself.', 13, 10
         db 13, 10
-        db '  AXPKT          load it at vector 65h', 13, 10
-        db '  AXPKT /I=6A    ...at 6Ah instead', 13, 10
-        db '  AXPKT /S       report what it is doing', 13, 10
-        db '  AXPKT /U       unload', 13, 10
+        db '  USBPKT          load it at vector 65h', 13, 10
+        db '  USBPKT /I=6A    ...at 6Ah instead', 13, 10
+        db '  USBPKT /S       report what it is doing', 13, 10
+        db '  USBPKT /U       unload', 13, 10
         db 13, 10
         db 'OTHER  @nnn CH375 I/O base in hex, default 260', 13, 10
         db '       /G   leave the PHY at gigabit    /V  trace', 13, 10
@@ -2386,7 +2386,7 @@ msg_help:
         db '            clock alone and answers in about 55ms', 13, 10
         db '       /T   check the adapter and STOP, installing nothing', 13, 10
         db '       /A   take the adapter as it stands: skip the bring-up', 13, 10
-        db '            because AXPROBE or an earlier run already did it', 13, 10
+        db '            because USBLINK or an earlier run already did it', 13, 10
         db '       /N   install but do not hook the timer: no packets are', 13, 10
         db '            collected, which tells an install fault from an', 13, 10
         db '            ISR one when both just look like a dead machine', 13, 10
@@ -2400,8 +2400,8 @@ msg_help:
         db 'mistake costs a power cycle; loaded at boot, it costs a walk', 13, 10
         db 'to the machine.', 13, 10, '$'
 
-msg_already:   db 'AXPKT is already loaded.  /U unloads it, /S reports.', 13, 10, '$'
-msg_notres:    db 'AXPKT is not loaded.', 13, 10, '$'
+msg_already:   db 'USBPKT is already loaded.  /U unloads it, /S reports.', 13, 10, '$'
+msg_notres:    db 'USBPKT is not loaded.', 13, 10, '$'
 msg_no60:
         db 'Refusing vector 60h.', 13, 10
         db 'That is where a packet driver normally lives, and on this', 13, 10
@@ -2435,7 +2435,7 @@ msg_bufail2:
         db 13, 10
         db 'STEP 23 WITH STATUS FF is the common one, and it is almost', 13, 10
         db 'never a broken adapter.  It means the device is already', 13, 10
-        db 'enumerated -- by an earlier AXPKT, or by NETID or AXPROBE,', 13, 10
+        db 'enumerated -- by an earlier USBPKT, or by NETID or USBLINK,', 13, 10
         db 'which enumerate it just to look at it.  A device that is', 13, 10
         db 'already configured answers nothing at address 0, and a bus', 13, 10
         db 'reset does not always persuade it otherwise.', 13, 10
@@ -2446,12 +2446,12 @@ msg_bufail2:
         db '  Resetting the CH375 does not, which is why nothing this', 13, 10
         db '  program can do on its own always clears it.', 13, 10
         db 13, 10
-        db '  To avoid it: run AXPKT FIRST, before NETID or AXPROBE.  It', 13, 10
+        db '  To avoid it: run USBPKT FIRST, before NETID or USBLINK.  It', 13, 10
         db '  needs neither of them -- it does the whole bring-up itself.', 13, 10
         db 13, 10
         db 'Step 10 means the cable or the far end.  20-22 mean the card', 13, 10
         db 'or nothing plugged into it.  Anything else means the adapter.', 13, 10
-        db 'AXPROBE /V walks the same ground printing the chip status at', 13, 10
+        db 'USBLINK /V walks the same ground printing the chip status at', 13, 10
         db 'every access.', 13, 10, '$'
 msg_testonly:
         db 'That is /T: everything up to reading the adapter worked, and', 13, 10
@@ -2461,13 +2461,13 @@ msg_installed2:
         db 'h.  Point mTCP at it with PACKETINT in its', 13, 10
         db 'config -- and use a COPY of MTCP.CFG, not the one the working', 13, 10
         db 'network uses.', 13, 10, '$'
-msg_unloaded:  db 'AXPKT unloaded.', 13, 10, '$'
+msg_unloaded:  db 'USBPKT unloaded.', 13, 10, '$'
 msg_hooked:
         db 'Cannot unload: something hooked our vector after us.', 13, 10, '$'
 msg_hooked08:
         db 'Cannot unload: something hooked INT 08h after us.', 13, 10, '$'
 
-msg_isres:     db 'Loaded: AXPKT $'
+msg_isres:     db 'Loaded: USBPKT $'
 msg_s_vec:     db '  vector=$'
 msg_s_base:    db '  I/O base=$'
 msg_s_mac:     db '  MAC=$'

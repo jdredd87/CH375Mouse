@@ -9,8 +9,8 @@ C:\drivers\pm2000.com 0x60
 REM ---- USB Ethernet adapter on the CH375 card.  StevenC.
 REM ---- pm2000 above keeps 60h and loads FIRST no matter what, so the
 REM ---- network this box is administered over survives anything here.
-REM ---- AXPKT brings the adapter up itself.  AXPROBE is NOT used at
-REM ---- boot: AXPROBE is what used to hang the machine.
+REM ---- USBPKT brings the adapter up itself.  USBLINK is NOT used at
+REM ---- boot: USBLINK is what used to hang the machine.
 REM
 REM ---- The flag is the safety net, and it is the trick AI.BAT already
 REM ---- uses for staged drivers.  IF ERRORLEVEL catches a bring-up that
@@ -23,7 +23,7 @@ REM ---- case is one power cycle -- never a walk to the machine.
 REM ---- Delete from here to :NETOK to go back to the NE2000 alone.
 IF EXIST C:\CH375\TRYING.FLG GOTO USBWEDGED
 ECHO trying > C:\CH375\TRYING.FLG
-C:\CH375\AXPKT.COM /I=65
+C:\CH375\USBPKT.COM /I=65
 IF ERRORLEVEL 1 GOTO NOUSB
 DEL C:\CH375\TRYING.FLG
 REM ---- Only now, with the adapter actually up, is mTCP pointed at it,

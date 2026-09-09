@@ -25,7 +25,7 @@ packet driver, all working, with the machine's own network at INT 60h
 untouched throughout.
 
 That ~50 ms is mTCP's own timing granularity rather than the wire — timed
-properly with `AXNET /N=200` the round trip is **6 ms**. Which is a
+properly with `PKTTEST /N=200` the round trip is **6 ms**. Which is a
 reasonable illustration of this project generally: most of what looked wrong
 turned out to be the instrument.
 
@@ -35,16 +35,20 @@ turned out to be the instrument.
 
 **[INSTALL.md](INSTALL.md)** — how to actually use this. It is short.
 
+**[ADAPTERS.md](ADAPTERS.md)** — which USB Ethernet chipsets are supported,
+which need a bring-up writing, and which cannot work. Run `NETID` first; the
+box an adapter came in is not evidence of what is inside it.
+
 The whole of it, if you have used a packet driver before:
 
 ```
-C:\CH375> AXPKT              <- one command, like NE2000.COM
+C:\CH375> USBPKT              <- one command, like NE2000.COM
 C:\CH375> (mtcp.cfg: packetint 0x65)
 C:\CH375> PING 8.8.8.8
 ```
 
-Nothing to add to `CONFIG.SYS`, nothing to configure. `AXPKT` enumerates the
-device over the CH375, brings the AX88179 up, and goes resident. `AXPKT /U`
+Nothing to add to `CONFIG.SYS`, nothing to configure. `USBPKT` enumerates the
+device over the CH375, brings the AX88179 up, and goes resident. `USBPKT /U`
 unloads it again.
 
 The rest of this file is the engineering: what was measured, what was tried
@@ -63,7 +67,7 @@ running here at full speed, 12 Mbps.
 ## What works today
 
 ```
-AXPROBE 0.2.0 -- AX88179 bring-up over a CH375 -- StevenC
+USBLINK 0.2.0 -- AX88179 bring-up over a CH375 -- StevenC
 device   : 0B95:1790
 bus      : full speed (12 Mbps)
 
@@ -79,7 +83,7 @@ Link is up.
   rx control    : 01A8
 ```
 
-And real frames arrive. This is one, read off the wire by `AXRECV` and
+And real frames arrive. This is one, read off the wire by `USBRECV` and
 decoded by hand:
 
 ```
@@ -95,14 +99,14 @@ C0 A8 32 08         from 192.168.50.8
 One command, the way `NE2000.COM` is one command:
 
 ```
-C:\CH375> AXPKT
-AXPKT 0.1.0 -- StevenC
+C:\CH375> USBPKT
+USBPKT 0.1.0 -- StevenC
 Bringing the adapter up... link up.
 MAC address: 40:AE:30:6D:00:34
 Resident at vector 65h.
 ```
 
-`AXPKT` enumerates the device over the CH375, brings the AX88179 up, and
+`USBPKT` enumerates the device over the CH375, brings the AX88179 up, and
 goes resident. Nothing has to be run before it. Point mTCP at it with a
 **copy** of your config — never the one your working network uses:
 
@@ -112,7 +116,7 @@ PING 8.8.8.8
 SET MTCPCFG=c:\network\mtcp\mtcp.cfg
 ```
 
-`AXPKT /U` unloads it, `/S` reports counters, `/?` explains the rest.
+`USBPKT /U` unloads it, `/S` reports counters, `/?` explains the rest.
 
 ### Loading it at boot
 
@@ -122,7 +126,7 @@ This works now, and on the machine it was written for it is what
 ```
 IF EXIST C:\CH375\TRYING.FLG GOTO USBWEDGED
 ECHO trying > C:\CH375\TRYING.FLG
-C:\CH375\AXPKT.COM /I=65
+C:\CH375\USBPKT.COM /I=65
 IF ERRORLEVEL 1 GOTO NOUSB
 DEL C:\CH375\TRYING.FLG
 SET MTCPCFG=C:\CH375\MTCPAX.CFG
@@ -144,8 +148,8 @@ the keyboard. The flag is the answer: drop it before trying, delete it
 after, and a boot that finds it still there knows the last attempt never
 came back. Worst case becomes one power cycle.
 
-Do not put `AXPROBE` in `AUTOEXEC.BAT`. `AXPKT` needs it for nothing, and
-`AXPROBE` is what used to hang.
+Do not put `USBLINK` in `AUTOEXEC.BAT`. `USBPKT` needs it for nothing, and
+`USBLINK` is what used to hang.
 
 Verified over eight consecutive boots — warm and cold — plus a deliberate
 test with the flag planted by hand, which correctly skipped the block and
@@ -192,7 +196,7 @@ the delay back.
 
 **Latency needs its own measurement, and mTCP is not it.** `PING` reports
 about 50 ms over this adapter at every setting, which sent me looking for a
-fixed 46 ms delay that does not exist. `AXNET /N=200` does the round trip
+fixed 46 ms delay that does not exist. `PKTTEST /N=200` does the round trip
 itself and divides by the count, which is the only honest way to time
 something far shorter than the 55 ms BIOS tick:
 
@@ -246,13 +250,13 @@ over, and nothing else. It finds its driver through a config file, so
 pointing it at a second adapter means editing that file for the duration of
 a test and remembering to put it back.
 
-`AXNET` takes the vector as an argument instead, so it cannot reach the
+`PKTTEST` takes the vector as an argument instead, so it cannot reach the
 wrong card:
 
 ```
-AXNET /M=<a free address> /I=65 /T=<address to ARP>   ask, and wait
-AXNET /M=<a free address> /I=65 /L                    show what arrives
-AXNET /M=<a free address> /I=65 /R                    ...and answer ARP and pings
+PKTTEST /M=<a free address> /I=65 /T=<address to ARP>   ask, and wait
+PKTTEST /M=<a free address> /I=65 /L                    show what arrives
+PKTTEST /M=<a free address> /I=65 /R                    ...and answer ARP and pings
 ```
 
 `/R` makes the adapter answer to its address, so another machine can ping
@@ -262,19 +266,19 @@ traffic tells the two apart.
 
 ### One thing to know first
 
-**Run `AXPKT` before `NETID` or `AXPROBE`, not after.** Those two enumerate
+**Run `USBPKT` before `NETID` or `USBLINK`, not after.** Those two enumerate
 the adapter in order to look at it, and an adapter that is already
-enumerated will not answer a fresh enumeration — `AXPKT` then stops at step
+enumerated will not answer a fresh enumeration — `USBPKT` then stops at step
 23 with status FF, which reads like a dead card and is not one.
 
 Removing the adapter's power is what clears that: unplug it and plug it
 back in, or power-cycle the machine, which does the same thing because the
 card feeds VBUS off the ISA bus. Resetting the CH375 does not, so there is
-a limit to what any program here can do about it on its own. `AXPKT`
+a limit to what any program here can do about it on its own. `USBPKT`
 unconfigures the device on `/U` for exactly this reason, which makes an
 unload-then-load usually work — usually, not always.
 
-This is not new and not specific to `AXPKT`; `AXPROBE` has always said
+This is not new and not specific to `USBPKT`; `USBLINK` has always said
 "unplug it and plug it back in" for the same state. It is simply much more
 visible now that one program does the whole job.
 
@@ -283,15 +287,15 @@ visible now that one program does the whole job.
 | | |
 |---|---|
 | `src/ax179.pas` | everything that knows what an AX88179 is: the register map, the two vendor requests, the bring-up, and the bulk read |
-| `src/axpkt.asm`, `src/axpktini.inc` | `AXPKT.COM` — **the one you run.** Enumerates the device, brings the adapter up, and installs a Crynwr packet driver. Needs nothing before it |
-| `src/axprobe.pas` | `AXPROBE.EXE` — runs the same bring-up and reports every stage. Step one historically, and the one that decided the rest was worth writing. Now a diagnostic rather than a prerequisite |
-| `src/axrecv.pas` | `AXRECV.EXE` — reads the bulk endpoint and makes sense of what comes back. Deliberately an **investigation**, not a parser |
-| `src/axsend.pas` | `AXSEND.EXE` — sends an ARP request and waits for a real machine to answer it |
+| `src/usbpkt.asm`, `src/usbpktini.inc` | `USBPKT.COM` — **the one you run.** Enumerates the device, brings the adapter up, and installs a Crynwr packet driver. Needs nothing before it |
+| `src/usblink.pas` | `USBLINK.EXE` — runs the same bring-up and reports every stage. Step one historically, and the one that decided the rest was worth writing. Now a diagnostic rather than a prerequisite |
+| `src/usbrecv.pas` | `USBRECV.EXE` — reads the bulk endpoint and makes sense of what comes back. Deliberately an **investigation**, not a parser |
+| `src/usbsend.pas` | `USBSEND.EXE` — sends an ARP request and waits for a real machine to answer it |
 | `src/pktscan.pas` | `PKTSCAN.EXE` — which interrupt vectors hold a packet driver and which are free. Read-only, and the safety net for everything below |
 
-All take `/?`. `/P=hex` sets the CH375 I/O base (`@hex` for `AXPKT`).
+All take `/?`. `/P=hex` sets the CH375 I/O base (`@hex` for `USBPKT`).
 
-`AXPKT /A` skips the bring-up and takes the adapter as it stands, which is
+`USBPKT /A` skips the bring-up and takes the adapter as it stands, which is
 the old two-program arrangement and still the way to tell a fault in the
 bring-up apart from a fault in the driver.  (`/N` is a different switch and
 always has been: install the vector but do not hook the timer.)
@@ -303,11 +307,11 @@ the bytes. It says nothing about whether a frame reached the wire — a
 header field misplaced, a length off by the eight bytes of the header
 itself, a padding flag missed, and the chip discards the lot in silence.
 
-So `AXSEND` does not check that the write succeeded. It asks the network a
+So `USBSEND` does not check that the write succeeded. It asks the network a
 question and waits to be answered:
 
 ```
-AXSEND /I=<a free address> /T=<your router>
+USBSEND /I=<a free address> /T=<your router>
 
 Asking 192.168.50.1 who it is, claiming to be 192.168.50.222
   request 1 sent
@@ -322,7 +326,7 @@ of on your wire.
 That reply cannot be manufactured at this end. A frame built on an 8086,
 pushed through an ISA card, put on the wire by the adapter, was received by
 the router, parsed, believed, and answered back to this MAC. The router's
-MAC also matches the one seen in an unrelated IGMP query `AXRECV` caught
+MAC also matches the one seen in an unrelated IGMP query `USBRECV` caught
 earlier, which is a second, independent confirmation.
 
 **The transmit header** is 8 bytes, two little-endian 32-bit words in front
@@ -334,7 +338,7 @@ that happens to arise at the same moment and is easy to confuse with it.
 
 ## Why 10BASE-T, on purpose
 
-`AXPROBE` restricts the PHY to 10 Mbps unless you pass `/G`.
+`USBLINK` restricts the PHY to 10 Mbps unless you pass `/G`.
 
 Every byte of every frame crosses the ISA bus one `IN` instruction at a
 time through a 64-byte window, so a 1514-byte frame is **24 separate CH375
@@ -461,7 +465,7 @@ So the rules for anything in this project that goes resident:
    hangs at boot is not recoverable remotely at any price. This was tried
    anyway on 2026-09-09, with an `IF ERRORLEVEL` fallback that was supposed
    to make it safe. On four boots out of five, cold power cycles included,
-   `AXPROBE` hung before the machine became reachable — and a hang sets no
+   `USBLINK` hung before the machine became reachable — and a hang sets no
    errorlevel, so the fallback never ran. Every recovery needed the power
    switch. The rule stands, and now it is measured rather than assumed.
 3. **Never install on INT 60h.** `PKTSCAN` says what is free; on this
@@ -490,7 +494,7 @@ which is the distinction that matters when picking a vector.
 
 ## The packet driver
 
-`AXPKT.COM` **installs, runs and unloads cleanly.** Proven on the hardware,
+`USBPKT.COM` **installs, runs and unloads cleanly.** Proven on the hardware,
 with the working network at 60h untouched throughout:
 
 ```
@@ -498,7 +502,7 @@ with the working network at 60h untouched throughout:
 Resident at vector 65h.
   60h  15A2:03CE   PACKET DRIVER      <- the machine's own network
   65h  16DD:1245   PACKET DRIVER      <- this one
-AXPKT unloaded.
+USBPKT unloaded.
 
 === part two: full, timer hooked ===
 Resident at vector 65h.
@@ -506,7 +510,7 @@ Resident at vector 65h.
   MAC=40:AE:30:6D:00:34
   open handles=0
   timer ticks=10
-AXPKT unloaded.
+USBPKT unloaded.
 === done ===
 ```
 
@@ -664,7 +668,7 @@ vectors again, ping over 60h again.
 
 ```
 ===== 5. unload ours =====
-AXPKT unloaded.
+USBPKT unloaded.
   60h  15A2:03CE   PACKET DRIVER
 1 packet driver(s) between 60h and 80h.
 ===== 6. 60h ping after unload =====
@@ -698,7 +702,7 @@ Eight times the poll rate, DOS clock still correct -- and the latency did
 not move. `/R=8` gives ~51 ms and so does `/R=1`. **Not the cause.**
 
 **Theory two: the adapter's bulk-in aggregation timer.** The chip holds
-received data until its own timer expires, whatever we do. `AXPROBE /K=hex`
+received data until its own timer expires, whatever we do. `USBLINK /K=hex`
 sets it; `0x0080` and `0x0004` both give ~51 ms. **Not the cause.**
 
 So something imposes a fixed ~51 ms in the receive path that is neither of

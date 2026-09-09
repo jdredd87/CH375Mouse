@@ -1,8 +1,8 @@
-program axnet;
-{ AXNET -- prove a packet driver transmits and receives, on the vector you
+program pkttest;
+{ PKTTEST -- prove a packet driver transmits and receives, on the vector you
   name.  CH375Net, StevenC.  Public domain (the Unlicense).
 
-  This is the test tool for AXPKT, and it exists because the alternative was
+  This is the test tool for USBPKT, and it exists because the alternative was
   borrowing somebody else's.  mTCP is an excellent stack and a poor probe:
   it finds its driver through a config file, so testing the CH375 adapter
   meant pointing MTCPCFG at a second config for the duration and pointing it
@@ -10,11 +10,11 @@ program axnet;
   that is administered over the other one -- that arrangement only has to be
   got wrong once.
 
-  So AXNET takes the vector as an argument.  There is no scan, no config
+  So PKTTEST takes the vector as an argument.  There is no scan, no config
   file, and no default that could reach the wrong card by accident.  mTCP
   stays pinned to the working NE2000 at 60h and is never touched again.
 
-    AXNET /M=<my ip> [/I=hex] [/T=<target ip>] [/S=secs] [/L] [/X]
+    PKTTEST /M=<my ip> [/I=hex] [/T=<target ip>] [/S=secs] [/L] [/X]
 
       /M=a.b.c.d  the address to speak as.  Required: this borrows an
                   address rather than being given one, so pick one that is
@@ -65,9 +65,9 @@ var
 
 procedure Usage;
 begin
-  Banner('AXNET', VER, 'packet driver send/receive test on a named vector');
+  Banner('PKTTEST', VER, 'packet driver send/receive test on a named vector');
   WriteLn;
-  WriteLn('  AXNET /M=<my ip> [/I=hex] [/T=<target ip>] [/S=secs] [/L] [/X]');
+  WriteLn('  PKTTEST /M=<my ip> [/I=hex] [/T=<target ip>] [/S=secs] [/L] [/X]');
   WriteLn;
   WriteLn('  /M=a.b.c.d  the address to speak as (required)');
   WriteLn('  /I=hex      vector, default 65');
@@ -275,20 +275,20 @@ var
 begin
   if HelpWanted then begin Usage; Halt(0); end;
   ParseArgs;
-  Banner('AXNET', VER, 'packet driver send/receive test');
+  Banner('PKTTEST', VER, 'packet driver send/receive test');
 
   if not HaveMy then
   begin
     WriteLn;
     WriteLn('/M is required -- this has to speak as some address, and it is');
-    WriteLn('not going to invent one.  AXNET /? explains the rest.');
+    WriteLn('not going to invent one.  PKTTEST /? explains the rest.');
     Halt(4);
   end;
   if not Listen and not HaveTgt then
   begin
     WriteLn;
     WriteLn('Give it something to do: /T=<address> to ARP for, or /L to');
-    WriteLn('listen.  AXNET /? explains the rest.');
+    WriteLn('listen.  PKTTEST /? explains the rest.');
     Halt(4);
   end;
 

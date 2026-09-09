@@ -1,14 +1,14 @@
-program axprobe;
-{ AXPROBE -- bring up an ASIX AX88179 USB Ethernet adapter over a CH375.
+program usblink;
+{ USBLINK -- bring up an ASIX AX88179 USB Ethernet adapter over a CH375.
   CH375Net, StevenC.  Public domain (the Unlicense).
 
   Step one of the networking project, and the one that decided whether the
   rest was worth writing.  It runs the initialisation sequence in
   ax179.pas -- power the PHY, set the clocks, read the MAC, configure the
   receive path, negotiate a link -- and prints what came back at every
-  stage.  Nothing goes resident and no frames are moved; AXRECV does that.
+  stage.  Nothing goes resident and no frames are moved; USBRECV does that.
 
-    AXPROBE [/P=260] [/G] [/V] [/W=secs]
+    USBLINK [/P=260] [/G] [/V] [/W=secs]
 
       /P=hex   CH375 I/O base, default 260
       /G       leave the PHY in gigabit mode.  The default forces 10BASE-T,
@@ -57,9 +57,9 @@ end;
 
 procedure Usage;
 begin
-  Banner('AXPROBE', VER, 'bring up an ASIX AX88179 over a CH375');
+  Banner('USBLINK', VER, 'bring up an ASIX AX88179 over a CH375');
   WriteLn;
-  WriteLn('  AXPROBE [/P=260] [/G] [/V] [/W=secs]');
+  WriteLn('  USBLINK [/P=260] [/G] [/V] [/W=secs]');
   WriteLn;
   HelpBaseLine;
   WriteLn('  /G       leave the PHY in gigabit mode.  The default forces');
@@ -76,7 +76,7 @@ begin
   WriteLn('Runs the full AX88179 initialisation -- power the PHY, set the');
   WriteLn('clocks, read the MAC, configure the receive path, negotiate a');
   WriteLn('link -- and prints what came back at each stage.  Nothing goes');
-  WriteLn('resident and no frames are moved; AXRECV does that.');
+  WriteLn('resident and no frames are moved; USBRECV does that.');
   WriteLn;
   WriteLn('WHY 10BASE-T.  This is a gigabit chip and the machine driving');
   WriteLn('it is an 8086.  Every byte crosses the ISA bus one IN at a');
@@ -124,7 +124,7 @@ var
 begin
   if HelpWanted then begin Usage; Halt(0); end;
   ParseArgs;
-  Banner('AXPROBE', VER, 'AX88179 bring-up over a CH375');
+  Banner('USBLINK', VER, 'AX88179 bring-up over a CH375');
 
   Rc := BusUp;
   if Rc <> BU_OK then
@@ -218,7 +218,7 @@ begin
   WriteLn('  link partner  : ', Hex4(Anlpar));
 
   WriteLn;
-  WriteLn('The adapter is initialised and receiving.  AXRECV reads the');
+  WriteLn('The adapter is initialised and receiving.  USBRECV reads the');
   WriteLn('bulk endpoint and shows what actually arrives.');
   Halt(0);
 end.

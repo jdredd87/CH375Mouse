@@ -30,11 +30,11 @@ if "%DOSBRIDGE%"=="" set DOSBRIDGE=C:\dosbridge
 set TOOLS=%~dp0..\CH375USBTOOLS\src
 if not exist bin mkdir bin
 
-echo --- AXPKT.COM
-nasm -f bin -Isrc\ src\axpkt.asm -o bin\AXPKT.COM
+echo --- USBPKT.COM
+nasm -f bin -Isrc\ src\usbpkt.asm -o bin\USBPKT.COM
 if errorlevel 1 goto failed
 
-for %%T in (netid axprobe axrecv axsend pktscan axnet axtick) do (
+for %%T in (netid usblink usbrecv usbsend pktscan pkttest pkttick) do (
   echo --- %%T
   fpc -Tmsdos -Pi8086 -WmLarge -Fu"%TOOLS%" -FEbin -FUbin src\%%T.pas >nul
   if errorlevel 1 goto failed
@@ -57,22 +57,22 @@ echo Built.  "build.cmd probe" brings the adapter up on the DOS machine.
 exit /b 0
 
 :runprobe
-python "%DOSBRIDGE%\dosctl.py" run bin\AXPROBE.EXE
+python "%DOSBRIDGE%\dosctl.py" run bin\USBLINK.EXE
 exit /b %ERRORLEVEL%
 :runtrace
-python "%DOSBRIDGE%\dosctl.py" run bin\AXPROBE.EXE /V
+python "%DOSBRIDGE%\dosctl.py" run bin\USBLINK.EXE /V
 exit /b %ERRORLEVEL%
 :rungiga
-python "%DOSBRIDGE%\dosctl.py" run bin\AXPROBE.EXE /G
+python "%DOSBRIDGE%\dosctl.py" run bin\USBLINK.EXE /G
 exit /b %ERRORLEVEL%
 :runrecv
-python "%DOSBRIDGE%\dosctl.py" run bin\AXRECV.EXE /A /S=20
+python "%DOSBRIDGE%\dosctl.py" run bin\USBRECV.EXE /A /S=20
 exit /b %ERRORLEVEL%
 :runraw
-python "%DOSBRIDGE%\dosctl.py" run bin\AXRECV.EXE /A /S=20 /N=3 /X /R
+python "%DOSBRIDGE%\dosctl.py" run bin\USBRECV.EXE /A /S=20 /N=3 /X /R
 exit /b %ERRORLEVEL%
 :runsend
-python "%DOSBRIDGE%\dosctl.py" run bin\AXSEND.EXE
+python "%DOSBRIDGE%\dosctl.py" run bin\USBSEND.EXE
 exit /b %ERRORLEVEL%
 
 :failed

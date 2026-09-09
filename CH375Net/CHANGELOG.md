@@ -4,18 +4,79 @@ CH375Net -- StevenC -- https://github.com/jdredd87/CH375USBTools
 
 Versions live in the `VER` constant of each program.
 
+## Second adapter, and the tools stop being called AX
+
+**A second, physically different AX88179 works, with nothing changed.** It
+was plugged in and the machine booted; `AUTOEXEC.BAT` brought it up
+unprompted. Different manufacturer, different MAC — `00:50:B6:B6:1C:64`
+against the first adapter's `40:AE:30:6D:00:34`.
+
+- boot brought it up on its own, no intervention
+- ARP answered, 100/100 round trips at 7 ms
+- ping 8.8.8.8 3/3 `ttl=118`, `google.com` 2/2 `ttl=109`
+- 1 MB `04D0E435` and 5 MB `BDBF684D`, checksummed on the box, both exact
+- three boots — two warm, one cold — all up at 6-7 ms
+- every error counter zero throughout
+
+That is worth more than it might look. A sample of one cannot tell a working
+bring-up from one accidentally tuned to a single unit's quirks. Two
+independent adapters can. It is **not** evidence about a different chipset —
+same `0B95:1790` silicon — and the register map has still only ever driven
+one part.
+
+### Renamed away from AX
+
+The tools were named for the only chip they had ever seen, which is a poor
+name for a project that wants more of them:
+
+| was | is |
+|---|---|
+| `AXPKT.COM` | `USBPKT.COM` |
+| `AXPROBE.EXE` | `USBLINK.EXE` |
+| `AXRECV.EXE` | `USBRECV.EXE` |
+| `AXSEND.EXE` | `USBSEND.EXE` |
+| `AXNET.EXE` | `PKTTEST.EXE` |
+| `AXTICK.EXE` | `PKTTICK.EXE` |
+
+`NETID` and `PKTSCAN` were already generic. **`ax179.pas` keeps its name on
+purpose** — it is the AX88179/178A register map, it is chip-specific, and
+pretending otherwise would be the actual lie. Same for the resident
+signature, `AXPKT001` → `USBPKT01`.
+
+Whole suite re-run on hardware afterwards: `PKTSCAN`, `NETID`, `USBLINK`,
+`USBRECV` (20 frames, 0 errors, 0 layout wrong), `USBSEND` (router replied),
+`USBPKT`, `PKTTEST` 100/100 at 7 ms. `AUTOEXEC.BAT` and `NET.BAT` updated on
+the machine and verified across a reboot.
+
+### ADAPTERS.md
+
+A support matrix, to grow: works / should work / needs a driver / unlikely,
+with USB IDs. Currently one part in the first column and one in the second.
+
+It is honest about what the rename bought, which is naming and not much
+else. A new chipset still needs a bring-up in `ax179.pas`'s equivalent *and*
+in `usbpktini.inc`, plus a dispatch on the USB ID. What it would **not**
+need is the CH375 layer, the packet driver side, or most of the receive
+engine — and that engine is the part that took four sessions, so the second
+chipset should cost far less than the first. Suggested order: AX88772, then
+RTL8152/8153, then CDC-ECM as a class driver covering many at once.
+
+It also warns to run `NETID` rather than believe the packaging, because a box
+marked AX88179 with an RTL8153 inside is a common way to waste an evening.
+
+
 ## 1.0.0 — it works, and a stranger can install it
 
-The whole suite goes to 1.0.0 together. `AXPKT` had been sitting at 0.1.0
+The whole suite goes to 1.0.0 together. `USBPKT` had been sitting at 0.1.0
 while it grew into something that enumerates the device, brings the adapter
 up, goes resident, survives a boot and moves ten megabytes without an error.
 The version had stopped describing it.
 
-- `AXPKT` 0.1.0 → **1.0.0**
-- `AXPROBE` 0.2.0 → **1.0.0**
-- `AXRECV` 0.1.0 → **1.0.0**
-- `AXSEND` 0.1.0 → **1.0.0**
-- `NETID`, `PKTSCAN`, `AXNET`, `AXTICK` already 1.0.0
+- `USBPKT` 0.1.0 → **1.0.0**
+- `USBLINK` 0.2.0 → **1.0.0**
+- `USBRECV` 0.1.0 → **1.0.0**
+- `USBSEND` 0.1.0 → **1.0.0**
+- `NETID`, `PKTSCAN`, `PKTTEST`, `PKTTICK` already 1.0.0
 
 **[INSTALL.md](INSTALL.md) is new** and is the front door: what hardware you
 need, four steps, how to load it at boot safely, and what to do when it does
@@ -30,30 +91,30 @@ and points at the install guide.
 Everything below this line is that notebook, newest first.
 
 
-## Suite regression pass, and AXSEND stops guessing
+## Suite regression pass, and USBSEND stops guessing
 
 `AxBulkSize` went from `$02` to `$01` in `ax179.pas` during the receive
-hunt, and that file is shared -- `AXPROBE`, `AXRECV` and `AXSEND` all build
+hunt, and that file is shared -- `USBLINK`, `USBRECV` and `USBSEND` all build
 on it and none had been run since. They have now:
 
 | | result |
 |---|---|
 | `PKTSCAN` | both drivers found, 60h and 65h |
 | `NETID` | `0B95:1790 ASIX AX88179`, supported |
-| `AXPROBE` | `bulk-in queue, size 01`, link up, 10 Mbps full duplex |
-| `AXRECV` | 17 bursts, 17 frames, 0 errors, 0 layout wrong |
-| `AXSEND` | `REPLY from 04:D4:C4:D2:2B:00` -- transmit works |
-| `AXTICK` | both phases, 0 errors |
-| `AXNET` | 100/100 round trips, 7 ms |
-| `AXPKT` | link up, resident, 0 in every counter |
+| `USBLINK` | `bulk-in queue, size 01`, link up, 10 Mbps full duplex |
+| `USBRECV` | 17 bursts, 17 frames, 0 errors, 0 layout wrong |
+| `USBSEND` | `REPLY from 04:D4:C4:D2:2B:00` -- transmit works |
+| `PKTTICK` | both phases, 0 errors |
+| `PKTTEST` | 100/100 round trips, 7 ms |
+| `USBPKT` | link up, resident, 0 in every counter |
 
 Nothing regressed.
 
-**`AXSEND` no longer defaults its addresses.** It shipped with
+**`USBSEND` no longer defaults its addresses.** It shipped with
 `/I=192.168.50.222` and `/T=192.168.50.1` baked in -- this machine's
 network. On anybody else's it would quietly ARP a subnet they have never
 heard of, on a range that might well belong to someone. Both are required
-now, with a message that says why, which is how `AXNET` has always worked.
+now, with a message that says why, which is how `PKTTEST` has always worked.
 
 The example in the README keeps the real addresses, because it is a
 transcript and transcripts should be true, but it now shows the invocation
@@ -62,7 +123,7 @@ above the output so it is clear they were given rather than assumed.
 
 ## Latency measured properly, and it was never 50 ms
 
-`AXNET` grew `/N=count`: it sends an ARP, waits for the answer, repeats, and
+`PKTTEST` grew `/N=count`: it sends an ARP, waits for the answer, repeats, and
 divides the elapsed BIOS ticks by the count. One exchange is far shorter
 than the 55 ms tick, so a single timing is meaningless and a few hundred is
 not.
@@ -178,7 +239,7 @@ An IBM PS/2 Model 30 -- 8086, 1987 -- on the internet through a USB
 Ethernet adapter, driven by a CH375 on the ISA bus.
 
 ```
-AXPKT /I=65
+USBPKT /I=65
 Bringing the adapter up... link up.
 MAC address: 40:AE:30:6D:00:34
 Resident at vector 65h.
@@ -242,26 +303,26 @@ clue.
 Worth listing, because each one cost an experiment and none of them was the
 answer:
 
-- **Polling rate.** `AXRECV` gained a `/D=ms` switch and ran at 28 ms
-  between polls, exactly AXPKT's rate: 20 bursts, 0 errors.
-- **Interrupt context.** `AXTICK` ran the reference `AxRxBurst` from a hook
+- **Polling rate.** `USBRECV` gained a `/D=ms` switch and ran at 28 ms
+  between polls, exactly USBPKT's rate: 20 bursts, 0 errors.
+- **Interrupt context.** `PKTTICK` ran the reference `AxRxBurst` from a hook
   on INT 08h: 9 bursts, 0 errors, 0 overruns.
 - **The receive filter.** `RX_CTL_PROMISC` set as a probe changed nothing.
 - **Transmit.** A listen-only run from fresh power wedged just the same.
 - **Read pacing.** Extra settling inside the payload loop changed nothing.
-- **The bring-up path.** AXPROBE's Pascal bring-up and AXPKT's own assembly
+- **The bring-up path.** USBLINK's Pascal bring-up and USBPKT's own assembly
   one both wedged identically.
 - **Aggregation size and timer.** Both were separately wrong and both were
   fixed; neither was the cause.
 
-`AXTICK.EXE` is kept. It is the tool that killed the interrupt-context
+`PKTTICK.EXE` is kept. It is the tool that killed the interrupt-context
 theory and it will be the right tool the next time something only goes
 wrong inside the ISR.
 
 
-## AXPKT brings the adapter up on its own at last
+## USBPKT brings the adapter up on its own at last
 
-`AXPKT /I=65` with no `AXPROBE` in front of it:
+`USBPKT /I=65` with no `USBLINK` in front of it:
 
 ```
 Bringing the adapter up... link up.
@@ -296,13 +357,13 @@ ten-second run went from 181 to 4.
 
 ### Two theories killed, which is worth as much as a fix
 
-**Polling rate is not the cause.** `AXRECV` polls flat out -- about 850
-times a second -- and `AXPKT` manages 36, because it polls from the timer
+**Polling rate is not the cause.** `USBRECV` polls flat out -- about 850
+times a second -- and `USBPKT` manages 36, because it polls from the timer
 and a 64-byte read off this bus is expensive. That looked like the whole
-story. So `AXRECV` grew a `/D=ms` switch and was run at 28 ms between
-polls, exactly AXPKT's rate, against the same adapter: **20 bursts, 20
+story. So `USBRECV` grew a `/D=ms` switch and was run at 28 ms between
+polls, exactly USBPKT's rate, against the same adapter: **20 bursts, 20
 frames, 0 errors, 0 layout wrong.** The reference is perfectly happy at
-AXPKT's speed. Whatever the difference is, it is not the rate.
+USBPKT's speed. Whatever the difference is, it is not the rate.
 
 **Nor is it the receive filter.** `RX_CTL_PROMISC` was set as a probe, on
 the theory that unicast replies were being dropped by the adapter while
@@ -328,7 +389,7 @@ the foreground, the difference is interrupt context, not logic.
 
 ## Our own test tools, and mTCP off the CH375 entirely
 
-`AXNET.EXE` and the `PktApi` unit. A Crynwr packet-driver client that talks
+`PKTTEST.EXE` and the `PktApi` unit. A Crynwr packet-driver client that talks
 to **the vector you name** -- no scan, no config file, no default that can
 reach the wrong card.
 
@@ -341,7 +402,7 @@ arrangement only has to be got wrong once. Everything that touches the
 CH375 is now ours.
 
 ```
-AXNET /M=<my ip> [/I=hex] [/T=<target ip>] [/S=secs] [/L] [/R] [/X]
+PKTTEST /M=<my ip> [/I=hex] [/T=<target ip>] [/S=secs] [/L] [/R] [/X]
 ```
 
 `/T` ARPs an address and waits. `/L` listens and prints every frame. `/R`
@@ -356,10 +417,10 @@ depend on that driver's type filtering being right.
 
 ### What now works
 
-Measured with AXNET against a live network:
+Measured with PKTTEST against a live network:
 
 - **Transmit is correct**, and confirmed from outside the machine rather
-  than by trusting our own counters: an ARP request sent through AXPKT
+  than by trusting our own counters: an ARP request sent through USBPKT
   reached the wire and the far end learned `192.168.50.222` at the
   adapter's MAC.
 - **Receive parses correctly.** Real frames arrive through the packet
@@ -381,7 +442,7 @@ After one, every IN asked for the wrong DATAx and nothing matched again.
 The toggle now only advances on a read we believe.
 
 **The toggle was never resynchronised when adopting an adapter.** `rx_tog`
-is assembled as DATA0, but after `AXPROBE` the adapter has been receiving
+is assembled as DATA0, but after `USBLINK` the adapter has been receiving
 and the device's toggle has moved on. `/A` now clears both bulk endpoints,
 which resets the toggle at both ends.
 
@@ -406,22 +467,22 @@ short packet again. Nothing recovers it -- not draining, not
 `CLEAR_FEATURE(ENDPOINT_HALT)` on the bulk endpoint, not a bigger buffer,
 not smaller aggregation.
 
-It is emphatically not the hardware. `AXRECV.EXE` was run against the same
+It is emphatically not the hardware. `USBRECV.EXE` was run against the same
 adapter minutes later and read 20 frames with 0 errors and every layout
 check passing.
 
 The one measured difference is the polling pattern, and it is stark:
-**AXRECV made 5083 idle polls in six seconds -- about 850 a second -- and
-got clean NAKs whenever the wire was quiet. AXPKT polls 36 times a second**,
+**USBRECV made 5083 idle polls in six seconds -- about 850 a second -- and
+got clean NAKs whenever the wire was quiet. USBPKT polls 36 times a second**,
 because it polls from the timer and each 64-byte read is expensive. Whatever
-this state is, AXRECV never stays still long enough to enter it. That is
+this state is, USBRECV never stays still long enough to enter it. That is
 where to look next.
 
 
 ## The MAC read had to let the chip absorb NAKs
 
-`AXPKT /A` — take the adapter exactly as `AXPROBE` left it — failed on its
-very first act, reading the MAC, on hardware `AXPROBE` had finished with
+`USBPKT /A` — take the adapter exactly as `USBLINK` left it — failed on its
+very first act, reading the MAC, on hardware `USBLINK` had finished with
 seconds earlier:
 
 ```
@@ -462,21 +523,21 @@ is back where the reference has it.
 
 ### Still broken: the receive path
 
-`AXPKT` brings the adapter up and sends, but what comes back off the bulk
-endpoint is not frames. A cold boot, a clean `AXPROBE`, `/A` loading and
+`USBPKT` brings the adapter up and sends, but what comes back off the bulk
+endpoint is not frames. A cold boot, a clean `USBLINK`, `/A` loading and
 reading the MAC, and then 521 of 522 bursts rejected, each 1536 bytes of a
 repeating four-byte pattern.
 
-It is not the hardware and it is not the adapter. `AXRECV.EXE` — the Pascal
+It is not the hardware and it is not the adapter. `USBRECV.EXE` — the Pascal
 receiver — was run on the same machine minutes later and read 20 bursts, 20
 frames, 4104 bytes, 0 errors, layout checks all passing. The fault is in
-`rx_poll` in `axpkt.asm`, and `AXRECV` is the working reference to diff it
+`rx_poll` in `usbpkt.asm`, and `USBRECV` is the working reference to diff it
 against.
 
-### AXPROBE can hang the machine, so nothing USB belongs in AUTOEXEC.BAT
+### USBLINK can hang the machine, so nothing USB belongs in AUTOEXEC.BAT
 
 Loading the adapter from `AUTOEXEC.BAT` was tried and has been taken out
-again. On four boots out of five — cold power cycles included — `AXPROBE`
+again. On four boots out of five — cold power cycles included — `USBLINK`
 hung outright, before the point where the machine becomes reachable over the
 network. A hang is not something `IF ERRORLEVEL` can catch, so the fallback
 that was supposed to make this safe never ran. Recovering needed the power
@@ -487,10 +548,10 @@ failure mode worth designing against.
 stays until the bring-up cannot hang.
 
 
-## AXPKT does the whole job
+## USBPKT does the whole job
 
-`AXPKT.COM` now enumerates the device and brings the adapter up itself, so
-it is one command like `NE2000.COM`. `AXPROBE` is a diagnostic now, not a
+`USBPKT.COM` now enumerates the device and brings the adapter up itself, so
+it is one command like `NE2000.COM`. `USBLINK` is a diagnostic now, not a
 prerequisite. Verified from a cold start: link up, gateway 2/2, 8.8.8.8 2/2
 at ttl=118, and `HTGET http://example.com/` returning 200 OK, with the
 machine's own driver at 60h untouched.
@@ -529,12 +590,12 @@ of the common step-23 failure and the only thing that actually fixes it.
 
 ### Working, and proven on the hardware
 
-* **`AXPROBE` 0.2.0 brings an ASIX AX88179 (`0B95:1790`) all the way up**
+* **`USBLINK` 0.2.0 brings an ASIX AX88179 (`0B95:1790`) all the way up**
   over a CH375: configuration set, PHY powered and out of reset, clocks
   selected, MAC read (`40:AE:30:6D:00:34`), receive path configured, link
   negotiated. First run, no debugging. `medium mode 0136` — 10 Mbps full
   duplex — and `rx control` reads back exactly the bits written.
-* **`AXRECV` 0.1.0 reads real Ethernet off the wire.** A broadcast UDP
+* **`USBRECV` 0.1.0 reads real Ethernet off the wire.** A broadcast UDP
   frame from `192.168.50.8` and an IGMP query from the router both arrived
   and decode correctly by hand from the hex dump. Frames start at offset 0
   with no padding, which confirms `RX_CTL` `IP_ALIGN` being clear does what
@@ -589,7 +650,7 @@ of the common step-23 failure and the only thing that actually fixes it.
 
 It matches what the Linux driver describes after all. Every earlier reading
 that said otherwise was a truncated transfer, not a different format --
-see the two bugs below. `AXRECV` checks each invariant and prints a tick or
+see the two bugs below. `USBRECV` checks each invariant and prints a tick or
 a cross beside it rather than assuming any of them.
 
 ### Two more bugs, both mine, both in AxRxBurst
@@ -606,7 +667,7 @@ a cross beside it rather than assuming any of them.
   bytes before the buffer gave up. The control byte is now 07 -- all three
   limits on -- with the size, timer and inter-frame gap exposed as
   `AxBulkCtrl` / `AxBulkSize` / `AxBulkTimer` / `AxBulkIfg` and reachable
-  from `AXRECV` as `/C=` and `/B=`.
+  from `USBRECV` as `/C=` and `/B=`.
 
 ### Throughput, measured
 
@@ -623,7 +684,7 @@ a cross beside it rather than assuming any of them.
 
 ### Transmit works, and a real machine confirmed it
 
-* **`AXSEND` 0.1.0** builds an ARP request, sends it, and waits for an
+* **`USBSEND` 0.1.0** builds an ARP request, sends it, and waits for an
   answer. The router replied: `REPLY from 04:D4:C4:D2:2B:00 --
   192.168.50.1 answered us.` Three runs, three replies, two polls to the
   first one.
@@ -633,7 +694,7 @@ a cross beside it rather than assuming any of them.
   A reply cannot be manufactured at this end -- it means another computer
   received the frame, parsed it, believed it and addressed a response back
   to this MAC. The router's MAC also matches the one in an unrelated IGMP
-  query `AXRECV` caught earlier.
+  query `USBRECV` caught earlier.
 * The TX header is 8 bytes: two little-endian 32-bit words, the frame
   length then zero -- except when the total including the header is an
   exact multiple of the 64-byte packet size, when bits 15 and 31 are set.
@@ -651,14 +712,14 @@ a cross beside it rather than assuming any of them.
   bounded at 1024 packets, which is far more than any sane burst and
   finite.
 
-### AXPKT, and PKTSCAN before it
+### USBPKT, and PKTSCAN before it
 
 * **`PKTSCAN` 1.0.0** lists which interrupt vectors hold a packet driver,
   by the "PKT DRVR" signature three bytes into the handler. Read-only, so
   it is safe over the live connection it is reporting on. On this machine:
   60h taken, 61-66 / 68-6C / 6E-6F / 78-7E free, and 67h and 6Dh occupied
   by EMS and video rather than free.
-* **`AXPKT.COM` 0.1.0 is written and assembles at 8,221 bytes.** It does
+* **`USBPKT.COM` 0.1.0 is written and assembles at 8,221 bytes.** It does
   not work yet, and it refuses to do damage while not working, which was
   the part worth getting right first:
   - vector 60h refused outright, exit code 4, proven on the hardware;
@@ -670,10 +731,10 @@ a cross beside it rather than assuming any of them.
   receive handshake, `send_pkt` with its 8-byte header, the INT 08h poll
   with an adaptive budget and a re-entry guard, install, unload with
   out-of-order hook detection, and `/S`.
-* **The bug:** `read_mac` in `axpktini.inc` returns an error where the
+* **The bug:** `read_mac` in `usbpktini.inc` returns an error where the
   identical vendor request from Pascal returns the MAC four times out of
   four. New assembly, not the chip and not the register map -- both proven.
-* **The split is wrong and known to be.** `AXPKT` needs `AXPROBE` to have
+* **The split is wrong and known to be.** `USBPKT` needs `USBLINK` to have
   brought the adapter up first. A driver you have to prepare with a second
   program is one somebody will forget to prepare; folding the bring-up in
   comes after the control transfer works.
@@ -689,7 +750,7 @@ mTCP, on an IBM PS/2 Model 30, over USB Ethernet on a CH375 ISA card, with
 the machine's own network at INT 60h untouched throughout. The ~50 ms round
 trip is the 18.2 Hz poll interval showing through, not the wire.
 
-`AXPKT.COM` implements driver_info, access_type, release_type, send_pkt,
+`USBPKT.COM` implements driver_info, access_type, release_type, send_pkt,
 get_address, reset_interface, set_rcv_mode, get_rcv_mode and
 get_statistics, with receive collected on the timer and handed up through
 the two-call handshake. mTCP's `pkttool` and DOSBridge's `PKTCAP` both
