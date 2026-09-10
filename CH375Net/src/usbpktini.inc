@@ -2230,6 +2230,12 @@ stat_macskip:
         call    putdecw
         call    crlf
 
+        mov     dx, msg_s_tile
+        call    puts
+        mov     ax, [es:n_tile]
+        call    putdecw
+        call    crlf
+
         mov     dx, msg_s_tog
         call    puts
         mov     ax, [es:n_toggle]
@@ -2613,6 +2619,7 @@ msg_s_nohandle:db '  frames nobody wanted=$'
 msg_s_short:   db '  bursts that made no sense=$'
 msg_s_junk:    db '  reads with an impossible length=$'
 msg_s_over:    db '  bursts too big for the buffer=$'
+msg_s_tile:    db '  bursts whose frames did not tile=$'
 msg_s_tog:     db '  reads rescued by flipping the toggle=$'
 msg_s_rxst:    db '  last bulk IN: status $'
 msg_s_rxlen:   db ', length $'

@@ -622,13 +622,198 @@ was not what caught it. Either the stack is not verifying on this path or
 this one slipped through, and in both cases **the driver's correctness is
 load-bearing rather than backed up by the layer above.**
 
-#### A concrete candidate in the code
+#### A real bug, found by reading rather than by measuring
 
-Read `rx_deliver` with "payload from elsewhere in the same buffer" in hand
-and something stands out. It is handed `CX` = the number of bytes the burst
-actually delivered, uses it to find the trailer, and then **reuses `CX` and
-never keeps the burst length again.** Every per-frame bounds check after
-that point is against the size of the buffer:
+`rx_deliver` walks the frames in a burst and, for each one, calls `rx_one`
+to hand it up. `rx_one` ends in `call far [cs:rcv_tmp]` -- the application's
+own receiver, somebody else's code, entered from inside a timer interrupt.
+The comment directly above that call states the rule:
+
+> nothing may be assumed about any register after it returns
+
+And then the loop assumes one. The stride to the **next** frame is computed
+from `CX` three instructions after the call returns:
+
+```
+        push    di
+        call    rx_one                   ; DI = offset, CX = length
+        pop     di
+        inc     word [n_frames]
+rxd_skip:
+        add     cx, 4                    ; <-- CX, after somebody else's code
+        add     cx, 7
+        and     cx, 0xFFF8
+        add     di, cx                   ; <-- where the next frame starts
+```
+
+`DI` is pushed across the call. `CX` is not. So whenever the application's
+receiver returns with `CX` changed, `DI` lands somewhere other than the next
+frame and every frame parsed after it in that burst is assembled out of the
+wrong part of the buffer.
+
+The fix is `push cx` / `pop cx`. It is now in.
+
+**Why it stayed hidden is the interesting part**, and it is the same shape as
+several other entries here: the bug is not in this driver's behaviour, it is
+in a dependency on somebody else's. A receiver that happens to preserve `CX`
+hides it completely and forever. mTCP evidently does so most of the time,
+which is why 10 MB used to check out clean and why the fault, when it comes,
+is intermittent and load-dependent rather than reproducible.
+
+**What this does NOT yet explain, and it matters.** A frame taken from the
+wrong offset has a garbage Ethernet header, and a stack that checks anything
+at all should drop it -- costing a retransmission, not a corrupted file. For
+these 162 bytes to reach the disk, either the misplaced frame carried a
+header plausible enough to be accepted and its payload was then placed by
+sequence number, or something downstream is not validating. So this is a
+genuine defect that was worth fixing on its own terms, and **calling it the
+cause of the corruption would be running ahead of the evidence.**
+
+**And it was not the whole bug, which is why the runs got done.** Two 5 MB
+downloads on the CX fix came back clean, which at a two-in-three failure
+rate is one chance in nine of meaning nothing -- encouraging, not a result.
+Three more were run rather than stopping there, and **the third corrupted**.
+
+That is the entire argument for not declaring victory on two clean runs, and
+it is worth the wall-clock every time.
+
+#### The second sample, and what it gave away
+
+| | first event | second event |
+|---|---|---|
+| file offset | 3,802,924 | 2,915,814 |
+| length | **162 bytes** | **162 bytes** |
+| first 4 bytes | delta **+192** | delta **+192** |
+| remaining 158 | delta **+76** | delta **+76** |
+
+Identical length, identical deltas, at two unrelated offsets in different
+downloads. **That is a deterministic code path, not a timing accident** --
+and it also settles the mod-256 caveat in practice: the same numbers twice
+are almost certainly the same true displacements rather than two different
+values aliasing to the same residue.
+
+#### The rest of the same bug: BP
+
+Reading the loop again with "deterministic" in mind: the fix above pushed
+`CX` across the call and the loop still depended on a second register.
+
+```
+rxd_skip:
+        add     cx, 4
+        add     cx, 7
+        and     cx, 0xFFF8
+        add     di, cx
+        pop     si
+        add     si, bp                   ; <-- BP, after the receiver ran
+```
+
+**`BP` carries the entry stride for the whole burst**, and it is read at the
+bottom of every iteration to step to the next entry. `SI` and `DX` are
+pushed at the top of the loop and `DI` was pushed around the call, so `BP`
+was the last register in the loop still exposed to somebody else's code --
+and it is the one a C compiler is most likely to be using as a frame
+pointer, which makes an application's receiver about the likeliest thing in
+the machine to clobber it.
+
+Losing it walks the entry array at the wrong pitch, so every remaining frame
+in that burst is handed up with the wrong offset and the wrong length. That
+is a much better fit for "162 bytes, same deltas, every time" than the CX
+path was.
+
+The fix is `push bp` / `pop bp`, and the rule it should have followed from
+the start is the one `rx_one`'s own comment states: **the loop must not
+depend on any register surviving the call.** With `BP`, `CX`, `DI`, `SI` and
+`DX` all saved, it no longer does.
+
+#### And that did not cure it either
+
+Three more 5 MB runs on the `BP` build, and one came back with 162 bytes
+wrong at offset 3,193,318. Its `want`/`got` lines are byte for byte the same
+as the previous event's, though that part is less remarkable than it looks:
+both regions happen to begin at an offset that is `0xE6` modulo 256, and in
+a file whose content is `offset mod 256` that alone fixes every visible
+byte. **The invariant worth noticing is the shape, not the bytes** -- the
+length and the two deltas are identical across all three events, while the
+first event sat at residue `0x2C` and therefore shows different values
+carrying exactly the same structure.
+
+So: **two register-preservation bugs, both real, both found by reading, both
+fixed, and neither one is the cause.** They were worth fixing on their own
+terms -- the loop genuinely must not depend on registers surviving foreign
+code, and it did -- but they are not this.
+
+Three events now, and the invariant is exact every time:
+
+* **162 bytes**, never any other length;
+* the **first 4** at delta +192;
+* the **remaining 158** at delta +76.
+
+A fault that reproduces to the byte across three separate downloads at three
+unrelated offsets is not a race and not a timing accident. It is a code path
+that does the same wrong thing whenever it is reached.
+
+#### Which is where guessing stops
+
+Two inspections have now produced two plausible, real, and irrelevant
+answers. A third guess is not worth making, so the parser has been asked the
+question directly instead.
+
+The burst layout puts the frames first and the entry array immediately after
+the last one, so **walking every frame must land exactly on the entry
+array's offset.** `rx_deliver` now checks that at the end of each burst and
+counts the bursts where it does not, reported by `/S` as `bursts whose
+frames did not tile`.
+
+It is built to be decisive in both directions, which is the point:
+
+* if it **fires** on the runs that corrupt, the walk is mis-striding and the
+  bug is in this parser, with the counter pointing straight at it;
+* if it **stays at zero** while a download still comes back wrong, then the
+  frames were parsed correctly and handed up correctly, **the burst parser
+  is exonerated, and the fault is above the driver** -- mTCP or `HTGET`,
+  which the NE2000 control would then have been quietly telling us all along
+  only that they behave differently on a fast, clean path than on a slow,
+  lossy one.
+
+That second outcome would redirect the entire investigation, which is
+exactly why it was worth building an instrument that can produce it.
+
+**First two runs with it armed: both clean, counter at zero.** No corruption
+event, so nothing yet about the cause -- but not a wasted run either.
+**11,419 bursts and 5,699 bursts respectively, with zero tiling failures**,
+which establishes the check does not false-positive on healthy traffic. That
+matters: a counter that fired all the time would have been worthless in
+either direction, and it means a non-zero reading later will mean something.
+
+More runs are queued to catch an event with the instrument armed.
+
+#### Did the register fixes help at all? Possibly, and only possibly
+
+Worth recording because it is the sort of number that gets quoted later:
+
+| build | 5 MB runs | corrupt |
+|---|---|---|
+| before either fix | 3 | 2 |
+| after `CX` | 5 | 1 |
+| after `CX` + `BP` | 5 | 1 |
+
+67% down to 20%. That reads like a partial improvement and it may well be
+one, but at these counts it is not a result -- the difference is inside what
+chance would produce fairly often, and both post-fix groups are small. It is
+recorded as an observation to be tested, not as a claim that the fixes
+helped.
+
+#### The other candidate, still unexamined
+
+A second weakness, in the same routine and easily confused with the one
+above. They are not the same thing: the bug above is that `CX` is destroyed
+by somebody else's code, and this one is that the burst LENGTH is never kept
+anywhere in the first place. Fixing the first does not fix the second.
+
+`rx_deliver` is handed `CX` = the number of bytes the burst actually
+delivered, uses it to locate the trailer, and then reuses the register
+without ever storing that length. Every per-frame bounds check after that
+point is therefore against the size of the buffer:
 
 ```
         mov     bx, di

@@ -180,6 +180,11 @@ that had to be retracted.
 real round trip is 6 ms at `/R=8`. That is mTCP's granularity. `PKTTEST
 /N=200` times it properly by doing the exchange itself.
 
+**Do not truncate a job's output with `tail` unless you are sure you do not
+need it.** A three-download job piped through `tail -45` lost the first two
+results, and each one had cost eleven minutes of box time to produce. There
+is no way to get them back short of running the job again.
+
 **Do not raise `/R` in `AUTOEXEC.BAT`.** It reprograms the PIT, and anything
 that hooks INT 08h after the driver then runs eight times fast. `EDIT` wedges
 the machine. `/R=8` for a big transfer is fine; leaving it there is not. Note

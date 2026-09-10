@@ -363,6 +363,20 @@ n_toggle:   dw  0            ; reads recovered by flipping the toggle
 rx_pos:     dw  0            ; bytes of a part-read burst carried between
                              ; ticks -- see rx_go
 n_flush:    dw  0            ; times we have had to go hunting
+
+; Did the frames in a burst actually TILE it?  The layout puts the frames
+; first and the entry array straight after the last one, so walking every
+; frame must land exactly on the entry array's offset.  Landing anywhere
+; else means the walk mis-strided, and every frame after the point where it
+; went wrong was handed up from the wrong place.
+;
+; This exists because two register-preservation bugs were found by reading,
+; fixed, and did NOT stop the corruption -- at which point guessing has to
+; stop and the parser has to be asked directly whether it is the one doing
+; it.  If this counter stays at zero while a download still comes back
+; wrong, the burst parser is exonerated and the fault is above the driver.
+rx_flimit:  dw  0            ; where the frames must end
+n_tile:     dw  0            ; bursts whose frames did not tile it
 rx_st:      db  0            ; status the last bulk IN reported
 rx_len:     db  0            ; length the last RD_USB_DATA claimed
 ; Somewhere to throw a drained packet.  256 rather than 64 because the fast
@@ -1230,6 +1244,7 @@ rxd_ok:
         sub     dx, 4
         cmp     bx, dx
         ja      short rxd_bad            ; entry array outside the buffer
+        mov     [cs:rx_flimit], bx       ; ...and where the frames must end
 
         ; Entry stride, worked out from the data rather than assumed: the
         ; space between the array and the trailer over the packet count.
@@ -1278,9 +1293,43 @@ rxd_next:
         add     bx, cx
         cmp     bx, RXBUF_SZ
         ja      short rxd_skip
+        ; CX IS PUSHED BECAUSE rx_one CANNOT PROMISE TO GIVE IT BACK.
+        ;
+        ; rx_one ends up in `call far [cs:rcv_tmp]` -- the application's
+        ; own receiver, somebody else's code, reached from inside a timer
+        ; interrupt.  The comment above that call already says nothing may
+        ; be assumed about any register once it returns, and then this
+        ; loop went on to assume CX: the stride to the NEXT frame is
+        ; computed from it three instructions below.  DI was pushed and CX
+        ; was not, which is the whole of the bug.
+        ;
+        ; A receiver that leaves them alone hides it completely, which is
+        ; why this worked for a long time and then did not.  When it does
+        ; not, DI lands somewhere other than the next frame and everything
+        ; parsed after it in the burst comes out of the wrong place --
+        ; frames assembled from the middle of their neighbours.
+        ;
+        ; BP IS THE ONE THAT MATTERS MOST, and it was the last to be
+        ; noticed.  It carries the ENTRY STRIDE for the whole burst and is
+        ; read as `add si, bp` at the bottom of this loop, so losing it
+        ; walks the entry array at the wrong pitch and every remaining
+        ; frame in the burst is given the wrong length and offset.  It is
+        ; also the register a C compiler is most likely to be using as a
+        ; frame pointer, which makes an application receiver the LIKELIEST
+        ; thing in the machine to clobber it.
+        ;
+        ; SI and DX are pushed at the top of the loop, so with these three
+        ; the loop no longer depends on any register surviving somebody
+        ; else's code.  That is the actual rule, and it is worth stating
+        ; because the fix was made twice: CX first, then BP two runs later
+        ; when the corruption came back.
+        push    bp
+        push    cx
         push    di
         call    rx_one                   ; DI = offset, CX = length
         pop     di
+        pop     cx
+        pop     bp
         inc     word [n_frames]
 rxd_skip:
         ; On to the next frame.  The stride is the length AS THE CHIP
@@ -1295,6 +1344,12 @@ rxd_skip:
         pop     dx
         dec     dx
         jnz     short rxd_next
+        ; Every frame walked.  DI should now be sitting exactly on the
+        ; entry array; anywhere else and the stride went wrong somewhere.
+        cmp     di, [cs:rx_flimit]
+        je      short rxd_tiled
+        inc     word [cs:n_tile]
+rxd_tiled:
         ret
 rxd_pop_bad:
         pop     ax
