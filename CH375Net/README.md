@@ -785,6 +785,30 @@ speaks it, instead of another entry in a table of vendor quirks.
 
 ## What is not done
 
+### A REP INSB fast path, which is available and was wrongly ruled out
+
+The payload read loop is `IN` / `STOSB` / `LOOP`, about 42 clocks a byte, and
+a source comment used to justify that by saying a `REP INSB` "cannot be had
+here — INS is 80186 and up".
+
+Half right, wrong half load-bearing. `INS` *is* 186-class and the assembler
+targets 8086, so it cannot be written as source — but **the development
+machine is a NEC V30, which has the 186 instruction set.** The convention for
+precisely this already exists in DOSBridge's `starter/cpu.pas`: probe
+`Has186` at run time, keep the portable loop, emit the fast one as `db`
+bytes, never delete the slow one.
+
+So the fast path is available and simply has not been written. It would cut
+the read loop from three bus cycles a byte to one and remove the loop
+overhead entirely — worth perhaps another 2-3x on a path that is currently
+the driver's ceiling.
+
+The one caution is the reason the delay was there to begin with: `REP INSB`
+issues reads far closer together than this loop does, and the CH375 may not
+keep up. That is measurable rather than arguable — the CRC'd download
+harness answers it in one run.
+
+
 - **The ARP round trip.** When it loads, point a *copy* of `MTCP.CFG` at the new
   vector. Never the one the working network uses. The goal is a Crynwr driver at INT 60h, because
   that is what `mTCP`, `WATTCP` and NCSA Telnet all speak — get it right

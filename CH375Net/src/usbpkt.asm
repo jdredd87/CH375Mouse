@@ -461,12 +461,21 @@ ch_read:
         ; a byte and caps the whole driver near 50 KB/s however fast the
         ; wire is.
         ;
-        ; Dropping the delay is safe because of what this CPU is.  IN is
-        ; 14 clocks with the bus wait states, STOSB 11, LOOP 17: about 5us
-        ; between consecutive reads on an 8 MHz 8086 without any help,
-        ; which is already far longer than the chip needs.  On something
-        ; faster this would want the delay back, or a REP INSB it cannot
-        ; have here -- INS is 80186 and up.
+        ; Dropping the delay is safe because of how slow this loop is
+        ; anyway.  IN is 14 clocks with the bus wait states, STOSB 11,
+        ; LOOP 17: about 5us between consecutive reads at 8 MHz with no
+        ; help at all, already far longer than the chip needs.  On a
+        ; faster machine this wants the delay back.
+        ;
+        ; This comment used to say a REP INSB "cannot be had here --
+        ; INS is 80186 and up".  Half right and the wrong half mattered.
+        ; INS is indeed 186-class, and the ASSEMBLER targets 8086 so it
+        ; will not take it as source -- but the development machine is a
+        ; NEC V30, which HAS the 186 instruction set.  The convention for
+        ; exactly this is already established in dosbridge's cpu.pas:
+        ; probe Has186 at run time, keep the portable loop, and emit the
+        ; fast one as db bytes.  So the fast path is available and simply
+        ; has not been written.  See the README.
         mov     dx, [cs:io_dat]
         mov     cl, bl
         xor     ch, ch

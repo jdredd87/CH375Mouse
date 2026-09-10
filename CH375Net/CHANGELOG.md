@@ -4,6 +4,32 @@ CH375Net -- StevenC -- https://github.com/jdredd87/CH375USBTools
 
 Versions live in the `VER` constant of each program.
 
+## The machine is a V30, so REP INSB was never off the table
+
+A correction to the entry two below, and it costs something real.
+
+When the payload read loop was inlined, the comment justifying the shape of
+it said a `REP INSB` "cannot be had here -- INS is 80186 and up". `INS` is
+indeed 186-class, and the assembler targets 8086 so it will not accept it as
+source. But **the development machine is a NEC V30, which has the 186
+instruction set**, and DOSBridge has had the convention for this all along:
+probe `Has186` at run time in `starter/cpu.pas`, keep the portable loop,
+emit the fast one as `db` bytes, never delete the slow one. `bench.pas`
+demonstrates the pattern.
+
+So the fast path was available, the comment talked the next reader out of
+it, and it is still unwritten. It would take the read loop from three bus
+cycles a byte to one and drop the loop overhead — plausibly another 2-3x on
+what is currently the driver's ceiling. Whether the CH375 keeps up with
+reads issued that close together is measurable, not arguable: the CRC'd
+download harness settles it in a single run.
+
+Comment corrected in `usbpkt.asm`, and the opportunity is now written into
+the README under what is not done, rather than buried in a wrong aside.
+`INSTALL.md` also stopped calling the machine an 8086; it is a Model 30 with
+a V30 in it, and the binaries target plain 8086 so they load anywhere.
+
+
 ## /R defaults to 1 again: the fast timer breaks MS-DOS EDIT
 
 Reverting a default I set two entries ago, and the reason is a good one.

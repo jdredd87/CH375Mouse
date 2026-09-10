@@ -40,8 +40,9 @@ AX88179 over an RTL8153 inside is common.
 **DOS, and mTCP if you want TCP/IP.** Any DOS. The driver is a Crynwr packet
 driver, so anything that speaks to a packet driver can use it.
 
-It was developed on an IBM PS/2 Model 30 — an 8 MHz 8086 from 1987 — so
-whatever you have is probably faster.
+It was developed on an IBM PS/2 Model 30 from 1987, running at 8 MHz with a
+NEC V30 fitted, so whatever you have is probably faster. The binaries are
+built for the plain 8086 and will load on anything.
 
 ## Installing
 
@@ -230,7 +231,7 @@ PKTTEST /I=65 /M=<a free address> /T=<router> /N=200   time the round trip
 
 ## What to expect
 
-On an 8 MHz 8086, fetching 1 MB over HTTP:
+On an 8 MHz V30, fetching 1 MB over HTTP:
 
 | | this driver | ISA NE2000, same machine |
 |---|---|---|

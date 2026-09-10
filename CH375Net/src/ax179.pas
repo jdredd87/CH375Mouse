@@ -119,7 +119,7 @@ var
     bytes, so at 02 every single burst overflowed it by the width of the
     trailer, and an overflowed burst is not a truncated burst: the remainder
     has to be read and thrown away to find the next boundary, so the whole
-    thing is lost.  1 KB bursts also read inside one timer tick on an 8086,
+    thing is lost.  1 KB bursts also read inside one timer tick on a machine
     which 2 KB does not. }
   AxBulkSize: Byte = $01;
   AxBulkTimer: Word = $0080;   { flush early rather than wait for a full
