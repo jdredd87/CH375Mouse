@@ -1,129 +1,203 @@
 # Picking this up next
 
-Written 2026-09-09, at the end of the session that got CH375Net working, for
-whoever continues it — including a fresh Claude Code instance.
+Written 2026-09-09, updated 2026-09-10, for whoever continues this —
+including a fresh Claude Code instance.
 
 ## Read these first, in this order
 
 1. **`INSTALL.md`** — what the thing does and how to use it. Short.
 2. **This file** — where the work stopped and what is worth doing next.
-3. **`README.md`** — the engineering notebook. 750 lines, newest thinking at
-   the top. Read it when you need to know *why* something is the shape it is,
-   not before.
-4. **`CHANGELOG.md`** — the same story in the order it happened, including the
-   things that were tried and thrown away. Several entries are retractions;
-   they are the useful ones.
+3. **`README.md`** — the engineering notebook, newest thinking at the top.
+   Read it when you need to know *why* something is the shape it is, not
+   before.
+4. **`CHANGELOG.md`** — the same story in the order it happened, including
+   the things that were tried and thrown away. Several entries are
+   retractions; they are the useful ones.
 
 ## Where to work from
 
 **Use `C:\dosbridgeDEV`, not `C:\dosbridge`.**
 
-- `C:\dosbridgeDEV` is the git repo (`jdredd87/DOSBridgeDEV`), it has the real
-  `CLAUDE.md` (~245 KB of project context), and as of 2026-09-09 the `dosd`
-  daemon runs from it.
-- `C:\dosbridge` is an old runtime copy. Its `CLAUDE.md` is **zero bytes**, so
-  an assistant working there starts with no context at all, and it is littered
-  with test artefacts. Do not sync "the newer file" between the two in that
-  direction — it would destroy the real `CLAUDE.md`.
+- `C:\dosbridgeDEV` is the git repo (`jdredd87/DOSBridgeDEV`), it has the
+  real `CLAUDE.md`, and `dosd` runs from it. As of 2026-09-09 `CLAUDE.md`
+  there is ~48 KB with the long-form material split into `docs/` beside it —
+  `docs/network.md`, `docs/agent.md` and `docs/hardware.md` are the ones this
+  project borrows from.
+- `C:\dosbridge` is an old runtime copy. Its `CLAUDE.md` is **zero bytes**,
+  so an assistant working there starts with no context at all. Never sync
+  "the newer file" in that direction.
 
-The DOS box is driven with `python C:\dosbridgeDEV\dosctl.py ...` by absolute
-path. `MSYS_NO_PATHCONV=1` before any command that passes a DOS switch like
-`/I=65`, or Git Bash mangles it.
+`build.cmd` now prefers `C:\dosbridgeDEV` on its own; `DOSBRIDGE` overrides
+it. Otherwise drive the box with `python C:\dosbridgeDEV\dosctl.py ...` by
+absolute path, and put `MSYS_NO_PATHCONV=1` in front of anything passing a
+DOS switch like `/I=65` or Git Bash rewrites it into a path.
 
-## State: it works
+## State: it works, and there is one open fault
 
 `USBPKT.COM` 1.0.0 is a Crynwr packet driver for a USB Ethernet adapter on a
-CH375 ISA card. One command, like `NE2000.COM`. It loads from `AUTOEXEC.BAT`,
-mTCP runs over it at `packetint 0x65`, and DOSBridge stays on the NE2000 at
-60h throughout.
+CH375 ISA card. One command, like `NE2000.COM`. It loads from
+`AUTOEXEC.BAT`, mTCP runs over it at `packetint 0x65`, and DOSBridge stays on
+the NE2000 at 60h throughout.
 
-Verified: ping 8.8.8.8, DNS, web pages over HTTP, FTP and telnet banners, and
-64 KB / 512 KB / 1 MB / 5 MB / 10 MB downloads all checksummed on the DOS box
-and byte-exact. Two physically different AX88179 adapters. Every error counter
-in `USBPKT /S` reads zero.
+Verified: ping 8.8.8.8, DNS, web pages over HTTP, FTP and telnet banners,
+and downloads checksummed on the DOS box. Two physically different AX88179
+adapters. Every error counter in `USBPKT /S` reads zero.
 
-## The next job, and it is well defined
+**READ THIS BEFORE TRUSTING A LARGE TRANSFER.** On 2026-09-10 a 5 MB
+download came back the exact right length with the wrong bytes. Four runs
+isolated it:
 
-### A `REP INSB` / `REP OUTSB` fast path gated on `Has186`
-
-Three loops move bytes one at a time through port I/O:
-
-| loop, in `src/usbpkt.asm` | now | with the 186 instruction |
+| 5 MB, same file, same server | time | result |
 |---|---|---|
-| `ch_read_fast` — pull a packet out of the chip | `in`/`stosb`/`loop`, ~42 clocks a byte | ~10-14 |
-| `ch_read_ovl` — drain a burst that cannot be used | `in`/`loop`, ~31 | ~10-14 |
-| `bulk_out_loop` — transmit | `lodsb` + `call ch_wr` + `dec`/`jne`, ~160 | ~10-14 |
+| written locally by `RAMPCHK /W`, no network | | exactly the ramp |
+| over the NE2000 at INT 60h | 62.9s | exactly the ramp |
+| over USBPKT, fast path | 312.0s | 162 bytes wrong |
+| over USBPKT, `/8` portable loops | 309.6s | wrong, and differently |
+| over the NE2000, 10 MB | 125.3s | exactly the ramp |
+| over USBPKT, fast path, again | 305.6s | exactly the ramp |
 
-Transmit is the biggest per byte: the read loop was inlined and the write loop
-never was, so it still pays a call, two settling reads and a push/pop for
-every byte.
+**It is intermittent -- two USB runs in three -- so a clean run proves
+nothing.** Budget several runs per question before believing an answer; this
+is the single most important thing to know before testing here.
 
-**Why it is available.** `INS`/`OUTS` are 186-class and the assembler targets
-8086, so they cannot be written as source — but the development machine is a
-**NEC V30, which has the 186 instruction set**. DOSBridge already has the
-convention: probe `Has186` at run time (`starter/cpu.pas`), keep the portable
-loop, emit the fast one as `db` bytes, never delete the slow one.
-`starter/bench.pas` is the worked example.
+Solid: the disk is clean, and the `REP INSB` change did not cause this (the
+`/8` row is the code that shipped before it, and the two corrupt runs differ
+from each other). Well supported: the fault is in USBPKT, on 15 MB of clean
+NE2000 exposure against 2-in-3 failures here. The earlier "5 MB and 10 MB
+byte-exact" claim in this file and the CHANGELOG has not been reproduced and
+should not be relied on.
 
-**What it will and will not buy.** It will *not* make the default faster. At
-`/R=1` this driver is round-trip-bound at ~55 ms, not read-bound, and there is
-direct evidence: inlining the read loop made reads 3.6x faster and moved 1 MB
-from 73s to 71s. What it buys is a **shorter interrupt** — a full burst read is
-~10 ms of a 55 ms tick, 19% of the machine while traffic flows, and this would
-take it to ~3 ms. That matters because `/R=8` wedged MS-DOS `EDIT` by stealing
-too much of the machine. A quieter driver is the goal, not a bigger number.
+The signature: **not** shifted -- the file never lost step -- but 162 bytes
+overwritten with payload duplicated from elsewhere in the stream. Note the
+displacement is only known MODULO 256, because the ramp repeats every 256
+bytes; an earlier draft read it as "exactly 64 bytes" and built on that, and
+it does not follow.
 
-**The one risk, and how to settle it.** `REP INSB` issues reads far closer
-together than the current loop, and the CH375 may not keep up — the settling
-delays exist for a reason. This is measurable rather than arguable: fetch 1 MB,
-CRC it on the box, compare. A wrong answer shows up as a bad checksum, loudly.
+**The leading candidate is in `rx_deliver`.** It is handed the burst length
+in `CX`, uses it to find the trailer, then reuses `CX` -- so every per-frame
+bounds check afterwards is against `RXBUF_SZ` rather than against the bytes
+this burst actually delivered. `rxbuf` is never cleared, so a trailer
+claiming a frame past the received data hands up leftovers from an earlier
+burst. That matches the signature and explains the zero counters. README,
+"And then something DID CRC wrong", has the full analysis.
 
-```
-USBPKT
-HTGET -o C:\M1.BIN http://<a server>/1mb
-C:\TOOLS\HD.EXE C:\M1.BIN 0 1        <- prints a CRC-32 matching Python's zlib
-```
+**Start here when you pick this up:**
 
-### After that
+1. **Get more NE2000 exposure first.** The whole case rests on it and it is
+   one run. 10 MB over the NE2000 is two 5 MB runs' worth of exposure for a
+   single check, and NE2000 fetches are 5x faster, so it is also the
+   cheapest evidence available.
+2. Reproduce on USB and collect signatures -- about 2 runs in 3 yield an
+   event, ~12 minutes each. Note the offset, the length and the two deltas
+   every time. If the leading fragment is always -64 that is close to
+   conclusive; if it is not, the hypothesis below is wrong.
+3. **Test the `rx_deliver` candidate directly.** Keep the burst length,
+   check each frame's offset+length against it rather than against
+   `RXBUF_SZ`, and count the rejects. If that counter fires on runs that
+   corrupt and stays at zero on runs that do not, it is the bug -- and the
+   check is worth having permanently either way, because nothing in the
+   parser currently notices this class of fault at all.
+4. If it is not that, consider a test file with a period longer than the
+   file, so the displacement stops being ambiguous mod 256.
 
-- **A second chipset.** Everything below the bring-up is already generic. See
-  `ADAPTERS.md`; the order that makes sense is AX88772, then RTL8152/8153,
-  then CDC-ECM as a class driver covering many adapters at once.
-- The last 2x against an ISA NE2000 is structural — polling versus interrupts,
-  one byte per bus cycle versus two — and probably not reachable on this
-  hardware.
+**The `REP INSB` / `REP OUTSB` job this file used to call "the next job" is
+done, and is not implicated in the above.** All three byte loops take the
+186 string instructions when the CPU has them, gated on a run-time `Has186`
+probe, with `/8` to force the portable loops back. Measured on one binary,
+same file, same server:
+
+| | 1 MB | CRC-32 | longest poll |
+|---|---|---|---|
+| `REP INSB`/`OUTSB` | 63.6s | `998E4325` | **22.0 ms** |
+| `/8`, 8086 loops | 65.3s | `998E4325` | 32.6 ms |
+
+2.6% on throughput — which is what the prediction said, because at `/R=1`
+this is round-trip-bound — and **33% off the interrupt**, which was the
+point. `USBPKT /S` now reports `longest poll` itself, so the next person
+gets the number instead of an argument. Read the README section **The byte
+loops** before touching any of it; it also records that the old "~10 ms of a
+55 ms tick" estimate was out by three times.
+
+## The next job
+
+### A second chipset
+
+(Only after the corruption above is understood. A second bring-up on top of
+a receive path with a known unexplained fault would make both harder to
+diagnose.)
+
+Everything above the bring-up is already generic — the packet driver, the
+receive parser, the transmit path and the statistics block do not know what
+they are talking to. `ADAPTERS.md` has the survey; the order that makes
+sense is:
+
+1. **AX88772** — same vendor, same shape of bring-up, cheapest first step
+   and the best test of whether the "generic above the bring-up" claim is
+   actually true or merely untested.
+2. **RTL8152/8153** — a different vendor, so it exercises the parts of the
+   design that assume ASIX conventions without saying so.
+3. **CDC-ECM** — a class driver rather than a chip driver, so one bring-up
+   covers many adapters at once. Most valuable and least like the others.
+
+`NETID` identifies what an adapter actually contains; the box it came in is
+not evidence.
+
+### And a thing that is now cheap to ask
+
+`longest poll` makes the `/R=8`-wedges-`EDIT` question measurable for the
+first time. The poll used to cost 32.6 ms against a 6.9 ms tick at `/R=8` —
+nearly five ticks — and now costs 22.0. That is still longer than the tick,
+so `EDIT` probably still breaks, but it is no longer a guess: run `EDIT`
+under `/R=8` with somebody at the keyboard and see. Do not do it over the
+bridge alone; that failure needs the power switch.
+
+The gap to an ISA NE2000 is structural — polling versus interrupts, one byte
+per bus cycle versus two — and probably not reachable on this hardware. **It
+is 5x, not the 2x this file used to claim**: the same 5 MB file from the same
+server took 62.9s on the NE2000 against 312.0s here, measured while using the
+NE2000 as a control for the corruption above.
 
 ## Things that will bite you
 
 **Power, not reboot.** A warm reboot leaves the CH375 and the adapter exactly
-as the last program left them, so a failed bring-up poisons the next boot. Use
-`dosctl power cycle` between attempts, and never conclude "this fails every
-time" from a run of warm reboots.
+as the last program left them, so a failed bring-up poisons the next boot.
+Use `dosctl power cycle` between attempts, and never conclude "this fails
+every time" from a run of warm reboots.
 
-**Measure to `NUL`, not to disk.** A benchmark written to the PicoMEM disk hid
-a poll-rate effect completely and produced a confident, wrong conclusion that
-had to be retracted.
+**A long job makes `dosctl status` say STALE, and that is not a fault.**
+While a job runs the agent is inside it and does not poll, so a 10-minute
+download reads exactly like a hung machine from Windows. Take a
+`dosctl capture shot` before concluding anything — it shows the real screen,
+and it is the difference between "still downloading" and "wedged". This cost
+DOSBridge three wrong power cycles in one day before the capture card
+existed.
+
+**Measure to `NUL`, not to disk.** A benchmark written to the PicoMEM disk
+hid a poll-rate effect completely and produced a confident, wrong conclusion
+that had to be retracted.
 
 **Do not trust mTCP's timings.** `PING` reports ~50 ms over this adapter; the
-real round trip is 6 ms at `/R=8`. That is mTCP's granularity. `PKTTEST /N=200`
-times it properly by doing the exchange itself.
+real round trip is 6 ms at `/R=8`. That is mTCP's granularity. `PKTTEST
+/N=200` times it properly by doing the exchange itself.
 
 **Do not raise `/R` in `AUTOEXEC.BAT`.** It reprograms the PIT, and anything
 that hooks INT 08h after the driver then runs eight times fast. `EDIT` wedges
-the machine. `/R=8` for a big transfer is fine; leaving it there is not.
+the machine. `/R=8` for a big transfer is fine; leaving it there is not. Note
+`longest poll` is only measured at `/R=1`, for a reason the README explains.
 
 **`AXPROBE`/`USBLINK` is not a prerequisite** and running it first actively
-gets in the way — it leaves the device enumerated, which is the state `USBPKT`
-then has to fight. Run `USBPKT` first, always.
+gets in the way — it leaves the device enumerated, which is the state
+`USBPKT` then has to fight. Run `USBPKT` first, always.
 
-**Never install on INT 60h.** That is the network this machine is administered
-over. The driver refuses it in code and that is not overridable.
+**Never install on INT 60h.** That is the network this machine is
+administered over. The driver refuses it in code and that is not overridable.
 
 ## Tools you will want
 
 | | |
 |---|---|
-| `USBPKT /S` | the driver's own counters. Every error line should read 0 |
+| `USBPKT /S` | the driver's own counters, and `longest poll`. Every error line should read 0 |
+| `USBPKT /8` | load with the portable byte loops. The first thing to try if anything ever CRCs wrong |
 | `PKTTEST /I=65 /M=<free ip> /T=<router> /N=200` | real round-trip time |
 | `PKTTEST /I=65 /M=<free ip> /L` | show every frame that arrives |
 | `USBLINK /V` | bring-up narrated, chip status at every register access |
@@ -133,3 +207,51 @@ over. The driver refuses it in code and that is not overridable.
 
 `PKTTICK` exists because "it only breaks inside the ISR" was a theory that
 needed killing. It killed it. Reach for it if something similar comes up.
+
+## The verification harness, so you do not have to invent one
+
+There is an HTTP server on the LAN at **192.168.50.46 port 80** serving
+`/download/1mb`, `/download/5mb` and `/download/10mb`. Their checksums are
+fixed and have been the reference set since the driver first moved volume:
+
+| | bytes | CRC-32 |
+|---|---|---|
+| `/download/1mb` | 1,048,576 | `04D0E435` |
+| `/download/5mb` | 5,242,880 | `BDBF684D` |
+| `/download/10mb` | 10,485,760 | `2B11D791` |
+
+```
+MSYS_NO_PATHCONV=1 python C:\dosbridgeDEV\dosctl.py exec --timeout 1200 ^
+  "C:\TOOLS\ELAPSED.COM /S" ^
+  "HTGET -o C:\WORK\M5.BIN http://192.168.50.46/download/5mb" ^
+  "C:\TOOLS\ELAPSED.COM fetched" ^
+  "C:\TOOLS\HD.EXE C:\WORK\M5.BIN 0 1" ^
+  "C:\WORK\USBPKT.COM /S"
+```
+
+`HD` prints a CRC-32 that matches Python's `zlib.crc32`, so the check is
+end-to-end and needs no file coming back. **Verify on the box, not by
+pulling the file** — anything over about half a megabyte does not fit in one
+bridge job. Allow generous `--timeout`: `HD` reads every byte on an 8086 and
+costs roughly as long as the download did.
+
+Two properties of this harness are worth knowing before you use it:
+
+* **The files are a repeating `00`..`FF` ramp**, so the correct byte at any
+  offset is `offset mod 256`. A hex dump therefore says *how* a file went
+  wrong -- altered, dropped or duplicated bytes each look different, and a
+  shift shows up as a ramp out of step with its own address. A CRC only ever
+  says "no". Use `HD <file> <offset> 32` when you need more than that.
+* **`HD` CRCs the whole file even when you ask for 32 bytes.** One dump from
+  a 5 MB file is a full read, about six minutes here. Five dumps in one job
+  is therefore five full reads -- half an hour of a box that cannot poll
+  while it works, and it was tried: `dosctl` gave up at its own 900s timeout
+  long before the batch ended, so the whole half hour produced **nothing at
+  all**. Use `RAMPCHK`, which reads once and says more; if you must use
+  `HD`, one window per job and set `--timeout` above the total.
+* **`--timeout` is `dosctl`'s patience, not the box's.** When it expires the
+  box carries on running the batch to the end, unreachable the whole time,
+  and the result is discarded. There is no way to call a job back; the only
+  levers are waiting it out or a power cycle, and on this machine a power
+  cycle halts at the F1 prompt and needs hands. Size the timeout for the
+  work, not for your attention span.

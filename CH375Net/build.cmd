@@ -26,6 +26,11 @@ REM      https://github.com/jdredd87/DOSBridge
 
 setlocal
 cd /d "%~dp0"
+REM  C:\dosbridgeDEV is the git repo and the one dosd runs from;
+REM  C:\dosbridge is an older runtime copy whose CLAUDE.md is empty,
+REM  so an assistant pointed at it starts with no project context.
+REM  Prefer DEV when it is there, and let DOSBRIDGE override both.
+if "%DOSBRIDGE%"=="" if exist C:\dosbridgeDEV\dosctl.py set DOSBRIDGE=C:\dosbridgeDEV
 if "%DOSBRIDGE%"=="" set DOSBRIDGE=C:\dosbridge
 set TOOLS=%~dp0..\CH375USBTOOLS\src
 if not exist bin mkdir bin
@@ -34,7 +39,7 @@ echo --- USBPKT.COM
 nasm -f bin -Isrc\ src\usbpkt.asm -o bin\USBPKT.COM
 if errorlevel 1 goto failed
 
-for %%T in (netid usblink usbrecv usbsend pktscan pkttest pkttick) do (
+for %%T in (netid usblink usbrecv usbsend pktscan pkttest pkttick rampchk) do (
   echo --- %%T
   fpc -Tmsdos -Pi8086 -WmLarge -Fu"%TOOLS%" -FEbin -FUbin src\%%T.pas >nul
   if errorlevel 1 goto failed

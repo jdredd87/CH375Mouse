@@ -4,6 +4,217 @@ CH375Net -- StevenC -- https://github.com/jdredd87/CH375USBTools
 
 Versions live in the `VER` constant of each program.
 
+## REP INSB and REP OUTSB: the interrupt is a third shorter
+
+The job the entry below left "still unwritten" is written, and both halves
+of what that entry predicted turned out to be right -- which is worth
+stating plainly, because plenty of predictions in this file were not.
+
+Three loops moved a byte at a time through port I/O and now collapse to one
+instruction each when the CPU has it: `ch_read_fast` (pull a packet out of
+the chip), `ch_read_ovl` (drain a burst that cannot be used) and
+`bulk_out_loop` (transmit). `Has186` is probed at install time, the portable
+loops are still there, and the fast ones are emitted as `db` bytes because
+the assembler targets 8086 and is right to refuse them as source.
+
+Measured with the SAME BINARY on the same 1 MB file from the same server,
+which is the comparison the old 73s-to-71s figure could not make -- that one
+was two different builds:
+
+| | 1 MB | CRC-32 | longest poll |
+|---|---|---|---|
+| `REP INSB` / `REP OUTSB` | **63.6s** | `998E4325` | **22.0 ms** |
+| `/8`, the 8086 loops | 65.3s | `998E4325` | 32.6 ms |
+
+**Throughput moved 2.6%, and that was the prediction.** At `/R=1` this
+driver is round-trip-bound, not read-bound. Anyone reaching for this change
+to make the default faster should stop here.
+
+**The interrupt got 33% shorter, and that was the point.** A poll that takes
+32.6 ms out of a 55 ms tick is 59% of the machine while traffic flows, which
+is the sort of number that wedges `EDIT` at `/R=8`.
+
+Every error counter read zero on both runs, both files verified byte-exact
+on the box against `zlib.crc32` on the Windows side.
+
+**And then 5 MB came back corrupt -- and four runs proved it is USBPKT, and
+that it predates all of this work.**
+
+| 5 MB, same file, same server | time | result |
+|---|---|---|
+| written locally by `RAMPCHK /W`, no network | | exactly the ramp |
+| over the NE2000 at INT 60h | 62.9s | exactly the ramp |
+| over USBPKT, fast path | 312.0s | 162 bytes wrong |
+| over USBPKT, `/8` portable loops | 309.6s | wrong, and differently |
+| over the NE2000, 10 MB | 125.3s | exactly the ramp |
+| over USBPKT, fast path, again | 305.6s | exactly the ramp |
+
+**It is intermittent -- two USB runs in three -- so no single clean run
+proves anything.** The disk and DOS file I/O are eliminated by a file that
+never crossed a wire. The two corrupt USBPKT rows disagree with each other,
+ruling out a deterministic bug in either byte loop, and the `/8` row is code
+that shipped before any of this, so the `REP INSB` change did not cause it.
+
+The NE2000 rows had to be earned. The first draft of this entry rested on
+ONE clean NE2000 run and called it decisive; at a two-in-three failure rate
+that is a coin toss reported as a result. At 15 MB of clean NE2000 exposure
+-- three 5 MB-equivalents -- the same coincidence needs about one chance in
+twenty-five, so "the fault is in USBPKT" is now well supported. Supported,
+still not proven.
+
+**And a correction to the signature analysis, which was mine.** The first
+reading called the leading fragment "exactly 64 bytes earlier" and made much
+of 64 being the CH375's bulk maximum packet size. The ramp repeats every 256
+bytes, so a delta is a displacement MODULO 256 and nothing in the test
+distinguishes -64 from -320. The coincidence was real; the inference was
+not.
+
+**A concrete candidate did come out of reading the code.** `rx_deliver` is
+handed the burst length in `CX`, uses it to locate the trailer, then reuses
+`CX` and never keeps it -- so every per-frame bounds check afterwards is
+against `RXBUF_SZ`, the buffer, rather than against the bytes this burst
+actually delivered. `rxbuf` is not cleared between bursts, so a trailer
+claiming a frame past the received data hands up leftovers from an earlier
+burst: real stream payload, duplicated, with the file in step everywhere
+else. That is the observed signature, it explains why every counter reads
+zero, and it fits the mod-256 caveat -- data from a previous burst is
+displaced by roughly a burst, which reads as a small delta.
+
+Not a diagnosis. What would settle it: verify the entry array's frames tile
+the received burst exactly and count the ones that do not.
+
+**The signature is specific.** Not shifted -- the file never lost step -- but
+162 bytes at offset 3,802,924 overwritten with payload from elsewhere:
+
+```
+want 2C 2D 2E 2F | 30 31 32 33 34 35 36 37 ...
+got  EC ED EE EF | 7C 7D 7E 7F 80 81 82 83 ...
+```
+
+Four bytes from **64 earlier** (delta +192 = -64), then 158 from **76
+later**, then correct data resumes -- and 64 is the CH375's bulk maximum
+packet size. One USB packet's worth of data landed at the wrong offset in
+the burst buffer. That accuses burst assembly in `rx_go`/`rx_got`, not the
+chip interface and not the wire.
+
+It also means a mangled frame reached the file rather than being caught by a
+TCP checksum, so the driver's correctness is load-bearing here rather than
+backstopped by the layer above.
+
+Three things it establishes about evidence regardless of the cause:
+
+* **The 1 MB test was too small to be a test.** Passing it twice is exactly
+  what a rare fault looks like at a fifth of the exposure.
+* **Every error counter read zero on both corrupt runs**, so "all counters
+  zero" says only that nothing *detected* a fault. It had been getting
+  quoted throughout these notes as though it meant the receive path was
+  sound.
+* **`longest poll` was unchanged between clean and corrupt runs**, so it
+  does not present as a poll that ran long either.
+
+And one methodological correction that is mine: the first comparison changed
+the size AND the server at once -- 1 MB from `dosd` on 8080, 5 MB from the
+Delphi server on 80. The NE2000 control is what separated them properly.
+
+### `RAMPCHK`, and why a checksum was never going to be enough
+
+New tool. The test files are a repeating `00`..`FF` ramp, so the correct
+byte at any offset is `offset mod 256`; `RAMPCHK` reports where a file
+deviates, by how much, and above all whether the stream was **ALTERED** (in
+step, short runs, varying deltas) or **SHIFTED** (one constant-delta run to
+the end, the delta being the number of bytes lost). Those have completely
+different causes and a CRC cannot tell them apart -- it only ever says "no".
+
+Validated before being believed, against three crafted files: clean, three
+bytes dropped at 20000, three bytes altered. It named all three correctly,
+including `SHIFTED ... 3 byte(s) were DROPPED there`. An instrument that has
+not been shown able to fail is not evidence.
+
+`RAMPCHK /W <bytes>` writes a ramp instead of checking one, which is how the
+disk got ruled out with no network in the path at all.
+
+### A spinner, on stderr, because stdout is not on the screen
+
+A 26-minute read over the bridge is indistinguishable from a wedged machine:
+a job's stdout is redirected into `OUT.TXT`, so nothing reaches the console
+until the job ends. COMMAND.COM 6.22 has **no stderr redirection** -- usually
+a nuisance here, exactly right for this -- so handle 2 reaches the screen
+whatever the batch does with handle 1. Captured output stays clean; the box
+gets a heartbeat.
+
+One character then a backspace, animating in place, scrolling nothing, the
+same trick `UGET` uses. It ticks every 8 KB block, about twice a second. The
+first version ticked every 256 KB, which here is one move every eighteen
+seconds -- a heartbeat slower than the observer's patience is not a
+heartbeat, and it would have failed at the one job it exists for.
+
+### Measured in passing: the NE2000 gap is 5x, not 2x
+
+Using the NE2000 as a control gave the comparison this file had been
+estimating: the same 5 MB from the same server is **62.9s on the NE2000
+against 312.0s** over USBPKT. These notes claimed "the last 2x is
+structural". It is five.
+
+### The 10 ms figure below was wrong, and wrong in the flattering direction
+
+The entry after this one estimated "a full burst read is ~10 ms of a 55 ms
+tick" and that `REP INSB` "would take that to ~3 ms". Neither number
+survives contact with a measurement:
+
+* The peak poll is **32.6 ms**, over three times the estimate.
+* It came down to 22.0 ms, not to a third of anything.
+
+The absolute saving, ~10.6 ms, is close to what a 10-to-3 estimate implies.
+The SHARE is completely different, and the reason is that the poll is not
+just the read loop: issuing the IN token, spinning in `ch_wait` for the
+chip's interrupt, and the drain-and-unwedge path are all inside the same
+measurement. The read loop is roughly a third of a peak poll rather than all
+of it, so making it nearly free could never have taken the poll to 3 ms.
+
+Estimating one component and quoting it as the whole is the same mistake
+this file has recorded before under other names. The instrument below is the
+answer to it.
+
+### `longest poll` in `/S`, because a claim is not a measurement
+
+`USBPKT /S` now reports the longest single poll it has seen, in PIT counts
+and in milliseconds. PIT channel 0 counts down at 1.193 MHz and latching it
+either side of `rx_poll` costs four port accesses, so the driver can measure
+its own worst interrupt for essentially nothing.
+
+Two things about it are deliberate:
+
+* **It is only taken at `/R=1`.** With the counter at its power-on divisor
+  of 65536 the subtraction is exact modulo 65536 -- the counter wraps where
+  the arithmetic does -- for anything up to a full 54.9 ms period. Once `/R`
+  has reloaded it with something smaller those two stop agreeing and a
+  wrapped reading would be *wrong* rather than merely missing. Nothing is
+  lost by skipping it: the poll does the same work per burst whatever the
+  tick rate, so the figure at `/R=1` is the figure at `/R=8`. What `/R`
+  changes is how often it is paid.
+* **It prints a dash, not a zero, when nothing was timed.** `0.0 ms` would
+  read as "measured, and free", which is the opposite of the truth.
+
+### `/8` forces the portable loops
+
+One switch, no rebuild, on the machine where a fault would actually show.
+The risk being covered is specific and was the only real objection to this
+change: `REP INSB` issues port reads far closer together than the loop it
+replaces, and the CH375's settling delays are not decoration. If a transfer
+ever CRCs wrong, `/8` is the first thing to try -- and if `/8` fixes it,
+that is the answer rather than a hint.
+
+### Costs
+
+`rx_scratch` went from 64 bytes to 256. The fast drain is a single
+`REP INSB` and it has to have somewhere to put the bytes that is not the
+caller's buffer -- being too small for them is how that path is reached in
+the first place -- and the length the chip reports is one byte, so 256
+cannot be overrun. With the probe and the timer, the resident image went
+from 6144 to 6448 bytes.
+
+`/R`'s help text said "default 8" long after the default became 1. Fixed.
+
 ## The machine is a V30, so REP INSB was never off the table
 
 A correction to the entry two below, and it costs something real.

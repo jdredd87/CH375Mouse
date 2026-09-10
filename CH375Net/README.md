@@ -456,6 +456,265 @@ trailer at +676 = 02A00001   count=1  hdr_off=672
 It looked wrong for a long while, and the layout was never the problem —
 see the third trap above.
 
+## The byte loops: REP INSB, and measuring the interrupt instead of the file
+
+Three loops in `usbpkt.asm` moved one byte at a time through port I/O. Each
+is now a single instruction on a CPU that has the 186 string I/O
+instructions, which this NEC V30 does:
+
+| loop | portable | fast |
+|---|---|---|
+| `ch_read_fast`, pulling a packet out of the chip | `in`/`stosb`/`loop` | `REP INSB` |
+| `ch_read_ovl`, draining a burst that cannot be used | `in`/`loop` | `REP INSB` |
+| `bulk_out_loop`, transmit | `lodsb` + `call ch_wr` + `dec`/`jne` | `REP OUTSB` |
+
+`Has186` is probed at install time, the portable loops are still there and
+still reachable with `/8`, and the fast ones are emitted as `db` bytes
+because the assembler targets 8086 and is right to refuse them as source.
+Same arrangement as DOSBridge's `starter/cpu.pas`, including the probe order
+-- FLAGS bits 12-15, then the undocumented `AAD` to split NEC from Intel,
+and only then the shift-count test, which is last because sources disagree
+about whether a V20/V30 masks shift counts and this way it is never asked.
+
+### What it bought, measured on one binary
+
+Same 1 MB file, same server, `/8` the only difference:
+
+| | 1 MB | CRC-32 | longest poll |
+|---|---|---|---|
+| `REP INSB` / `REP OUTSB` | **63.6s** | `998E4325` | **22.0 ms** |
+| `/8`, the 8086 loops | 65.3s | `998E4325` | 32.6 ms |
+
+**2.6% on throughput, and 33% off the interrupt.** The second number is the
+one worth having. At `/R=1` this driver is round-trip-bound, so making the
+reads nearly free cannot move the file transfer much and does not -- what it
+moves is the share of the machine one timer interrupt takes while traffic is
+flowing, and a poll costing 32.6 ms out of a 55 ms tick is 59% of the
+machine. That is the shape of thing that wedged `EDIT` at `/R=8`.
+
+### The estimate this replaced was out by 3x
+
+This file used to say a full burst read was "about 10 ms of a 55 ms tick --
+19% of the machine" and that `REP INSB` would take it "to roughly 3 ms".
+Measured, the peak poll is **32.6 ms**, and it came down to 22.0 rather than
+to a third of anything.
+
+The absolute saving is about what the estimate implied. The share is not,
+and the reason is that the poll is not only the read loop: issuing the IN
+token, spinning in `ch_wait` for the chip's interrupt, and the
+drain-and-unwedge path all sit inside the same measurement. The read loop is
+roughly a third of a peak poll rather than all of it, so no amount of making
+it free could have reached 3 ms.
+
+### So the driver now times itself
+
+`USBPKT /S` reports `longest poll` in PIT counts and milliseconds. Channel 0
+counts down at 1.193 MHz, and latching it either side of `rx_poll` costs
+four port accesses -- cheap enough to leave on permanently, which means the
+next person to change this code has the number rather than an argument.
+
+It is **only taken at `/R=1`**, and that is not a limitation worth removing.
+With the counter at its power-on divisor of 65536 the subtraction is exact
+modulo 65536 -- the counter wraps exactly where 16-bit arithmetic does -- for
+anything up to a full 54.9 ms period. Once `/R` has reloaded the counter with
+something smaller, the two no longer agree and a wrapped reading would be
+*wrong* rather than absent. Nothing is lost: the poll does the same work per
+burst whatever the tick rate, so the figure at `/R=1` is the figure at
+`/R=8`. What `/R` changes is how often it is paid.
+
+When nothing has been timed it prints a dash rather than `0.0 ms`, because a
+zero would read as "measured, and free".
+
+### `/8`, and the risk it covers
+
+`REP INSB` issues port reads far closer together than the loop it replaces,
+and the CH375's settling delays are not decoration -- that was the only real
+objection to any of this. `/8` forces the portable loops with one switch and
+no rebuild, on the machine where a fault would actually show. If a transfer
+ever CRCs wrong, try `/8` first; if `/8` fixes it, that is the answer rather
+than a hint.
+
+### And then something DID CRC wrong -- and it is USBPKT, not this change
+
+A 5 MB download came back **5,242,880 bytes, the exact right length, with
+the wrong contents.** The obvious suspect was the fast path, and `/8` exists
+precisely to settle that in one command. It settled it the other way, and
+four runs then boxed the fault in completely:
+
+| same file, same server | size | time | result |
+|---|---|---|---|
+| written locally by `RAMPCHK /W`, no network at all | 5 MB | | exactly the ramp |
+| fetched over the **NE2000** at INT 60h | 5 MB | 62.9s | exactly the ramp |
+| fetched over the **NE2000** at INT 60h | 10 MB | 125.3s | exactly the ramp |
+| fetched over USBPKT, fast path | 5 MB | 312.0s | **162 bytes wrong** |
+| fetched over USBPKT, `/8` portable loops | 5 MB | 309.6s | **wrong, and differently** |
+| fetched over USBPKT, fast path, again | 5 MB | 305.6s | exactly the ramp |
+
+**It is intermittent -- two USB runs in three -- so no single clean run
+proves anything**, and that is the first thing to internalise before
+designing any test here.
+
+It is also what makes the NE2000 rows carry weight, and they had to be
+earned. The first version of this section rested on ONE clean NE2000 run and
+called the matter settled; at a two-in-three failure rate a single clean run
+happens by chance a third of the time even if the NE2000 were equally
+affected, so that was not evidence, it was a coin toss reported as a result.
+With 15 MB of clean NE2000 exposure -- three 5 MB-equivalents -- the same
+coincidence needs about one chance in twenty-five.
+
+So, in order of how well established each is:
+
+* **The disk and DOS file I/O are sound** at this size: a file that never
+  crossed a wire reads back perfect.
+* **The `REP INSB` change did not cause it.** The `/8` row is the code that
+  shipped before this work, and the two corrupt runs differ from each other,
+  which rules out a deterministic bug in either byte loop.
+* **The fault is very probably in USBPKT** rather than in mTCP, `HTGET` or
+  the disk, on the strength of 15 MB clean through a different packet driver
+  against 2-in-3 failures through this one. Probable, not proven.
+
+#### What the corruption looks like
+
+Taken from the first corrupt run. Not shifted -- `RAMPCHK` says the stream
+stayed in step -- and the damage is **162 altered bytes in a single region**
+at offset 3,802,924 of 5,242,880. One region in five megabytes.
+
+Only one event has been examined at this level of detail, so read what
+follows as one well-characterised sample rather than as the shape of the
+fault. Whether the leading fragment is ALWAYS -64 is the thing to check
+next, and it is what would turn the hypothesis below into a diagnosis.
+
+The bytes are the whole diagnosis, and they are not noise:
+
+```
+want 2C 2D 2E 2F | 30 31 32 33 34 35 36 37 38 39 3A 3B ...
+got  EC ED EE EF | 7C 7D 7E 7F 80 81 82 83 84 85 86 87 ...
+```
+
+Two pieces, each internally a clean run of consecutive values -- so this is
+real payload from elsewhere in the same stream, substituted rather than
+damaged:
+
+* the **first four bytes** carry delta +192;
+* the **remaining 158** carry a constant delta of **+76**, running cleanly
+  to the end of the region, after which correct data resumes.
+
+**Nothing was lost.** Everything outside those 162 bytes is right, so the
+file never went out of step -- which means the bytes that appeared early
+also appear in their proper places further on. A 162-byte window was
+**overwritten with data duplicated from elsewhere in the stream**, not
+shifted and not corrupted bit by bit.
+
+**How far away that data came from, this test cannot say.** The ramp repeats
+every 256 bytes, so a delta is only ever a displacement MODULO 256: +192
+means -64 or -320 or -576, and +76 means +76 or +332 or +588. An earlier
+draft of this section read the first fragment as "exactly 64 bytes earlier"
+and made much of 64 being the CH375's bulk maximum packet size. That
+coincidence is real and the inference was not: nothing here distinguishes 64
+from 320. Anyone wanting the true displacement needs a test file whose
+period exceeds the file length -- a counter written as 32-bit words, say --
+rather than a byte ramp. `RAMPCHK /W` could write one; the server's files
+are what they are.
+
+One more thing it implies, and it is worth stating because it raises the
+stakes: a mangled frame that reaches the file is a frame whose TCP checksum
+was not what caught it. Either the stack is not verifying on this path or
+this one slipped through, and in both cases **the driver's correctness is
+load-bearing rather than backed up by the layer above.**
+
+#### A concrete candidate in the code
+
+Read `rx_deliver` with "payload from elsewhere in the same buffer" in hand
+and something stands out. It is handed `CX` = the number of bytes the burst
+actually delivered, uses it to find the trailer, and then **reuses `CX` and
+never keeps the burst length again.** Every per-frame bounds check after
+that point is against the size of the buffer:
+
+```
+        mov     bx, di
+        add     bx, cx
+        cmp     bx, RXBUF_SZ        ; the BUFFER, not this burst
+        ja      short rxd_skip
+```
+
+`rxbuf` is not cleared between bursts, so a trailer that claims a frame
+extending past the bytes just received will be handed up bytes left over
+from an EARLIER burst -- which is real stream payload from somewhere else,
+duplicated, with the file staying in step everywhere else. That is the
+observed signature, and it also explains why every counter reads zero:
+nothing in the parser is looking for it.
+
+It fits the mod-256 caveat above too. Data left over from a previous burst
+is displaced by something on the order of a burst, which shows up as a small
+delta and would have been badly misread as "64 bytes".
+
+**This is a hypothesis with a code basis, not a diagnosis.** What would
+settle it: check the entry array's frames tile the received burst exactly
+-- offsets and lengths summing to `CX` -- and count the ones that do not. If
+that counter fires on the runs that corrupt and stays at zero on the runs
+that do not, it is the bug.
+
+#### Three things this establishes about evidence, not about the bug
+
+* **The 1 MB test was never a test.** It passed twice on the fast path, and
+  that is exactly what a rare fault looks like at a fifth of the exposure.
+  This project has made the identical mistake elsewhere -- DOSBridge's
+  `simulate_dos.py` moved an 8-byte payload and so could never have caught a
+  truncation at 513 bytes. Size the test to the failure, not to patience.
+* **Every error counter read zero on both corrupt runs.** Bursts that made
+  no sense, impossible lengths, oversized bursts, toggle rescues: 0, 0, 0,
+  0. The driver cannot see this happening. "Every counter reads zero" has
+  been quoted throughout these notes as though it meant the receive path was
+  sound; it only ever meant that nothing *detected* a fault.
+* **`longest poll` was identical on the corrupt and the clean runs** -- 22.0
+  ms fast, 32.6 ms portable, matching their 1 MB figures to four counts. So
+  it does not present as a poll that ran long either.
+
+#### The instrument: `RAMPCHK`
+
+The test files are a repeating `00`..`FF` ramp, so the correct byte at any
+offset is `offset mod 256`, and that makes a bad download self-describing in
+a way a checksum can never be. A CRC only says "no". `RAMPCHK` says where,
+how much, and -- the part that matters -- **whether the stream was ALTERED
+or SHIFTED**, which have completely different causes:
+
+* bytes dropped or duplicated leave everything afterwards a clean ramp that
+  no longer lines up with its own address, so every later byte is wrong by
+  the *same* amount: one enormous constant-delta run, and the delta is the
+  number of bytes lost;
+* bytes damaged in place leave the stream in step and show up as short runs
+  with varying deltas.
+
+It was validated before being believed, against three crafted files -- clean,
+three bytes dropped at offset 20000, three bytes altered -- and it correctly
+identified all three, naming the exact offsets and calling the dropped-byte
+case `SHIFTED ... 3 byte(s) were DROPPED there`. An instrument that has not
+been shown able to fail is not evidence, and this file has had to relearn
+that more than once.
+
+`RAMPCHK /W <bytes>` writes a ramp instead of checking one, which is what
+made the disk row of the table above possible: no packet driver, no adapter,
+no server in the path at all.
+
+#### It draws a spinner, and it does it on STDERR
+
+A long run over the bridge used to be indistinguishable from a wedged
+machine, because a job's stdout is redirected into `OUT.TXT` and nothing
+reaches the screen until the job ends -- so a 26-minute read showed nothing
+at all while working perfectly. COMMAND.COM 6.22 has **no stderr
+redirection**, which is normally a nuisance here and is exactly what is
+wanted for this: handle 2 reaches the console whatever the batch does with
+handle 1. The captured output stays clean and the box gets a heartbeat.
+
+One character then a backspace, so it animates in place and scrolls nothing
+-- the same trick DOSBridge's `UGET` uses. It ticks **every 8 KB block**,
+about twice a second here. It was written to tick every 256 KB first, which
+on this machine is one move every eighteen seconds: a heartbeat slower than
+the observer's patience is not a heartbeat, and it would have failed at the
+one job it exists to do.
+
+
+
 ## Measured throughput
 
 About **1650 bytes/sec** sustained, with the link deliberately loaded.
@@ -789,45 +1048,12 @@ speaks it, instead of another entry in a table of vendor quirks.
 
 ## What is not done
 
-### A REP INSB fast path, which is available and was wrongly ruled out
+### The REP INSB fast path — done
 
-The payload read loop is `IN` / `STOSB` / `LOOP`, about 42 clocks a byte, and
-a source comment used to justify that by saying a `REP INSB` "cannot be had
-here — INS is 80186 and up".
-
-Half right, wrong half load-bearing. `INS` *is* 186-class and the assembler
-targets 8086, so it cannot be written as source — but **the development
-machine is a NEC V30, which has the 186 instruction set.** The convention for
-precisely this already exists in DOSBridge's `starter/cpu.pas`: probe
-`Has186` at run time, keep the portable loop, emit the fast one as `db`
-bytes, never delete the slow one.
-
-So the fast path is available and simply has not been written. Three loops
-would take it:
-
-| loop | now | with `REP INSB`/`OUTSB` |
-|---|---|---|
-| `ch_read_fast`, pulling a packet out of the chip | `in`/`stosb`/`loop`, ~42 clocks a byte | ~10-14 |
-| `ch_read_ovl`, draining a burst that cannot be used | `in`/`loop`, ~31 | ~10-14 |
-| `bulk_out_loop`, transmit | `lodsb` + `call ch_wr` + `dec`/`jne`, ~160 | ~10-14 |
-
-Transmit is the biggest per byte, because the read loop was inlined and the
-write loop never was — it still pays a call, two settling reads and a
-push/pop for every byte.
-
-**It would not make the default faster, and it is worth doing anyway.** At
-`/R=1` this driver is round-trip-bound, not read-bound: inlining the read
-loop already made reads 3.6x faster and moved 1 MB from 73s to 71s, which is
-nothing. The win is that a full burst read is about 10 ms of a 55 ms tick —
-19% of the machine while traffic flows — and `REP INSB` would take that to
-roughly 3 ms. A packet driver that steals less of the machine is the point;
-`/R=8` breaking `EDIT` is what happens when it steals too much. It would
-also make raising `/R` affordable again for anyone who does want throughput.
-
-The one caution is the reason the settling delay existed at all: `REP INSB`
-issues reads far closer together than this loop does, and the CH375 may not
-keep up. That is measurable rather than arguable — the CRC'd download
-harness answers it in one run.
+It is written, measured and on by default where the CPU has it. See **The
+byte loops** above: 2.6% on throughput, which was the prediction, and 33%
+off the length of the interrupt, which was the point. `/8` puts the portable
+loops back.
 
 
 

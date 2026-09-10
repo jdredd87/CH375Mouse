@@ -1516,6 +1516,15 @@ op_help:    db 0
 op_giga:    db 0
 op_test:    db 0
 
+; /8 -- use the portable 8086 byte loops even on a CPU that has REP INSB
+; and REP OUTSB.  It exists so the fast path can be ruled in or out in one
+; command, without a rebuild, on the machine where a fault would show.  The
+; risk it covers is specific: REP INSB issues port reads far closer
+; together than the loop it replaces, and the CH375's settling delays are
+; not decoration.  If a transfer ever CRCs wrong, this is the first thing
+; to try -- and if /8 fixes it, that is the answer rather than a hint.
+op_no186:   db 0
+
 ; /Q -- the AX88179's bulk-in aggregation timer, low byte, decimal.
 ; The adapter holds a part-full burst until this expires, so it sets a
 ; floor under the latency of every single frame that arrives on a quiet
@@ -1578,6 +1587,13 @@ pa_slash:
         mov     byte [op_help], 1
         jmp     near pa_more
 pa_notq:
+        ; /8 before the fold as well -- '8' AND 0DFh is 18h, not a letter,
+        ; so it has to be matched while it is still itself.
+        cmp     al, '8'
+        jne     short pa_not8
+        mov     byte [op_no186], 1
+        jmp     near pa_more
+pa_not8:
         and     al, 0xDF
         cmp     al, 'U'
         jne     short pa_s2
@@ -1805,9 +1821,72 @@ sig_self:   db 'USBPKT01'
 ; ==========================================================================
 ; INIT
 ; ==========================================================================
+; --------------------------------------------------------------------------
+; Does this CPU have the 80186 instruction set -- REP INSB and REP OUTSB in
+; particular?  Sets [has186], which the three byte-moving loops in the
+; resident half read.
+;
+; Lifted from dosbridge's starter/cpu.pas, ORDER included, because the order
+; is the part that is easy to get wrong:
+;
+;   1. FLAGS bits 12-15.  On the 8086/88, the V20/V30 and the 186 they read
+;      back as 1 whatever is pushed; a 286 in real mode reads them as 0.
+;   2. Within that group the undocumented AAD opcode (D5h) splits NEC from
+;      Intel.  AAD takes a base operand: Intel honours it, NEC's parts
+;      ignore it and always use 10.  With AH=1, AL=0 and base 11 an Intel
+;      part answers 11 and a V20/V30 answers 10.
+;   3. Only THEN the shift-count test splits 8086 from 186.  It is last on
+;      purpose: sources disagree about whether the V20/V30 masks shift
+;      counts, so by the time it runs, AAD has already ruled NEC out and it
+;      is never asked that question.
+;
+; A 286 or later has the 186 instructions by definition and needs no further
+; narrowing here.  Everything is restored, flags included -- this runs with
+; interrupts on and must leave them that way.
+; --------------------------------------------------------------------------
+cpu_probe:
+        push    ax
+        push    cx
+        pushf                            ; the caller's flags, back at the end
+        pushf
+        pop     ax
+        and     ax, 0x0FFF               ; try to clear bits 12-15
+        push    ax
+        popf
+        pushf
+        pop     ax                       ; and see what actually stuck
+        and     ax, 0xF000
+        cmp     ax, 0xF000
+        jne     short cpu_have           ; they cleared: 286 or later
+        mov     ah, 1
+        mov     al, 0
+        db      0xD5, 0x0B               ; AAD with a base of 11
+        cmp     al, 10
+        je      short cpu_have           ; NEC V20/V30
+        mov     al, 1
+        mov     cl, 32
+        shl     al, cl                   ; an 8086 shifts all 32 and lands on 0
+        or      al, al
+        jz      short cpu_none
+cpu_have:
+        mov     byte [has186], 1
+cpu_none:
+        popf                             ; caller's flags back
+        pop     cx
+        pop     ax
+        ret
+
 init:
         cld
         call    parse_args
+
+        ; Before anything touches the chip: the byte-moving loops read
+        ; [has186] and there is no later point at which setting it would
+        ; still be early enough.
+        cmp     byte [op_no186], 0
+        jne     short init_no186
+        call    cpu_probe
+init_no186:
         mov     dx, msg_prog
         call    puts
         mov     dx, ver_str
@@ -2076,6 +2155,16 @@ stat_have:
         call    puthexw
         call    crlf
 
+        mov     dx, msg_s_bmov
+        call    puts
+        mov     dx, msg_bmov_slow
+        cmp     byte [es:has186], 0
+        je      short stat_bmov
+        mov     dx, msg_bmov_fast
+stat_bmov:
+        call    puts
+        call    crlf
+
         mov     dx, msg_s_mac
         call    puts
         mov     cx, 6
@@ -2169,6 +2258,44 @@ stat_macskip:
         xor     ah, ah
         call    putdecw
         call    crlf
+
+        ; The peak poll.  Printed in PIT counts as well as milliseconds
+        ; because the counts are what was actually measured and the
+        ; milliseconds are a division done here -- if the two ever
+        ; disagree with each other, the raw number is the one to trust.
+        ; A dash rather than a zero when nothing was timed: 0.0 ms would
+        ; read as "measured, and free", which is the opposite of the
+        ; truth.
+        mov     dx, msg_s_isr
+        call    puts
+        mov     ax, [es:isr_max]
+        or      ax, ax
+        jnz     short stat_isr_have
+        mov     dx, msg_s_isrnone
+        call    puts
+        call    crlf
+        jmp     short stat_isr_done
+stat_isr_have:
+        call    putdecw
+        mov     dx, msg_s_isr2
+        call    puts
+        mov     ax, [es:isr_max]
+        xor     dx, dx
+        mov     bx, 1193                 ; counts per millisecond
+        div     bx
+        push    dx                       ; the remainder, for the tenth
+        call    putdecw
+        mov     al, '.'
+        call    putc
+        pop     ax
+        xor     dx, dx
+        mov     bx, 119
+        div     bx
+        call    putdecw
+        mov     dx, msg_s_isr3
+        call    puts
+        call    crlf
+stat_isr_done:
 
         mov     dx, msg_s_peek
         call    puts
@@ -2381,9 +2508,13 @@ msg_help:
         db 13, 10
         db 'OTHER  @nnn CH375 I/O base in hex, default 260', 13, 10
         db '       /G   leave the PHY at gigabit    /V  trace', 13, 10
-        db '       /R=n timer divisor 1..16, default 8.  The poll rate is', 13, 10
+        db '       /R=n timer divisor 1..16, default 1.  The poll rate is', 13, 10
         db '            18.2*n Hz and it IS the latency: 1 leaves the', 13, 10
-        db '            clock alone and answers in about 55ms', 13, 10
+        db '            clock alone and answers in about 55ms.  Raise it', 13, 10
+        db '            for a big transfer, never in AUTOEXEC.BAT', 13, 10
+        db '       /8   use the 8086 byte loops even on a CPU that has', 13, 10
+        db '            REP INSB.  The fast path is the default where it', 13, 10
+        db '            exists; this is how to rule it out in one command', 13, 10
         db '       /T   check the adapter and STOP, installing nothing', 13, 10
         db '       /A   take the adapter as it stands: skip the bring-up', 13, 10
         db '            because USBLINK or an earlier run already did it', 13, 10
@@ -2470,6 +2601,9 @@ msg_hooked08:
 msg_isres:     db 'Loaded: USBPKT $'
 msg_s_vec:     db '  vector=$'
 msg_s_base:    db '  I/O base=$'
+msg_s_bmov:    db '  byte moves=$'
+msg_bmov_fast: db 'REP INSB/OUTSB$'
+msg_bmov_slow: db '8086 loops$'
 msg_s_mac:     db '  MAC=$'
 msg_s_handles: db '  open handles=$'
 msg_s_ticks:   db '  timer ticks=$'
@@ -2484,6 +2618,10 @@ msg_s_rxst:    db '  last bulk IN: status $'
 msg_s_rxlen:   db ', length $'
 msg_s_sent:    db '  frames sent=$'
 msg_s_rate:    db '  timer divisor (/R)=$'
+msg_s_isr:     db '  longest poll=$'
+msg_s_isr2:    db ' counts, $'
+msg_s_isr3:    db ' ms$'
+msg_s_isrnone: db '-- (only timed at /R=1)$'
 msg_s_peek:    db '  last frame out=$'
 msg_s_rxpk:    db '  last burst rejected: len=$'
 msg_s_rxpk2:   db ' data=$'

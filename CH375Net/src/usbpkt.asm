@@ -245,6 +245,29 @@ rx_peeklen: dw  0
 
 cfg_val:    db  1
 
+; Does this CPU have the 80186 string I/O instructions?  REP INSB and REP
+; OUTSB move a byte between a port and memory in ONE instruction, where the
+; portable loops below need three or more -- and on an 8086 they are invalid
+; opcodes that do something undefined rather than faulting, so this cannot be
+; guessed.  Probed at install time by cpu_probe; /8 forces it to 0.
+;
+; The development machine is a NEC V30, which has the 186 instruction set,
+; and this is the arrangement dosbridge's cpu.pas already established: probe
+; at run time, keep the portable loop, emit the fast one as db bytes because
+; the assembler targets 8086 and is right to refuse it as source.  NEVER
+; delete the portable path -- it is the one that runs everywhere.
+has186:     db  0
+
+; The longest single poll, in PIT counts of 0.838 us.  This is the whole
+; justification for the REP INSB path above, so it is measured rather than
+; asserted: the driver is round-trip-bound at the default poll rate, which
+; means a faster read buys almost nothing in throughput and everything it
+; buys is here -- the share of the machine one interrupt takes while
+; traffic is flowing.  A burst read that costs 10 ms of a 55 ms tick is a
+; fifth of the machine, and that is what wedged MS-DOS EDIT at /R=8.
+isr_t0:     dw  0
+isr_max:    dw  0
+
 ; ---- state ----
 ; The PIT divisor.  1 leaves the timer alone at 18.2 Hz; 8 gives 145 Hz.
 ;
@@ -342,7 +365,12 @@ rx_pos:     dw  0            ; bytes of a part-read burst carried between
 n_flush:    dw  0            ; times we have had to go hunting
 rx_st:      db  0            ; status the last bulk IN reported
 rx_len:     db  0            ; length the last RD_USB_DATA claimed
-rx_scratch: times 64 db 0    ; somewhere to throw a drained packet
+; Somewhere to throw a drained packet.  256 rather than 64 because the fast
+; drain in ch_read_over is a single REP INSB and has to have room for the
+; largest length the chip can report -- the length is one byte, so 255 is the
+; worst case and 256 cannot be overrun.  The flush sampler still copies only
+; the first 64 into rx_peek.
+rx_scratch: times 256 db 0
 
 ; Scratch the receive path keeps across the upcall.  It has to live in CS
 ; memory rather than in registers or on the stack: the receiver is the
@@ -467,23 +495,31 @@ ch_read:
         ; help at all, already far longer than the chip needs.  On a
         ; faster machine this wants the delay back.
         ;
-        ; This comment used to say a REP INSB "cannot be had here --
-        ; INS is 80186 and up".  Half right and the wrong half mattered.
-        ; INS is indeed 186-class, and the ASSEMBLER targets 8086 so it
-        ; will not take it as source -- but the development machine is a
-        ; NEC V30, which HAS the 186 instruction set.  The convention for
-        ; exactly this is already established in dosbridge's cpu.pas:
-        ; probe Has186 at run time, keep the portable loop, and emit the
-        ; fast one as db bytes.  So the fast path is available and simply
-        ; has not been written.  See the README.
+        ; And on a machine that has REP INSB the whole loop collapses to
+        ; one instruction: ES:DI, DX and CX are already exactly what it
+        ; wants.  The point is NOT throughput -- at the default poll rate
+        ; this driver is round-trip-bound, and inlining the loop above
+        ; moved 1 MB by 2 seconds in 73.  The point is that a burst read
+        ; is ~10 ms of a 55 ms tick, a fifth of the machine while traffic
+        ; flows, and that is what wedged EDIT at /R=8.  A quieter driver
+        ; is the goal, not a bigger number.
+        ;
+        ; DF is not saved here because it cannot be wrong: the timer ISR
+        ; does CLD on entry and so does pkt_go, which are the only two
+        ; ways into this code, and the STOSB below has always depended on
+        ; that.
         mov     dx, [cs:io_dat]
         mov     cl, bl
         xor     ch, ch
         mov     bh, bl                   ; all of it lands in the buffer
-ch_read_fast:
+        cmp     byte [cs:has186], 0
+        je      short ch_read_slow
+        db      0xF3, 0x6C               ; REP INSB
+        jmp     short ch_read_done
+ch_read_slow:
         in      al, dx
         stosb
-        loop    ch_read_fast
+        loop    ch_read_slow
 
 ch_read_done:
         mov     al, bh
@@ -499,9 +535,25 @@ ch_read_over:
         mov     dx, [cs:io_dat]
         mov     cl, bl
         xor     ch, ch
+        cmp     byte [cs:has186], 0
+        je      short ch_read_ovl
+        ; REP INSB has to put the bytes SOMEWHERE, and it cannot be the
+        ; caller's buffer -- being too small for them is how we got here.
+        ; rx_scratch is 256 bytes and the count came out of a byte, so
+        ; this cannot overrun whatever the chip claims.
+        push    es
+        push    di
+        push    cs
+        pop     es
+        mov     di, rx_scratch
+        db      0xF3, 0x6C               ; REP INSB
+        pop     di
+        pop     es
+        jmp     short ch_read_ovdone
 ch_read_ovl:
         in      al, dx
         loop    ch_read_ovl
+ch_read_ovdone:
         xor     al, al
         pop     dx
         pop     cx
@@ -612,6 +664,24 @@ bo_retry:
         call    ch_wr
         or      cl, cl
         je      short bulk_out_sent
+        cmp     byte [cs:has186], 0
+        je      short bulk_out_loop
+        ; The biggest of the three per-byte loops by a long way.  The read
+        ; loop above was inlined; this one never was, so every byte still
+        ; pays a call, a push/pop, two settling reads of port 61h and the
+        ; caller's own bookkeeping -- about 160 clocks against REP OUTSB's
+        ; ten or so.
+        ;
+        ; CX is free: bo_retry pushed it and the pop after ch_wait puts it
+        ; back, so clearing CH here costs nothing.  DS:SI is txbuf in CS,
+        ; set up by psend, and REP OUTSB advances SI by exactly what the
+        ; LODSB loop would -- which is what bo_retry's rewind depends on.
+        push    dx
+        xor     ch, ch
+        mov     dx, [cs:io_dat]
+        db      0xF3, 0x6E               ; REP OUTSB
+        pop     dx
+        jmp     short bulk_out_sent
 bulk_out_loop:
         lodsb
         call    ch_wr
@@ -685,6 +755,24 @@ pit_fast:
         pop     dx
         pop     bx
         pop     ax
+        ret
+
+; PIT channel 0's live count, which runs DOWN at 1.193 MHz.  Latching it
+; first (command 00h) freezes the value in a holding register, so the two
+; byte reads cannot be torn apart by the counter advancing between them --
+; which is the whole reason the latch command exists and the reason this is
+; safe to do from inside an interrupt.  Read-only: nothing here disturbs
+; the count, the mode, or anybody else's timing.
+pit_read:
+        push    dx
+        mov     al, 0
+        out     0x43, al                 ; latch counter 0
+        mov     dx, 0x40
+        in      al, dx
+        mov     ah, al                   ; low byte comes out first...
+        in      al, dx
+        xchg    al, ah                   ; ...then high.  AX = the count
+        pop     dx
         ret
 
 pit_slow:
@@ -853,7 +941,38 @@ isr08:
                                          ; string operations below assume
                                          ; forward
         inc     word [n_ticks]
+
+        ; Time it, but ONLY while the PIT is at its power-on divisor of
+        ; 65536.  There the counter wraps at exactly the place 16-bit
+        ; arithmetic does, so BEFORE minus AFTER is exact for anything up
+        ; to one full period -- 54.9 ms, which is five times the longest
+        ; poll ever measured.  Past that it aliases and would read SMALL,
+        ; which is the wrong direction to be wrong in; nothing here can
+        ; detect it, so treat a suspiciously low peak alongside skipped
+        ; ticks with suspicion.  Once /R has reloaded the counter with
+        ; something smaller, the wrap and the arithmetic no longer agree
+        ; at all and the reading is simply not taken.
+        ;
+        ; Skipping it there costs nothing worth having: the poll does the
+        ; same work per burst whatever the tick rate, so the figure taken
+        ; at /R=1 is the figure at /R=8 as well.  What changes with /R is
+        ; how often it is paid, and that is arithmetic.
+        cmp     byte [pit_fast_on], 0
+        jne     short isr_notimed
+        call    pit_read
+        mov     [isr_t0], ax
         call    rx_poll
+        call    pit_read
+        mov     bx, [isr_t0]
+        sub     bx, ax                   ; it counts DOWN, so before-after
+        cmp     bx, [isr_max]
+        jbe     short isr_timed
+        mov     [isr_max], bx
+isr_timed:
+        jmp     short isr_polled
+isr_notimed:
+        call    rx_poll
+isr_polled:
         pop     es
         pop     ds
         pop     bp
