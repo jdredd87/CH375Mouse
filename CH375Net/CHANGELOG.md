@@ -34,10 +34,17 @@ The cost is real and is the right trade: ~55 ms round trip instead of 6 ms,
 1 MB in 71 s instead of 36 s. A network driver that breaks the text editor
 is not a working network driver.
 
-**Confirmed at the keyboard**: with `/R=1` the editor opens, is usable and
-exits normally with the driver resident. `TICKCHK` agrees from the other
-side — `INT 08h is normal: hooking after the driver is safe`, where before
-it warned.
+**Confirmed at the keyboard, both ways.** EDIT was run twice on a freshly
+booted machine: once with the driver unloaded, once with it resident at the
+`/R=1` default. Both open, work and exit normally. Loading the driver makes
+no difference to the editor, which is the whole point and is the thing that
+was not true at `/R=8`.
+
+That A/B matters more than either half on its own. It exonerates the driver
+rather than merely failing to convict it, and it means the freeze seen in
+between was the key-injection automation being used to drive EDIT, not the
+driver. `TICKCHK` agrees from the other side — `INT 08h is normal: hooking
+after the driver is safe`, where before it warned.
 
 Worth recording how this was missed. `TICKCHK` printed *"INT 08h runs fast.
 Anything hooking it after the driver runs its timers this much too fast"* and

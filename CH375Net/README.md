@@ -212,8 +212,9 @@ its own timing granularity, not the wire.
 On the numbers above, 8 is obviously right. It was made the default, and
 that was wrong. **MS-DOS `EDIT` is what proved it: with the timer at 145 Hz,
 opening the editor wedged the machine hard enough to need the power switch.**
-At the default it opens, works and exits normally with the driver resident —
-checked by using it, not by inference.
+At the default it opens, works and exits normally — checked by running it
+both with the driver unloaded and with it resident, which makes it an
+exoneration rather than an absence of evidence.
 
 The reason is the interrupt chain. This driver hooks INT 08h and reprograms
 the PIT, then chains to whoever was there 1 tick in 8, so the BIOS clock and
