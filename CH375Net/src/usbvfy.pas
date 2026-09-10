@@ -60,6 +60,26 @@ const
   SEQMAX   = 256;            { the sender cycles a window this size }
   MAXBAD   = 6;              { events reported in full before summarising }
 
+{ Send something back every ACKEVY datagrams, and this is about FIDELITY
+  rather than politeness.
+
+  During an HTTP download the box transmits all the time -- a TCP ACK every
+  couple of segments -- so pkt_send and rx_poll are continuously interleaved
+  on the same CH375, arbitrated by the chip_busy flag.  A pure listener
+  never transmits at all, so it does not exercise that interleaving, and a
+  clean result from one would have said nothing about it while looking like
+  it had exonerated the chip.
+
+  Two segments per ACK is roughly what a TCP receiver does, so 2 it is.
+  /A=0 turns it off, which makes the difference measurable rather than
+  assumed: if corruption appears with transmit interleaved and not without,
+  that is the answer. }
+  ACK_EVERY = 2;      { Pascal is case-insensitive: this cannot be
+                        ACKEVY, because AckEvy is the variable that
+                        holds it.  CLAUDE.md records this trap twice
+                        already -- InC is Inc, DdX is DDX -- and this
+                        is the third name it has cost. }
+
 var
   Sender  : TIP;
   Buf     : array[0..MAXDG - 1] of Byte;
@@ -85,6 +105,9 @@ var
   Al      : Integer;
   Foreign : LongInt;
   BadHdr  : LongInt;
+  AckEvy  : Word;
+  Acks    : LongInt;
+  AckBuf  : array[0..15] of Byte;
 
 procedure Usage;
 begin
@@ -95,6 +118,11 @@ begin
   WriteLn('  /P=n   UDP port to listen on, default ', DEF_PORT);
   WriteLn('  /I=nn  packet driver vector in hex, default 65');
   WriteLn('  /S=n   seconds to listen, default ', DEF_SECS);
+  WriteLn('  /A=n   transmit back every n datagrams, default ', ACK_EVERY,
+          '; 0 = never.');
+  WriteLn('         Not politeness -- during a real download the box ACKs');
+  WriteLn('         constantly, so transmit and receive interleave on the');
+  WriteLn('         chip.  A pure listener never tests that.');
   WriteLn;
   WriteLn('Run mkblast.py on the sender first.  Every datagram carries its');
   WriteLn('own sequence number and a payload that is a function of absolute');
@@ -150,7 +178,7 @@ end;
 
 begin
   Port := DEF_PORT; Vec := DEF_VEC; Cfg := DEF_CFG;
-  Secs := DEF_SECS; Verbose := False;
+  Secs := DEF_SECS; Verbose := False; AckEvy := ACK_EVERY;
 
   if ParamCount < 1 then begin Usage; Halt(2); end;
   if not ParseIP(ParamStr(1), Sender) then
@@ -171,6 +199,7 @@ begin
       if not HexByte(Copy(A, 4, 9), Vec) then
       begin WriteLn('USBVFY: /I= wants a hex vector'); Halt(2); end;
     end
+    else if Copy(A, 1, 3) = '/A=' then AckEvy := Word(DecNum(Copy(A, 4, 9)))
     else if Copy(A, 1, 3) = '/C=' then
       Cfg := Copy(ParamStr(I), 4, Length(ParamStr(I)) - 3);
   end;
@@ -202,7 +231,8 @@ begin
   WriteLn('  listening -- run the blaster now');
 
   Bytes := 0; Datas := 0; BadD := 0; BadB := 0; Shown := 0;
-  Foreign := 0; BadHdr := 0;
+  Foreign := 0; BadHdr := 0; Acks := 0;
+  for I := 0 to 15 do AckBuf[I] := Byte(I);
   Deadline := NetTicks + LongInt(Secs) * 18;
 
   while NetTicks < Deadline do
@@ -245,6 +275,11 @@ begin
       end;
       Continue;
     end;
+
+    { Interleave a transmit, so the chip is doing both jobs at once as it
+      is during a real transfer. }
+    if (AckEvy > 0) and (Datas mod AckEvy = 0) then
+      if NetUdpSend(Port, Port, AckBuf, 16) then Inc(Acks);
 
     FirstBad := -1;
     for I := HDR to Got - 1 do
@@ -295,6 +330,7 @@ begin
   WriteLn('  datagrams  : ', Datas, '  (', Bytes, ' payload bytes)');
   WriteLn('  bad        : ', BadD, ' datagram(s), ', BadB, ' byte(s)');
   WriteLn('  bad headers: ', BadHdr, '   foreign: ', Foreign);
+  WriteLn('  transmits  : ', Acks, ' (every ', AckEvy, ' datagrams)');
   if Verbose then
     WriteLn('  driver rx  : ', NetRxFrames, ' accepted, ', NetRxWrong,
             ' not ours, ', NetRxDrop, ' dropped');
