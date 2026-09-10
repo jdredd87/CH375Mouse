@@ -105,6 +105,8 @@ var
   Al      : Integer;
   Foreign : LongInt;
   BadHdr  : LongInt;
+  Beat    : LongInt;     { when the heartbeat line was last redrawn }
+  Spin    : Byte;
   AckEvy  : Word;
   Acks    : LongInt;
   AckBuf  : array[0..15] of Byte;
@@ -134,6 +136,35 @@ function Hex2(B: Byte): ShortString;
 const H: array[0..15] of Char = '0123456789ABCDEF';
 begin
   Hex2 := H[B shr 4] + H[B and 15];
+end;
+
+{ A LIVE heartbeat, on stderr, driven by the CLOCK and not by traffic.
+
+  A program that prints nothing for 45 minutes is indistinguishable from a
+  hard-locked machine, and this one runs unattended for hours at a stretch.
+  Driving the indicator from the datagram count would not fix that: it
+  would freeze both when the program dies AND when traffic merely stops,
+  which are the two cases most worth telling apart.  Driven by the tick:
+
+    line advancing, counts rising    receiving normally
+    line advancing, counts static    alive, nothing arriving
+    line frozen                      the machine is locked
+
+  Stderr because a job's stdout is redirected into OUT.TXT and reaches
+  nobody until the job ends, while COMMAND.COM 6.22 has no stderr
+  redirection at all -- so handle 2 lands on the real screen where doscap
+  can photograph it, and the captured output stays clean.
+
+  A carriage return and no newline, so it repaints one line in place and
+  scrolls nothing.  The screen is a status display, not a scrollback. }
+procedure HeartBeat;
+const SPINCH = '|/-';
+begin
+  if NetTicks - Beat < 18 then Exit;      { about once a second }
+  Beat := NetTicks;
+  Spin := (Spin + 1) and 3;
+  Write(StdErr, #13, 'USBVFY ', SPINCH[Spin + 1], ' ', Datas, ' dg  ',
+        BadD, ' bad  ', BadHdr, ' badhdr  ', Foreign, ' foreign   ');
 end;
 
 { The expected byte at absolute stream position G. }
@@ -232,11 +263,13 @@ begin
 
   Bytes := 0; Datas := 0; BadD := 0; BadB := 0; Shown := 0;
   Foreign := 0; BadHdr := 0; Acks := 0;
+  Beat := NetTicks; Spin := 0;
   for I := 0 to 15 do AckBuf[I] := Byte(I);
   Deadline := NetTicks + LongInt(Secs) * 18;
 
   while NetTicks < Deadline do
   begin
+    HeartBeat;
     if not NetUdpRecv(Port, Buf, MAXDG, Got, 18) then Continue;
     if Got < HDR + 4 then Continue;
 
@@ -325,6 +358,8 @@ begin
   end;
 
   NetClose;
+  Write(StdErr, #13, '                                                     ',
+        #13);
 
   WriteLn;
   WriteLn('  datagrams  : ', Datas, '  (', Bytes, ' payload bytes)');
