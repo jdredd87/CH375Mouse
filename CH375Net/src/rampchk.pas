@@ -480,7 +480,10 @@ begin
   WriteLn;
   if Bad = 0 then
   begin
-    WriteLn('  VERDICT: exactly the ramp.  Every byte is offset mod 256.');
+    if Counter then
+      WriteLn('  VERDICT: exactly the counter.  Every word is its own index.')
+    else
+      WriteLn('  VERDICT: exactly the ramp.  Every byte is offset mod 256.');
     Rc := 0;
   end
   else

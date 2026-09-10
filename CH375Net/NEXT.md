@@ -180,6 +180,15 @@ that had to be retracted.
 real round trip is 6 ms at `/R=8`. That is mTCP's granularity. `PKTTEST
 /N=200` times it properly by doing the exchange itself.
 
+**Never background a `dosctl exec` with a shell `&`.** The job is dispatched
+and runs on the box to completion, but the pipe collecting its output dies
+with the shell, and there is no way to get the result back: `dosd` discards
+a result nobody is waiting for, and a running DOS job cannot be cancelled
+-- `dosreboot` needs the box to be polling, which it is not while a job
+runs, and a power cycle stops at the F1 prompt. That cost 75 minutes of box
+time for nothing. Use the harness's own background facility, which keeps
+the output file alive.
+
 **A job that runs but returns ZERO BYTES means the box is out of file
 handles, not that the job failed.** Seen 2026-09-10 after several hours of
 soaking. Every command still executed and still printed to the CONSOLE, but

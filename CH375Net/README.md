@@ -816,6 +816,215 @@ legitimate frame breaks networking and this model of the layout has not
 earned that much trust yet. Measure first; enforce once it has been quiet
 for a while.
 
+#### A 4 GB test pattern, and a confound I walked into for the third time
+
+The displacement has been the strongest clue in this whole investigation
+and it was only ever readable modulo 256, because the test files are a ramp
+whose byte at offset N is N mod 256. `-64` could equally be -320 or -576.
+Worse: a displacement that is an exact multiple of 256 substitutes
+IDENTICAL byte values and therefore produces a genuinely correct file, so
+the measured rate understates the event rate by an unknown factor.
+
+That wanted a longer-period file, and it turned out not to need anyone
+else's server: **dosd serves HTTP on 8080**, which is where the very first
+1 MB test came from. So `mkramp.py` also generates `CNT5M.BIN`, a 32-bit
+little-endian counter of the word index -- period four gigabytes, so every
+displacement in a 5 MB file is unique and readable straight out of the
+bytes. `RAMPCHK /K` decodes the word sitting in the wrong place and its
+index IS the offset it came from.
+
+Validated by planting the real signature into a counter file and requiring
+it back:
+
+```
+run 1: offset 20000  len 161  delta +240  (NOT constant)
+       +0  came from 19936  displacement -64
+       +4  came from 20080  displacement 76
+       +8  came from 20084  displacement 76
+```
+
+Exactly what was planted. Third re-validation of this instrument after an
+edit, and the counter pattern immediately found two bugs in the CHECKER
+rather than in itself: a small displacement only changes the low byte or
+two of each word, so one 162-byte fault came back as 41 single-byte runs
+until runs were made gap-tolerant; and the captured window held only the
+bytes that DIFFERED, so the decode never had four contiguous bytes and
+never fired at all.
+
+**Then eight counter downloads came back clean, and that is where the
+confound is.** Every corruption so far came from the HTTP server on port
+80; the counter file can only be served by dosd on 8080. So those eight
+runs changed the PATTERN and the SERVER at the same time, which is exactly
+the mistake already made twice here -- once with size-and-server on the
+first 1 MB comparison, once with a single NE2000 control called decisive.
+
+Eight clean runs is unremarkable on its own (about a 43% outcome at the
+measured rate), so nothing is concluded from it either way. The control
+that separates the two is cheap and is running: **the same 5 MB ramp file
+from dosd on 8080.** If dosd-served downloads never corrupt while port-80
+ones do at 10%, the server -- and therefore the TCP dynamics it produces --
+is the variable, and the hunt moves away from the driver's data path
+entirely.
+
+There is one mild inference available already. The counter pattern reveals
+displacements the ramp cannot see, so if multiples of 256 were common the
+counter runs should have shown a HIGHER rate than the ramp ones. Eight
+clean runs is weak evidence that they are not common, which in turn is
+weak evidence that the ramp-measured 10% is not a serious underestimate.
+
+##### The control came back: the server is NOT the variable
+
+Eight runs of the same 5 MB ramp from **dosd on 8080**, and two of them
+corrupted -- offsets 4,265,958 and 3,331,558, both 162 bytes, both the same
+signature. So corruption happens whichever server is asked, and the server
+hypothesis is dead. Worth the 48 minutes: it was a clean, cheap way to
+remove a whole class of explanation.
+
+It also disposes of the apparent pattern effect. `0/8` on the counter
+against `2/8` on the ramp from the same server looks like the pattern
+mattering, and it is not significant at all -- about a one-in-two outcome
+by chance. Combined, the ramp has now corrupted 5 times in 38 runs, 13%,
+and every group is consistent with that.
+
+##### THE CHECKSUM ARGUMENT, AND AN EXONERATION I HAD NO RIGHT TO MAKE
+
+Two things came together here and they overturn the middle of this
+section.
+
+**First: our own stack does not verify receive checksums at all.**
+`NetUdpRecv` checks length, IHL, destination address and destination port,
+and never looks at the UDP or IP checksum. That matters twice over. It
+makes TFTP over our stack a MORE sensitive corruption detector per byte
+than HTTP over mTCP -- nothing is filtering -- and it explains something
+that had been sitting in plain sight: the `RAMPCHK.EXE` deploy that
+"arrived corrupt" earlier went over the NE2000 on this same stack, and
+these notes already record ~11% of 40 KB tool deploys failing their CRC.
+So frames are being corrupted on BOTH links, and the only reason HTTP
+looks clean is that mTCP's checksum is throwing them away.
+
+**Second: a displacement cannot survive a TCP checksum, and I checked
+rather than assuming.** The tempting theory was that a 16-bit one's
+complement sum is order-independent, so a displaced block would slip
+through undetected. Half right, and the wrong half:
+
+| what happened to the frame | checksum |
+|---|---|
+| a 162-byte block substituted from +76 | **caught** |
+| the same, at an odd offset | **caught** |
+| two 16-bit words swapped (a true permutation) | **PASSES** |
+
+Only a genuine permutation of the same words is invisible. The observed
+fault is a substitution -- one region wrong, everything else in step, the
+file not a permutation of itself -- so mTCP's checksum should have caught
+it and did not.
+
+Which leaves two possibilities, and both put the fault ABOVE the driver:
+either mTCP is not verifying on this path, or **the damage happens after
+verification** -- in mTCP's copy out of its own buffer, or in `HTGET`'s
+file write.
+
+**And that is where I have to withdraw something.** This section said
+"mTCP, `HTGET` and the disk *together* are sound, because the same fetch
+through a different packet driver is byte-exact". The arithmetic does not
+support it and never did:
+
+```
+ramp corruption rate: 5 in 220 MB = 1 per 44 MB
+  NE2000 HTTP (clean)     15 MB  expected 0.34 events  P(0)=71%
+  USBGET TFTP (clean)     20 MB  expected 0.45 events  P(0)=63%
+  counter HTTP (clean)   130 MB  expected 2.95 events  P(0)= 5%
+```
+
+**Fifteen megabytes of clean NE2000 is a 71% outcome.** It excluded
+nothing. I treated a coin toss as a control -- for the second time in this
+investigation, having already been caught doing exactly that with a single
+NE2000 run earlier in this same section -- and then built three sections on
+top of it.
+
+Note what the same table does to the other two claims. The 20 MB of clean
+TFTP is equally uninformative (63%), so USBGET has not exonerated the
+driver either. The only result in the table with any weight is the counter
+file's 130 MB, at 5%.
+
+##### The test that actually settles it, and why it is cheap
+
+If the fault is in mTCP or `HTGET`, it must appear over the **NE2000** at
+the same rate per byte, because that path runs the identical stack, the
+identical client and the identical disk. And the NE2000 moves 5 MB in 63
+seconds against 312 -- five times faster -- so the volume needed is
+affordable for the first time:
+
+* 30 runs is 150 MB, about 40 minutes, and expects **3.4 events** if mTCP
+  or `HTGET` is doing it.
+* Zero events over that volume drops the probability to about 3%, which
+  would exclude them properly rather than by assertion, and make the fault
+  specific to the USB path after all.
+
+That is the next run. It should have been the run made hours ago, instead
+of a single clean 5 MB being called a control.
+
+##### An unexpected asymmetry: 0 of 20 on the counter, 5 of 38 on the ramp
+
+Twelve more counter downloads, all clean. That is **0 corruptions in 20
+counter runs against 5 in 38 ramp runs** -- p about 0.15, so still short of
+significant, but two independent groups (8 and 12) both coming back
+perfectly clean is no longer comfortably ignorable.
+
+If it is real it is a big clue, because **the only difference between the
+two is the file's contents.** Same server, same size, same URL shape, same
+driver, same disk, interleaved in time.
+
+It also cannot be an artifact of the counter pattern hiding the fault,
+which was the first thing to check. A displacement is invisible in a ramp
+whenever it is a multiple of 256, because the substituted bytes are then
+identical. There is no equivalent blind spot in the counter: the period is
+four gigabytes, so a displacement of -64 bytes is -16 words and changes the
+low byte of every word by 16. `RAMPCHK /K` was shown to read exactly that
+back from a planted fault. Whatever else is going on, the counter runs are
+not concealing corruption -- they are not experiencing it.
+
+**A data-dependent fault is not as absurd as it sounds**, and there is a
+mechanism worth naming: for corrupted bytes to reach the file at all, the
+frame carrying them has to survive the TCP checksum. Whether a substituted
+block passes depends entirely on the arithmetic of the bytes involved, and
+a ramp is far more structured than a counter -- consecutive 16-bit words in
+a ramp differ by a constant, so a displaced block's checksum contribution
+shifts in a highly regular way. It is at least arguable that the ramp lets
+mangled frames through where the counter does not, in which case BOTH
+patterns are being corrupted equally and only one of them shows it. That
+would make the observed asymmetry a property of the detector, not the
+fault.
+
+Which is testable, and is the run in flight: **six ramp and six counter
+downloads alternating in a single job**, so time-varying conditions cannot
+favour one. Either the asymmetry survives a paired design or it does not.
+
+##### And the structure is now MEASURED, not inferred
+
+The delta tally earns its place here. Both new events report:
+
+```
+deltas +192 x4 +76 x158
+```
+
+**Exactly four bytes at +192 (-64) and exactly 158 at +76**, across the
+whole run rather than the first 32 bytes of it. Every previous statement
+of this structure was an inference from a 32-byte window; this is the
+measurement, and it agrees. Five events, one shape:
+
+| | |
+|---|---|
+| first piece | always **4 bytes**, displacement -64 (mod 256) |
+| second piece | the remainder, displacement +76 (mod 256) |
+| length | 162 four times, 82 once -- so the SECOND piece varies |
+| alignment | every event starts at an even offset (5 of 5) |
+
+A fixed displacement with a variable length is the shape of a structural
+offset applied in the wrong place. The four-byte first piece is suggestive
+on its own: four bytes is the Ethernet FCS, which this driver's own parser
+has to trim off every frame because the length the chip reports includes
+it.
+
 #### Taking mTCP out of the path: USBGET
 
 `USBGET` fetches a file over the CH375 adapter using DOSBridge's own
