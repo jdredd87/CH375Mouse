@@ -10,9 +10,16 @@ and a payload that is a pure function of absolute stream position, so the
 DOS side can check every byte without any state, loss costs nothing, and
 ordering does not matter.
 
-    bytes 0..3    sequence number, little endian
-    bytes 4..N    payload[i] = byte (G mod 4) of (G div 4)
-                  where G = seq * PAYLOAD + (i - 4)
+    bytes 0..3    the magic 'UVFY'
+    bytes 4..7    sequence number, little endian
+    bytes 8..N    payload[i] = byte (G mod 4) of (G div 4)
+                  where G = seq * PAYLOAD + (i - 8)
+
+The magic earns its place: without it a datagram whose header arrived
+corrupt is indistinguishable from a datagram that was never ours, and the
+first real event hit exactly that. 84 foreign datagrams turned up on the
+port during one run, so "unexpected sequence number" had two possible
+meanings and no way to choose between them.
 
 WHY A COUNTER AND NOT A RAMP
 
@@ -43,7 +50,8 @@ import struct
 import sys
 import time
 
-PAYLOAD = 1400 - 4
+MAGIC = b'UVFY'
+PAYLOAD = 1400 - 8
 
 
 def body(seq):
@@ -67,6 +75,13 @@ def main():
 
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     s.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 1 << 20)
+    # BROADCAST IS NOT OPTIONAL, and the reason is on the DOS side: nothing
+    # there answers ARP while its stack holds only the IP handle, so this
+    # machine's cache entry for the box lapses after a couple of minutes and
+    # Windows quietly stops delivering unicast to it. Measured: 9 datagrams
+    # arrived in 15 minutes out of ~40,000 sent. Aim this at the subnet
+    # broadcast address and nothing needs resolving.
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
 
     # The payload is expensive to build in Python and cheap to reuse, and it
     # only depends on the sequence number, so a window of them is
@@ -86,7 +101,7 @@ def main():
           % (a.host, a.port, a.secs, a.rate, a.rate * 1400 / 1024))
     try:
         while time.time() < end:
-            pkt = struct.pack("<I", seq) + cache[seq % WINDOW]
+            pkt = MAGIC + struct.pack("<I", seq) + cache[seq % WINDOW]
             try:
                 s.sendto(pkt, (a.host, a.port))
                 sent += 1

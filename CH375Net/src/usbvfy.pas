@@ -56,7 +56,8 @@ const
   DEF_CFG  = 'C:\CH375\MTCPAX.CFG';
   DEF_SECS = 120;
   MAXDG    = 1400;
-  HDR      = 4;              { the sequence number in front of the payload }
+  HDR      = 8;              { magic, then the sequence number }
+  SEQMAX   = 256;            { the sender cycles a window this size }
   MAXBAD   = 6;              { events reported in full before summarising }
 
 var
@@ -82,6 +83,8 @@ var
   FirstBad: Integer;
   SrcW    : LongInt;
   Al      : Integer;
+  Foreign : LongInt;
+  BadHdr  : LongInt;
 
 procedure Usage;
 begin
@@ -97,6 +100,12 @@ begin
   WriteLn('own sequence number and a payload that is a function of absolute');
   WriteLn('stream position, so loss costs nothing and a displacement is');
   WriteLn('read straight off the bytes instead of inferred modulo 256.');
+end;
+
+function Hex2(B: Byte): ShortString;
+const H: array[0..15] of Char = '0123456789ABCDEF';
+begin
+  Hex2 := H[B shr 4] + H[B and 15];
 end;
 
 { The expected byte at absolute stream position G. }
@@ -177,6 +186,14 @@ begin
   NetVecWant := Vec;
   NetCfgWant := Cfg;
 
+  { Take broadcast as well as unicast, and this is essential rather than
+    permissive.  Nothing on this box answers ARP while our stack holds only
+    the 0800 handle, so a sender's cache entry for us lapses in a couple of
+    minutes and it stops delivering unicast entirely.  Measured before this
+    line existed: NINE datagrams arrived in fifteen minutes out of roughly
+    forty thousand sent.  Broadcast needs no resolution and does not lapse. }
+  NetRxBcast := True;
+
   if not NetReadConfig then begin WriteLn('USBVFY: ', NetErr); Halt(2); end;
   if not NetOpen(Sender) then begin WriteLn('USBVFY: ', NetErr); Halt(2); end;
 
@@ -185,6 +202,7 @@ begin
   WriteLn('  listening -- run the blaster now');
 
   Bytes := 0; Datas := 0; BadD := 0; BadB := 0; Shown := 0;
+  Foreign := 0; BadHdr := 0;
   Deadline := NetTicks + LongInt(Secs) * 18;
 
   while NetTicks < Deadline do
@@ -192,10 +210,41 @@ begin
     if not NetUdpRecv(Port, Buf, MAXDG, Got, 18) then Continue;
     if Got < HDR + 4 then Continue;
 
-    Seq := LongInt(Buf[0]) + LongInt(Buf[1]) * 256
-         + LongInt(Buf[2]) * 65536 + LongInt(Buf[3]) * 16777216;
+    { Ours at all?  Without this a datagram whose header arrived corrupt
+      cannot be told from one that was never ours, and 84 foreign
+      datagrams appeared on this port in a single run. }
+    if (Buf[0] <> Ord('U')) or (Buf[1] <> Ord('V'))
+       or (Buf[2] <> Ord('F')) or (Buf[3] <> Ord('Y')) then
+    begin
+      Inc(Foreign);
+      Continue;
+    end;
+
+    Seq := LongInt(Buf[4]) + LongInt(Buf[5]) * 256
+         + LongInt(Buf[6]) * 65536 + LongInt(Buf[7]) * 16777216;
     Inc(Datas);
     Inc(Bytes, Got - HDR);
+
+    { A sequence number out of range means the header itself was damaged.
+      Report the raw bytes and stop -- computing a stream position from it
+      overflows LongInt and prints confident nonsense, which is exactly
+      what the first real event produced: "seq 2037260, displacement
+      1450952336", from 2037260 * 1396 wrapping past 2^31. }
+    if (Seq < 0) or (Seq >= SEQMAX) then
+    begin
+      Inc(BadHdr);
+      if Shown < MAXBAD then
+      begin
+        Inc(Shown);
+        WriteLn;
+        WriteLn('  BAD HEADER: sequence ', Seq, ' is outside 0..',
+                SEQMAX - 1, ' -- the header was corrupted in flight');
+        Write('    first 16 bytes:');
+        for I := 0 to 15 do Write(' ', Hex2(Buf[I]));
+        WriteLn;
+      end;
+      Continue;
+    end;
 
     FirstBad := -1;
     for I := HDR to Got - 1 do
@@ -245,6 +294,7 @@ begin
   WriteLn;
   WriteLn('  datagrams  : ', Datas, '  (', Bytes, ' payload bytes)');
   WriteLn('  bad        : ', BadD, ' datagram(s), ', BadB, ' byte(s)');
+  WriteLn('  bad headers: ', BadHdr, '   foreign: ', Foreign);
   if Verbose then
     WriteLn('  driver rx  : ', NetRxFrames, ' accepted, ', NetRxWrong,
             ' not ours, ', NetRxDrop, ' dropped');
@@ -253,7 +303,7 @@ begin
     WriteLn('  nothing arrived -- is the blaster running, and pointed here?');
     Halt(3);
   end;
-  if BadD = 0 then
+  if (BadD = 0) and (BadHdr = 0) then
   begin
     WriteLn('  VERDICT: every byte of every datagram was correct.');
     Halt(0);
