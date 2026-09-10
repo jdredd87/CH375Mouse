@@ -35,6 +35,10 @@ turned out to be the instrument.
 
 **[INSTALL.md](INSTALL.md)** — how to actually use this. It is short.
 
+**[NEXT.md](NEXT.md)** — where the work stopped, the next job and how to
+test it, and the traps that will otherwise cost you an evening. Start here if
+you are picking this up cold.
+
 **[ADAPTERS.md](ADAPTERS.md)** — which USB Ethernet chipsets are supported,
 which need a bring-up writing, and which cannot work. Run `NETID` first; the
 box an adapter came in is not evidence of what is inside it.
