@@ -946,7 +946,82 @@ TFTP is equally uninformative (63%), so USBGET has not exonerated the
 driver either. The only result in the table with any weight is the counter
 file's 130 MB, at 5%.
 
-##### THE CONTROL CAME BACK: it is the USB path, and mTCP is not checksumming
+##### USBVFY: the chip's receive path, with nothing above it
+
+Every layer above the driver being excluded, the remaining suspect was the
+CH375 read -- and every test so far had reached it through a whole stack.
+`USBVFY` removes all of it: DOSBridge's own IPv4/UDP, a payload that is a
+known function of absolute stream position, every byte checked as it
+arrives, no TCP, no mTCP, no file system, and no checksum filtering
+anywhere (our stack verifies none on receive, so whatever the chip hands up
+is what gets tested).
+
+**First real result: 13.4 MB, 9,637 datagrams, every byte correct.** With
+17.75 MB now clean across all receive-only runs.
+
+That is a contribution, not a conclusion: at 1 event per 44 MB it expects
+0.3 events, so P(0) is about 74%.
+
+##### The first "event" it reported was my own bug
+
+Worth recording in full, because it produced a precise, confident, and
+entirely fabricated number:
+
+```
+BAD datagram seq 2037260 at payload offset 0  (stream -1450952336)
+  +0 came from 0  displacement 1450952336
+```
+
+The sender cycles sequence numbers 0..255, so 2037260 cannot occur.
+2037260 * 1396 then overflowed LongInt into a negative stream position, and
+the displacements were computed from that. **A number that disproves
+itself, in the instrument built to be trusted** -- the exact failure this
+project keeps catching everywhere else.
+
+What it actually was: foreign traffic. There was no way to distinguish a
+datagram of ours whose header had been corrupted from one that was never
+ours, and 84 unrelated datagrams had appeared on that port in a single run.
+A `UVFY` magic now identifies ours; the very next run filtered 6 foreign
+ones and found zero corruption, and the 45-minute run filtered 25. Building
+on that first reading would have produced a fabricated finding about the
+driver from traffic that never touched it.
+
+##### And a fidelity gap, found before spending hours on it
+
+A pure listener never transmits. During a real download the box ACKs every
+couple of segments, so `pkt_send` and `rx_poll` interleave continuously on
+the same chip under the `chip_busy` guard -- and a receive-only test does
+not touch that at all.
+
+Which matters most for the result it was most likely to give: a clean run
+would have read as the chip being exonerated while saying nothing whatever
+about contention. `/A=n` now transmits back every n datagrams, default 2,
+which is roughly what a TCP receiver does; `/A=0` turns it off.
+
+**So the experiment is a paired A/B**: alternating 45-minute windows at
+`/A=2` and `/A=0`, so nothing varying with time of day can favour an arm.
+Six cycles gives about 80 MB and 1.8 expected events per arm. If corruption
+appears with transmit interleaved and not without, that is the mechanism --
+tested rather than hoped for.
+
+##### Two lessons about the harness, both self-inflicted
+
+**The listener has to be listening first.** Starting the sender first
+killed a run: `NetOpen` must ARP the peer before it can open the IP handle,
+and the adapter was already taking 56 KB/s against a drain rate near 36, so
+the one frame that mattered was lost in the flood the test itself was
+creating.
+
+**Broadcast is not free.** It is necessary here -- nothing on the box
+answers ARP while its stack holds only the 0800 handle, so unicast stops
+being delivered once the sender's cache lapses, and 9 datagrams arrived in
+15 minutes before that was understood. But it reaches every host on the
+segment, and on this LAN that includes the PicoMEM WiFi interface DOSBridge
+runs over: at 40/s the agent could not get its own ARP through, went
+offline, and a whole window's result was lost. 12/s is the rate that has
+proved reliable.
+
+#### THE CONTROL CAME BACK: it is the USB path, and mTCP is not checksumming
 
 30 NE2000 runs, 150 MB, **zero corruptions.**
 
