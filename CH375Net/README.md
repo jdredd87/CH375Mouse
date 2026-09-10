@@ -1004,6 +1004,38 @@ Six cycles gives about 80 MB and 1.8 expected events per arm. If corruption
 appears with transmit interleaved and not without, that is the mechanism --
 tested rather than hoped for.
 
+##### The paired A/B, running
+
+| cycle | arm | volume | transmits | result |
+|---|---|---|---|---|
+| 1 | `/A=2` interleaved | 13.24 MB | 4,755 | clean |
+| 1 | `/A=0` receive only | 13.36 MB | 0 | clean |
+
+The interleaving is genuinely being exercised -- 4,755 transmits against
+9,510 datagrams -- and has produced nothing. Cumulative across all USBVFY
+runs: **44.35 MB clean, zero events**, which at 1 event per 44 MB expects
+1.0 and so is a 37% outcome. Not a result yet. Six cycles reaches about 177
+MB, where a clean sweep would be near 2% and would say something.
+
+##### One more fidelity gap, checked and deliberately not acted on
+
+USBVFY sends 1400-byte datagrams; an HTTP download carries 1460. If the
+smaller frames produced a different burst STRUCTURE, this test could be
+blind to the fault and 177 MB of clean would be a false exoneration -- the
+same shape of mistake as the missing transmit, so it was worth the
+arithmetic rather than an assumption:
+
+| | UDP | frame | padded | burst | USB reads |
+|---|---|---|---|---|---|
+| USBVFY | 1400 | 1442 | 1448 | 1456 | 23 |
+| HTTP | 1460 | 1514 | 1520 | 1528 | 24 |
+
+Both are **single-frame bursts**, comfortably inside the 1984-byte budget,
+differing by one 64-byte read. The structure is the same, so the smaller
+datagrams cannot hide the fault on that account and the running experiment
+was left alone. Disrupting it to chase a difference of one USB read would
+have cost a window for nothing.
+
 ##### Two lessons about the harness, both self-inflicted
 
 **The listener has to be listening first.** Starting the sender first
