@@ -34,11 +34,23 @@ The cost is real and is the right trade: ~55 ms round trip instead of 6 ms,
 1 MB in 71 s instead of 36 s. A network driver that breaks the text editor
 is not a working network driver.
 
+**Confirmed at the keyboard**: with `/R=1` the editor opens, is usable and
+exits normally with the driver resident. `TICKCHK` agrees from the other
+side — `INT 08h is normal: hooking after the driver is safe`, where before
+it warned.
+
 Worth recording how this was missed. `TICKCHK` printed *"INT 08h runs fast.
 Anything hooking it after the driver runs its timers this much too fast"* and
 I quoted that line approvingly as evidence the timer was **healthy** — which
 it was, for DOS. The warning was about everything else, and I read past it
 because the measurement I cared about had come out well.
+
+And worth recording how it was nearly missed twice. The first apparent
+confirmation was an EDIT session that looked fine and was followed by the
+machine freezing, and it got called fixed on the strength of the first half.
+It needed a clean run on a freshly booted box, with the automation that had
+been confusing the picture taken out of it, before the answer meant
+anything.
 
 
 ## Second adapter, and the tools stop being called AX
