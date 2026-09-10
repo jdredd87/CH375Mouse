@@ -75,6 +75,15 @@ type
     Mixed: Boolean;    { the delta was NOT constant across this run }
     First: array[0..31] of Byte;
     NFirst: Byte;
+    { Every DISTINCT displacement seen in this run, with how many bytes
+      carried it.  The 32-byte window above only ever showed the start of
+      a run, so the structure past it was being INFERRED -- and the whole
+      argument about this fault rests on that structure being exactly
+      "4 bytes at one displacement, the rest at another".  Counting the
+      deltas measures it instead of assuming it. }
+    NDelta: Byte;
+    DVal:   array[0..5] of Byte;
+    DCnt:   array[0..5] of LongInt;
   end;
 
 var
@@ -102,6 +111,22 @@ begin
   Inc(Blocks);
   Spin := (Spin + 1) and 3;
   Write(StdErr, SPINCH[Spin + 1], #8);
+end;
+
+{ Tally one displacement against the run's distinct-delta list. }
+procedure NoteDelta(R: Integer; D: Byte);
+var J: Integer;
+begin
+  for J := 0 to Runs[R].NDelta - 1 do
+    if Runs[R].DVal[J] = D then
+    begin
+      Inc(Runs[R].DCnt[J]);
+      Exit;
+    end;
+  if Runs[R].NDelta > 5 then Exit;          { more than six: say so below }
+  Runs[R].DVal[Runs[R].NDelta] := D;
+  Runs[R].DCnt[Runs[R].NDelta] := 1;
+  Inc(Runs[R].NDelta);
 end;
 
 function Hex2(B: Byte): ShortString;
@@ -141,6 +166,7 @@ begin
     Runs[Cur].Delta  := Delta;
     Runs[Cur].Mixed  := False;
     Runs[Cur].NFirst := 0;
+    Runs[Cur].NDelta := 0;
   end
   else
     Cur := -1;
@@ -180,6 +206,11 @@ begin
     S := '';
     for J := 0 to Runs[R].NFirst - 1 do S := S + Hex2(Runs[R].First[J]) + ' ';
     if S <> '' then WriteLn('           got  ', S);
+    Write('           deltas');
+    for J := 0 to Runs[R].NDelta - 1 do
+      Write(' +', Runs[R].DVal[J], ' x', Runs[R].DCnt[J]);
+    if Runs[R].NDelta > 5 then Write(' ...and more');
+    WriteLn;
     Inc(R);
   end;
   if NRuns > MAXRUNS then
@@ -324,6 +355,7 @@ begin
         begin
           Inc(Runs[Cur].Len);
           if Runs[Cur].Delta <> D then Runs[Cur].Mixed := True;
+          NoteDelta(Cur, D);
           if Runs[Cur].NFirst < 32 then
           begin
             Runs[Cur].First[Runs[Cur].NFirst] := Buf[I];

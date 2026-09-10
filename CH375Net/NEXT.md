@@ -180,6 +180,32 @@ that had to be retracted.
 real round trip is 6 ms at `/R=8`. That is mTCP's granularity. `PKTTEST
 /N=200` times it properly by doing the exchange itself.
 
+**A job that runs but returns ZERO BYTES means the box is out of file
+handles, not that the job failed.** Seen 2026-09-10 after several hours of
+soaking. Every command still executed and still printed to the CONSOLE, but
+the batch could no longer open `C:\WORK\OUT.TXT`, so nothing came back and
+`dosctl` reported "no output, and rc 0" -- which is also what a missing
+program looks like, so it reads as the wrong fault entirely. Even `VER` and
+`DIR` came back empty while plainly working on screen.
+
+`doscap shot` is what identified it: **"Extended Error 4"** on the DOS
+console, which is DOS's "too many open files". `CONFIG.SYS` here carries
+only the CH375 driver line, so `FILES=` is at the DOS default of **8** --
+very tight for a box running dozens of programs an hour. A warm
+`dosctl reboot` clears it in 20 seconds and is safe; do NOT power cycle,
+because POST then stops at the F1 prompt and needs hands.
+
+Raising `FILES=` in `CONFIG.SYS` would be the real fix and **that file is
+never to be edited from here** -- a bad line there hangs the machine before
+the network comes up. Raise it at the keyboard if this becomes a nuisance.
+
+What exhausted them is NOT established. The suspect is `/R=8`: the soak
+that failed was the first to use it, and an identical 40-command soak at
+`/R=1` an hour earlier completed perfectly. But a slow leak across hundreds
+of program runs finally tipping over fits the evidence just as well, and one
+failure cannot separate those. Treat `/R=8` as unproven-guilty rather than
+convicted.
+
 **A failed `nasm` run DELETES `bin\USBPKT.COM`.** That is the safe
 direction -- a deploy afterwards fails rather than shipping stale code -- but
 do not reach for a binary that is "still there" after a build error, because

@@ -816,7 +816,70 @@ legitimate frame breaks networking and this model of the layout has not
 earned that much trust yet. Measure first; enforce once it has been quiet
 for a while.
 
-#### Then the detailed counters landed, and the rate is not rare at all
+#### THE PARSER IS EXONERATED
+
+The paired experiment came back, and it is unambiguous. Eight downloads,
+driver reloaded between each so every counter is per-download:
+
+| run | file | did not tile | frames past region |
+|---|---|---|---|
+| 3 | **162 bytes wrong** | **0** | **0** |
+| 4 | **82 bytes wrong** | **0** | **0** |
+| 7 | clean | 1 (ended at 64, wanted 1584) | 0 |
+| 1, 2, 5, 6, 8 | clean | 0 | 0 |
+
+**Two corruptions with the parser reporting nothing at all, and the one
+parser anomaly produced a perfect file.** Both directions, in one run of
+eight.
+
+So the burst walk is not doing this. Neither is the out-of-region delivery
+that had just been given a whole section as the leading mechanism -- that
+theory was coherent, fitted the signature, and is now dead. It took one
+paired observation to kill it, against the dozen unpaired clean runs that
+would have proved nothing.
+
+**This is what the counter was built for.** It was written to be able to
+come back zero on a corrupt run, and the reason for building it that way
+rather than making a third guess is that a guess cannot produce this.
+
+#### Which moves the hunt above the driver -- and complicates the NE2000 control
+
+If the frames are parsed correctly and handed up correctly, then what
+reaches mTCP is right and what lands on disk is wrong, so the fault is in
+mTCP, in `HTGET`, or in how this driver's upcall interacts with them. But
+the NE2000 runs the same mTCP and the same `HTGET` over the same disk and
+is clean over 15 MB, so it cannot be a plain bug in either.
+
+What differs is not the code but the CONDITIONS. The NE2000 moves 5 MB in
+62.9s and this driver takes 312s -- **five times slower** -- which is a
+completely different regime for a TCP connection: a receive window that
+actually fills, retransmission timers that actually fire, and out-of-order
+and overlapping segments that a fast clean path may simply never produce.
+A stack that mishandles an overlapping retransmission would corrupt exactly
+like this: a region filled with data from a nearby but wrong stream
+position, everything else in step.
+
+That reading also fits the invariant better than anything so far. **The
+displacements are fixed at -64 and +76 while the length varies** -- 162 four
+times and 82 once -- and a fixed displacement with a variable length is the
+shape of a structural offset applied in the wrong place, not of a race.
+
+The next experiment is therefore about the regime rather than the code:
+**run the soak at `/R=8`**, which roughly doubles this driver's throughput
+and cuts its latency from about 55 ms to 6. If the corruption rate falls
+with the timing, it is the conditions and the hunt belongs in the stack. If
+it holds at the same rate per byte, that points back at the data path. It
+also halves the cost of every run, which is worth having either way.
+
+`/R=8` is the sanctioned use of that switch -- fine for a big transfer,
+never in `AUTOEXEC.BAT` -- and nothing that hooks INT 08h is running here.
+
+#### The theory this replaced: out-of-region frames
+
+Kept because the argument was good and someone will reconstruct it
+otherwise.
+
+
 
 One download, 5,433 bursts, with the new detail reporting:
 
