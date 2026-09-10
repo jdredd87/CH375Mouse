@@ -180,6 +180,15 @@ that had to be retracted.
 real round trip is 6 ms at `/R=8`. That is mTCP's granularity. `PKTTEST
 /N=200` times it properly by doing the exchange itself.
 
+**A failed `nasm` run DELETES `bin\USBPKT.COM`.** That is the safe
+direction -- a deploy afterwards fails rather than shipping stale code -- but
+do not reach for a binary that is "still there" after a build error, because
+it will not be. Adding code to `rx_deliver` is the likeliest way to trigger
+this: the conditional jumps in `rxd_ok` reach `rxd_bad`, an 8086 conditional
+jump is short only, and growing the frame loop puts them out of range. There
+is a trampoline above `rxd_ok` for exactly that -- add to it rather than
+re-deriving the problem.
+
 **Do not truncate a job's output with `tail` unless you are sure you do not
 need it.** A three-download job piped through `tail -45` lost the first two
 results, and each one had cost eleven minutes of box time to produce. There

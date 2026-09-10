@@ -377,6 +377,16 @@ n_flush:    dw  0            ; times we have had to go hunting
 ; wrong, the burst parser is exonerated and the fault is above the driver.
 rx_flimit:  dw  0            ; where the frames must end
 n_tile:     dw  0            ; bursts whose frames did not tile it
+tile_di:    dw  0            ; ...and where the last such walk ended
+tile_lim:   dw  0            ; ...against where it should have
+
+; Frames whose end runs past the frame region.  COUNTED ONLY -- the
+; behaviour is deliberately unchanged, because a check that rejects a
+; legitimate frame breaks networking and my model of this layout has not
+; earned that much trust yet.  Measure first: if this stays at zero across
+; healthy traffic then the bound is safe to enforce, and if it fires then
+; it is evidence rather than a regression.
+n_outside:  dw  0
 rx_st:      db  0            ; status the last bulk IN reported
 rx_len:     db  0            ; length the last RD_USB_DATA claimed
 ; Somewhere to throw a drained packet.  256 rather than 64 because the fast
@@ -1230,6 +1240,12 @@ rx_deliver:
         call    rx_keep
         inc     word [n_short]
         ret
+
+; A trampoline, because rxd_bad is now more than 128 bytes below the three
+; conditional jumps in rxd_ok and an 8086 conditional jump is short only.
+; It sits after the ret above, so nothing can fall into it.
+rxd_ok_bad:
+        jmp     near rxd_bad
 rxd_ok:
         mov     si, rxbuf
         add     si, cx
@@ -1237,13 +1253,13 @@ rxd_ok:
         mov     ax, [si]                 ; low word  = packet count
         mov     bx, [si+2]               ; high word = entry array offset
         or      ax, ax
-        je      short rxd_bad
+        je      short rxd_ok_bad
         cmp     ax, 32
-        ja      short rxd_bad
+        ja      short rxd_ok_bad
         mov     dx, cx
         sub     dx, 4
         cmp     bx, dx
-        ja      short rxd_bad            ; entry array outside the buffer
+        ja      short rxd_ok_bad         ; entry array outside the buffer
         mov     [cs:rx_flimit], bx       ; ...and where the frames must end
 
         ; Entry stride, worked out from the data rather than assumed: the
@@ -1289,8 +1305,18 @@ rxd_next:
         sub     cx, 4
         cmp     cx, 14
         jb      short rxd_skip
+        ; Does this frame actually fit in the region the frames occupy?
+        ; The old check was against RXBUF_SZ -- the BUFFER -- which cannot
+        ; catch a frame running past the bytes this burst delivered, and
+        ; rxbuf is never cleared, so past the data is stale payload from
+        ; an earlier burst.  Counted, not enforced; see n_outside.
         mov     bx, di
         add     bx, cx
+        add     bx, 4                    ; the FCS is in the burst too
+        cmp     bx, [cs:rx_flimit]
+        jbe     short rxd_inside
+        inc     word [cs:n_outside]
+rxd_inside:
         cmp     bx, RXBUF_SZ
         ja      short rxd_skip
         ; CX IS PUSHED BECAUSE rx_one CANNOT PROMISE TO GIVE IT BACK.
@@ -1349,6 +1375,9 @@ rxd_skip:
         cmp     di, [cs:rx_flimit]
         je      short rxd_tiled
         inc     word [cs:n_tile]
+        mov     [cs:tile_di], di         ; how far off, and which way
+        mov     bx, [cs:rx_flimit]
+        mov     [cs:tile_lim], bx
 rxd_tiled:
         ret
 rxd_pop_bad:

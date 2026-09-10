@@ -778,7 +778,123 @@ It is built to be decisive in both directions, which is the point:
 That second outcome would redirect the entire investigation, which is
 exactly why it was worth building an instrument that can produce it.
 
-**First two runs with it armed: both clean, counter at zero.** No corruption
+#### The counter fired, and the file was PERFECT
+
+Five more runs, `/S` sampled after each. Every download came back exactly
+the ramp -- and `bursts whose frames did not tile` went from 0 to **1**
+during the first of them, then held at 1 for the remaining four.
+
+So a burst really did mis-stride, and **the file it belonged to was
+byte-perfect.** That is worth more than a corrupt run would have been at
+this stage, because it separates two things that were in danger of being
+assumed identical:
+
+* **mis-striding happens.** Roughly once in 60,000 bursts here -- rare, but
+  real, and nothing before this counter could see it at all.
+* **mis-striding is usually harmless.** Which is exactly what the earlier
+  reasoning predicted: a frame lifted from the wrong offset has a garbage
+  Ethernet header, mTCP drops it, TCP retransmits, and the file is fine. The
+  cost is a wasted frame, not bad data.
+
+That leaves the two candidate events at uncomfortably similar rates -- one
+tiling failure in about eleven downloads against one corruption in nine --
+so they are not yet distinguishable by frequency, and the honest position is
+that they may or may not be the same underlying fault.
+
+**The experiment that separates them is now cheap and running:** `/S` after
+every download, so each corruption event can be paired with whether
+`n_tile` moved on that same run. Every corruption coinciding with a tiling
+increment makes the parser the cause. A corruption with `n_tile` unchanged
+exonerates it outright.
+
+The build now also records WHERE a failed walk ended against where it
+should have (`tile_di` / `tile_lim` in `/S`), so the next tiling failure
+reports its magnitude and direction rather than just its existence, and
+counts frames whose end runs past the frame region (`n_outside`) --
+**counted, not enforced**, because a bound that wrongly rejects a
+legitimate frame breaks networking and this model of the layout has not
+earned that much trust yet. Measure first; enforce once it has been quiet
+for a while.
+
+#### Then the detailed counters landed, and the rate is not rare at all
+
+One download, 5,433 bursts, with the new detail reporting:
+
+```
+  bursts whose frames did not tile=2  (last ended at 2112, wanted 256)
+  frames past the frame region=4
+```
+
+**Two mis-strides and four out-of-region frames in a SINGLE download** --
+where the earlier cumulative counter had read 1 across 60,000 bursts.
+
+**And that run turned out to be the outlier, not the norm.** Six more
+downloads with per-run counters -- the driver reloaded between each, so the
+numbers are per-download rather than cumulative -- gave:
+
+| run | bursts | did not tile | past the region |
+|---|---|---|---|
+| the run above | 5,433 | 2 | 4 |
+| 1, 2, 3, 5, 6 | ~5,400 each | 0 | 0 |
+| 4 | 5,361 | 1 (ended at 80, wanted 160) | 0 |
+
+So `n_outside` fired four times in one download and **not once in the six
+after it**. Writing "about four times per 5 MB download" from that single
+sample was the third time in this investigation that one observation got
+promoted to a rate, and it is wrong for the same reason each time. The
+honest figure is 4 events in roughly 38,000 bursts across seven downloads,
+concentrated entirely in one of them -- which is a hint that they arrive in
+clusters, and not yet evidence of anything.
+
+The detail is the interesting part. That walk ended at offset **2112** when
+the frames occupied only the first **256** bytes of the burst. 2112 is past
+`RXBUF_SZ` (2048) -- past the receive buffer entirely -- and the declaration
+list says what is on the other side of that boundary:
+
+```
+rxbuf:      times RXBUF_SZ db 0      ; 2048
+txbuf:      times TXBUF_SZ db 0      ; 1536, immediately after
+```
+
+So a runaway walk reads into the **transmit** buffer.
+
+#### Which finally gives the corruption a plausible mechanism
+
+There are two bands a mis-parsed frame can land in, and they behave
+completely differently:
+
+* **end beyond `RXBUF_SZ`** -- caught by the existing check and skipped, so
+  never delivered. Harmless.
+* **end beyond the frames region but still inside the buffer** -- passes the
+  existing check and **is delivered**, carrying bytes from beyond what this
+  burst actually received. `rxbuf` is never cleared, so those bytes are
+  leftovers from an earlier burst: real stream payload from somewhere else.
+
+That second band is exactly the observed corruption -- data duplicated from
+elsewhere in the stream, the file otherwise in step -- and it is the band
+nothing was checking. `n_outside` fires rarely and in clusters -- four events in
+seven downloads, all in one of them -- and corruption appears in roughly one
+download in twenty on this build, which is at least the right order for
+"most such frames have a garbage Ethernet header and get dropped,
+occasionally one is plausible enough to be accepted". Right order is not
+evidence; the correlation test below is.
+
+**Enforcing the bound is the obvious next change and it is being held
+back deliberately.** At the rate the corruption now appears -- about one
+download in twenty -- switching behaviour and then seeing a run of clean
+transfers would prove nothing whatever, because a run of clean transfers is
+the expected outcome either way. Sixty-odd runs would be needed to tell
+enforcement from luck.
+
+The cheaper experiment first: **soak on the current build with per-run
+counters, and when a corruption finally happens, look at whether `n_tile`
+or `n_outside` fired on that same download.** One paired observation is
+worth more than a dozen unpaired clean runs, and it is available for the
+price of waiting rather than the price of sixty controlled runs.
+
+Then enforce, with a baseline to compare against.
+
+#### Earlier, before that: two runs with it armed, both clean, counter zero No corruption
 event, so nothing yet about the cause -- but not a wasted run either.
 **11,419 bursts and 5,699 bursts respectively, with zero tiling failures**,
 which establishes the check does not false-positive on healthy traffic. That
@@ -791,17 +907,55 @@ More runs are queued to catch an event with the instrument armed.
 
 Worth recording because it is the sort of number that gets quoted later:
 
-| build | 5 MB runs | corrupt |
-|---|---|---|
-| before either fix | 3 | 2 |
-| after `CX` | 5 | 1 |
-| after `CX` + `BP` | 5 | 1 |
+| build | 5 MB runs | corrupt | |
+|---|---|---|---|
+| before either fix | 3 | 2 | 67% |
+| after `CX` | 5 | 1 | |
+| after `CX` + `BP` | 9 | 1 | 11% |
 
-67% down to 20%. That reads like a partial improvement and it may well be
-one, but at these counts it is not a result -- the difference is inside what
-chance would produce fairly often, and both post-fix groups are small. It is
-recorded as an observation to be tested, not as a claim that the fixes
-helped.
+**Six of those nine were consecutive clean runs on the final code**, and that
+is enough to say something: if the rate were still 67%, six clean in a row
+would happen once in 729 times. So the register fixes really did help, and
+substantially.
+
+They did not cure it. One event occurred on the fixed code, so the honest
+description is a large partial improvement with the underlying fault still
+present -- which is a much less satisfying place to stop than "fixed", and
+the reason to keep the tiling counter permanently rather than treating the
+matter as closed.
+
+#### Making the hunt affordable: RAMPCHK got 18x faster
+
+At an 11% event rate, catching one with the counter armed takes on the order
+of nine runs, and each was eleven minutes: five to fetch and six for the
+check. The check being the slower half was absurd -- it is a local disk read
+-- and the reason was that it walked five million bytes through a Pascal
+loop.
+
+`BUFSZ` is a multiple of the ramp's 256-byte period and every block starts
+at a multiple of `BUFSZ`, so **every block's expected contents are the same
+8192 bytes.** Build that reference once and a clean block costs a single
+`CompareByte` instead of 8192 individual tests; only blocks that fail it pay
+for the per-byte walk that locates the runs, and on a healthy file that is
+none of them.
+
+**340 seconds to 18.3.** A run cycle went from eleven minutes to five and a
+half.
+
+The assumption degrades safely, which is why it is allowed to be an
+assumption: if DOS ever returned a short read mid-file, later blocks would
+start off the 256-byte period, the reference would stop matching, and those
+blocks would simply fall through to the slow path -- which computes the
+expected byte from the absolute offset and is always right. Lost speed, not
+a wrong answer.
+
+And it was re-validated against the same three crafted files before being
+believed a second time, because the fast path changes the detection logic
+and a passing instrument that has been edited is just an instrument that has
+not been checked. All three still name their faults exactly, and the
+`blocks fast` counts confirm the shortcut is doing what it claims: 8 of 8 on
+the clean file, 2 on the shifted one (the whole blocks before the seam), 5
+on the altered one (the three blocks containing damage took the slow path).
 
 #### The other candidate, still unexamined
 

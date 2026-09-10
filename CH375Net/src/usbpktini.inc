@@ -2234,6 +2234,23 @@ stat_macskip:
         call    puts
         mov     ax, [es:n_tile]
         call    putdecw
+        or      ax, ax
+        je      short stat_notile
+        mov     dx, msg_s_tile2
+        call    puts
+        mov     ax, [es:tile_di]
+        call    putdecw
+        mov     dx, msg_s_tile3
+        call    puts
+        mov     ax, [es:tile_lim]
+        call    putdecw
+stat_notile:
+        call    crlf
+
+        mov     dx, msg_s_outside
+        call    puts
+        mov     ax, [es:n_outside]
+        call    putdecw
         call    crlf
 
         mov     dx, msg_s_tog
@@ -2620,6 +2637,9 @@ msg_s_short:   db '  bursts that made no sense=$'
 msg_s_junk:    db '  reads with an impossible length=$'
 msg_s_over:    db '  bursts too big for the buffer=$'
 msg_s_tile:    db '  bursts whose frames did not tile=$'
+msg_s_tile2:   db '  (last ended at $'
+msg_s_tile3:   db ', wanted $'
+msg_s_outside: db ')  frames past the frame region=$'
 msg_s_tog:     db '  reads rescued by flipping the toggle=$'
 msg_s_rxst:    db '  last bulk IN: status $'
 msg_s_rxlen:   db ', length $'

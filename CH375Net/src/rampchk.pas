@@ -81,6 +81,7 @@ var
   F:       file;
   WSize:   LongInt;
   Buf:     array[0..BUFSZ - 1] of Byte;
+  Ref:     array[0..BUFSZ - 1] of Byte;   { what a clean block must contain }
   Runs:    array[0..MAXRUNS - 1] of TRun;
   Name:    ShortString;
   Quiet:   Boolean;
@@ -93,6 +94,7 @@ var
   Expect, D: Byte;
   Blocks:  LongInt;
   Spin:    Byte;
+  FastOK:  LongInt;   { blocks cleared by one compare instead of 8192 }
 
 { One block, one move of the spinner. }
 procedure Tick;
@@ -154,6 +156,7 @@ begin
   Write('  size        : ', Pos_, ' bytes');
   WriteLn;
   WriteLn('  mismatches  : ', Bad);
+  WriteLn('  blocks fast : ', FastOK);
   WriteLn('  runs        : ', NRuns);
   if NRuns = 0 then Exit;
 
@@ -272,10 +275,21 @@ begin
   Bad    := 0;
   Blocks := 0;
   Spin   := 0;
+  FastOK := 0;
   NRuns := 0;
+  for I := 0 to BUFSZ - 1 do Ref[I] := Byte(I and 255);
   Cur   := -1;
   InRun := False;
 
+  { The whole-block shortcut, and it is worth 15x on this machine.
+    Checking a byte at a time is a Pascal loop over five million
+    iterations, which is CPU-bound at around 340 seconds for 5 MB -- far
+    longer than reading the file. But BUFSZ is a multiple of the ramp's
+    256-byte period and every block starts at a multiple of BUFSZ, so
+    EVERY block's expected contents are the same 8192 bytes. Build that
+    once and a clean block costs one CompareByte instead of 8192 tests.
+    Only blocks that fail it pay for the per-byte walk that locates the
+    runs, and on a healthy file that is none of them. }
   repeat
     {$I-} BlockRead(F, Buf, BUFSZ, Got); {$I+}
     if IOResult <> 0 then
@@ -283,6 +297,16 @@ begin
       WriteLn('RAMPCHK: read failed at ', Pos_);
       Close(F);
       Halt(3);
+    end;
+    if (Got > 0) and (CompareByte(Buf, Ref, Got) = 0) then
+    begin
+      { Clean, so any run open at the end of the last block ends here. }
+      InRun := False;
+      Inc(Pos_, Got);
+      Inc(FastOK);
+      Tick;
+      if Got < BUFSZ then Break;
+      Continue;
     end;
     for I := 0 to Got - 1 do
     begin
