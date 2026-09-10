@@ -946,7 +946,67 @@ TFTP is equally uninformative (63%), so USBGET has not exonerated the
 driver either. The only result in the table with any weight is the counter
 file's 130 MB, at 5%.
 
-##### The test that actually settles it, and why it is cheap
+##### THE CONTROL CAME BACK: it is the USB path, and mTCP is not checksumming
+
+30 NE2000 runs, 150 MB, **zero corruptions.**
+
+```
+expected 3.4 events if mTCP or HTGET were the cause  ->  P(0) = 3.3%
+with the earlier 15 MB, 165 MB clean                ->  P(0) = 2.4%
+```
+
+So **mTCP, `HTGET` and the disk are excluded** -- properly this time, by
+enough volume to mean something rather than by a coin toss called a
+control. And the fault is specific to the USB path.
+
+That resolves the checksum argument, and only one way. A substitution DOES
+change a TCP checksum -- measured above -- so if mTCP were verifying, a
+mangled frame would be discarded and never reach the file. Corrupt data
+does reach the file. Therefore **mTCP is not verifying receive TCP
+checksums on this path**, which is why driver-level damage gets through at
+all rather than costing a retransmission.
+
+It also disposes of the deploy-CRC observation that pointed the other way.
+~11% of 40 KB tool deploys failing their checksum looked like frame
+corruption on the NE2000, and 150 MB of clean NE2000 says it is not: those
+failures are the documented mid-transfer stall and its resume arithmetic,
+not bytes being altered on the wire.
+
+##### Which brings back the 64, and this time it means something
+
+The first reading of the signature called the leading fragment "exactly 64
+bytes earlier" and made much of 64 being the CH375's bulk maximum packet
+size. That was retracted, correctly, because a ramp only gives the
+displacement modulo 256 and nothing distinguished -64 from -320.
+
+With the fault now localised to the USB path, and with the burst parser
+already exonerated by the tiling counter, what is left between the wire and
+mTCP is the CH375 read itself -- and a chip whose data FIFO occasionally
+returns bytes from the wrong offset would produce exactly this:
+
+* a **displacement** rather than altered bytes, which no byte-moving loop
+  can produce on its own -- a bad loop gives wrong bytes, not bytes from
+  the wrong place;
+* **independent of which loop reads them**, which is why the fast path and
+  `/8` corrupt identically -- the chip is the source, not the code;
+* **frames that assemble perfectly**, because the burst structure and the
+  trailer are read correctly and only the payload bytes inside them are
+  wrong, which is precisely what the tiling counter has been saying;
+* **only on this adapter**, because nothing else in the machine goes
+  through a CH375.
+
+So the original intuition may well have been right for the wrong reason.
+It is still not established: the displacement is still only known modulo
+256, and "-64 is one USB packet" is only compelling if the true value is
+-64 rather than -320 or -576.
+
+**That is exactly what the counter file settles**, and it is now the one
+measurement worth spending hours on. A 20-run counter soak is in flight;
+at the measured rate it has about a 90% chance of catching an event, and
+one event reports the true displacement outright. If it reads -64 and +76
+exactly, the chip's 64-byte packet buffer is implicated and this stops
+being a hunt. If it reads -320 or -1088, the 64 was a coincidence twice
+over.
 
 If the fault is in mTCP or `HTGET`, it must appear over the **NE2000** at
 the same rate per byte, because that path runs the identical stack, the
