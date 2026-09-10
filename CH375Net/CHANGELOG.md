@@ -18,11 +18,20 @@ emit the fast one as `db` bytes, never delete the slow one. `bench.pas`
 demonstrates the pattern.
 
 So the fast path was available, the comment talked the next reader out of
-it, and it is still unwritten. It would take the read loop from three bus
-cycles a byte to one and drop the loop overhead — plausibly another 2-3x on
-what is currently the driver's ceiling. Whether the CH375 keeps up with
-reads issued that close together is measurable, not arguable: the CRC'd
-download harness settles it in a single run.
+it, and it is still unwritten. Three loops would take it — the payload read,
+the drain, and transmit, the last being the biggest per byte because the
+read loop got inlined and the write loop never did.
+
+**It would not make the default faster**, and the first version of this
+entry said it would. At `/R=1` the driver is round-trip-bound, not
+read-bound, and there is direct evidence: inlining the read loop made reads
+3.6x faster and moved 1 MB from 73s to 71s. The real win is that a full
+burst read is ~10 ms of a 55 ms tick — 19% of the machine while traffic
+flows — and `REP INSB` would take that to ~3 ms. Given `/R=8` wedged `EDIT`
+by stealing too much of the machine, a quieter driver is worth more than a
+benchmark. Whether the CH375 keeps up with reads issued that close together
+is measurable, not arguable: the CRC'd download harness settles it in one
+run.
 
 Comment corrected in `usbpkt.asm`, and the opportunity is now written into
 the README under what is not done, rather than buried in a wrong aside.

@@ -798,15 +798,33 @@ precisely this already exists in DOSBridge's `starter/cpu.pas`: probe
 `Has186` at run time, keep the portable loop, emit the fast one as `db`
 bytes, never delete the slow one.
 
-So the fast path is available and simply has not been written. It would cut
-the read loop from three bus cycles a byte to one and remove the loop
-overhead entirely — worth perhaps another 2-3x on a path that is currently
-the driver's ceiling.
+So the fast path is available and simply has not been written. Three loops
+would take it:
 
-The one caution is the reason the delay was there to begin with: `REP INSB`
+| loop | now | with `REP INSB`/`OUTSB` |
+|---|---|---|
+| `ch_read_fast`, pulling a packet out of the chip | `in`/`stosb`/`loop`, ~42 clocks a byte | ~10-14 |
+| `ch_read_ovl`, draining a burst that cannot be used | `in`/`loop`, ~31 | ~10-14 |
+| `bulk_out_loop`, transmit | `lodsb` + `call ch_wr` + `dec`/`jne`, ~160 | ~10-14 |
+
+Transmit is the biggest per byte, because the read loop was inlined and the
+write loop never was — it still pays a call, two settling reads and a
+push/pop for every byte.
+
+**It would not make the default faster, and it is worth doing anyway.** At
+`/R=1` this driver is round-trip-bound, not read-bound: inlining the read
+loop already made reads 3.6x faster and moved 1 MB from 73s to 71s, which is
+nothing. The win is that a full burst read is about 10 ms of a 55 ms tick —
+19% of the machine while traffic flows — and `REP INSB` would take that to
+roughly 3 ms. A packet driver that steals less of the machine is the point;
+`/R=8` breaking `EDIT` is what happens when it steals too much. It would
+also make raising `/R` affordable again for anyone who does want throughput.
+
+The one caution is the reason the settling delay existed at all: `REP INSB`
 issues reads far closer together than this loop does, and the CH375 may not
 keep up. That is measurable rather than arguable — the CRC'd download
 harness answers it in one run.
+
 
 
 - **The ARP round trip.** When it loads, point a *copy* of `MTCP.CFG` at the new
