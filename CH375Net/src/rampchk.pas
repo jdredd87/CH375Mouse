@@ -67,9 +67,20 @@ const
   BUFSZ   = 8192;
   MAXRUNS = 10;        { how many runs we keep detail on; all are counted }
 
+{ How many matching bytes end a run.
+  A run used to end at the FIRST byte that matched, which is right for a
+  ramp and hopeless for the counter pattern: a small displacement only
+  changes the low byte or two of each 32-bit word -- the high bytes are
+  zero either way and match -- so one 162-byte fault was reported as 41
+  separate single-byte runs, and the structure was lost completely.
+  Tolerating a short gap coalesces those back into the one region they
+  are, and leaves genuinely isolated damage still isolated. }
+  GAPOK   = 8;
+
 type
   TRun = record
     Start: LongInt;
+    Last:  LongInt;      { offset of the last byte that actually differed }
     Len:   LongInt;
     Delta: Byte;
     Mixed: Boolean;    { the delta was NOT constant across this run }
@@ -99,11 +110,45 @@ var
   NRuns:   LongInt;
   Cur:     Integer;    { index into Runs, or -1 when past MAXRUNS }
   InRun:   Boolean;
+  Gap:     Integer;    { matching bytes since the last difference }
   Got, I:  Integer;
   Expect, D: Byte;
   Blocks:  LongInt;
   Spin:    Byte;
   FastOK:  LongInt;   { blocks cleared by one compare instead of 8192 }
+  Counter: Boolean;   { /K -- the 32-bit counter pattern, not the ramp }
+  W0:      LongInt;
+  { RefL MUST alias Ref, not sit beside it.  The counter reference is
+    built as longwords and compared as bytes, and the first version
+    declared two separate arrays -- so it filled one and compared the
+    other, which would have reported every single block as corrupt. }
+  RefL:    array[0..BUFSZ div 4 - 1] of LongInt absolute Ref;
+
+{ What byte belongs at this offset?
+
+  Two patterns, and the second exists because the first cannot answer the
+  question this whole investigation turns on.  A ramp repeats every 256
+  bytes, so a displacement is only ever knowable MODULO 256 -- the observed
+  corruption reads as "-64, or -320, or -576" and nothing separates them.
+  The 32-bit counter has a period of four gigabytes, so every displacement
+  inside a 5 MB file is unique: decode the word sitting in the wrong place
+  and its index IS the offset it came from. }
+function Want(Ofs: LongInt): Byte;
+var W: LongInt;
+begin
+  if not Counter then
+    Want := Byte(Ofs and 255)
+  else
+  begin
+    W := Ofs shr 2;
+    case Byte(Ofs and 3) of
+      0: Want := Byte(W and 255);
+      1: Want := Byte((W shr 8) and 255);
+      2: Want := Byte((W shr 16) and 255);
+    else Want := Byte((W shr 24) and 255);
+    end;
+  end;
+end;
 
 { One block, one move of the spinner. }
 procedure Tick;
@@ -141,6 +186,9 @@ begin
   WriteLn;
   WriteLn('  RAMPCHK file [/Q]');
   WriteLn('  RAMPCHK file /W=<bytes>   WRITE a ramp of that size');
+  WriteLn('  RAMPCHK file /K           the 32-BIT COUNTER pattern, whose');
+  WriteLn('                            4 GB period makes a displacement');
+  WriteLn('                            exact instead of modulo 256');
   WriteLn;
   WriteLn('The test server serves files whose byte at offset N is N mod 256.');
   WriteLn('This reports not just THAT a download went wrong but HOW: bytes');
@@ -162,6 +210,7 @@ begin
   begin
     Cur := NRuns - 1;
     Runs[Cur].Start  := At;
+    Runs[Cur].Last   := At;
     Runs[Cur].Len    := 0;
     Runs[Cur].Delta  := Delta;
     Runs[Cur].Mixed  := False;
@@ -177,6 +226,8 @@ var
   R: Integer;
   J: Integer;
   S: ShortString;
+  Al: Byte;
+  SrcW, SrcO, DstO: LongInt;
 begin
   WriteLn;
   Write('  size        : ', Pos_, ' bytes');
@@ -191,7 +242,8 @@ begin
   while (R < NRuns) and (R < MAXRUNS) do
   begin
     Write('  run ', R + 1, ': offset ', Runs[R].Start,
-          '  len ', Runs[R].Len, '  delta +', Runs[R].Delta);
+          '  len ', Runs[R].Last - Runs[R].Start + 1,
+          '  delta +', Runs[R].Delta);
     if Runs[R].Mixed then Write('  (NOT constant)')
                      else Write('  (constant)');
     WriteLn;
@@ -201,11 +253,35 @@ begin
       width of each such group says what granularity mangled it. }
     S := '';
     for J := 0 to Runs[R].NFirst - 1 do
-      S := S + Hex2(Byte((Runs[R].Start + J) and 255)) + ' ';
+      S := S + Hex2(Want(Runs[R].Start + J)) + ' ';
     if S <> '' then WriteLn('           want ', S);
     S := '';
     for J := 0 to Runs[R].NFirst - 1 do S := S + Hex2(Runs[R].First[J]) + ' ';
     if S <> '' then WriteLn('           got  ', S);
+    { The payoff of the counter pattern: read the misplaced word and its
+      index is the absolute offset the data actually came from, so the
+      displacement is exact rather than a residue. }
+    if Counter then
+    begin
+      Al := Byte((4 - (Runs[R].Start and 3)) and 3);
+      { Several words, not one.  The observed fault is TWO pieces at
+        different displacements -- four bytes from one place and the rest
+        from another -- so decoding a single word would show half of it and
+        read as the whole. }
+      J := Al;
+      while J + 4 <= Runs[R].NFirst do
+      begin
+        SrcW := LongInt(Runs[R].First[J])
+              + LongInt(Runs[R].First[J + 1]) * 256
+              + LongInt(Runs[R].First[J + 2]) * 65536
+              + LongInt(Runs[R].First[J + 3]) * 16777216;
+        SrcO := SrcW * 4;
+        DstO := Runs[R].Start + J;
+        WriteLn('           +', J, ' came from ', SrcO,
+                '  displacement ', SrcO - DstO);
+        Inc(J, 4);
+      end;
+    end;
     Write('           deltas');
     for J := 0 to Runs[R].NDelta - 1 do
       Write(' +', Runs[R].DVal[J], ' x', Runs[R].DCnt[J]);
@@ -225,13 +301,15 @@ var
 
 begin
   Quiet := False;
+  Counter := False;
   WSize := 0;
   Name := '';
   for I := 1 to ParamCount do
   begin
     if (ParamStr(I)[1] = '/') or (ParamStr(I)[1] = '-') then
     begin
-      if UpCase(ParamStr(I)[2]) = 'Q' then Quiet := True
+      if UpCase(ParamStr(I)[2]) = 'K' then Counter := True
+      else if UpCase(ParamStr(I)[2]) = 'Q' then Quiet := True
       else if UpCase(ParamStr(I)[2]) = 'W' then
       begin
         S := ParamStr(I);
@@ -270,7 +348,7 @@ begin
     begin
       Got := BUFSZ;
       if WSize - Pos_ < Got then Got := WSize - Pos_;
-      for I := 0 to Got - 1 do Buf[I] := Byte((Pos_ + I) and 255);
+      for I := 0 to Got - 1 do Buf[I] := Want(Pos_ + I);
       {$I-} BlockWrite(F, Buf, Got); {$I+}
       if IOResult <> 0 then
       begin
@@ -308,7 +386,8 @@ begin
   Spin   := 0;
   FastOK := 0;
   NRuns := 0;
-  for I := 0 to BUFSZ - 1 do Ref[I] := Byte(I and 255);
+  if not Counter then
+    for I := 0 to BUFSZ - 1 do Ref[I] := Byte(I and 255);
   Cur   := -1;
   InRun := False;
 
@@ -329,6 +408,14 @@ begin
       Close(F);
       Halt(3);
     end;
+    if Counter then
+    begin
+      { The counter reference depends on WHERE the block is, so it has to
+        be rebuilt per block -- 2048 longword stores against 8192 byte
+        comparisons, so the shortcut still pays, just less. }
+      W0 := Pos_ shr 2;
+      for I := 0 to (BUFSZ div 4) - 1 do RefL[I] := W0 + I;
+    end;
     if (Got > 0) and (CompareByte(Buf, Ref, Got) = 0) then
     begin
       { Clean, so any run open at the end of the last block ends here. }
@@ -341,7 +428,7 @@ begin
     end;
     for I := 0 to Got - 1 do
     begin
-      Expect := Byte(Pos_ and 255);
+      Expect := Want(Pos_);
       if Buf[I] <> Expect then
       begin
         D := Byte(Buf[I] - Expect);
@@ -349,22 +436,34 @@ begin
         if not InRun then
         begin
           InRun := True;
+          Gap := 0;
           StartRun(Pos_, D);
         end;
+        Gap := 0;
         if Cur >= 0 then
         begin
-          Inc(Runs[Cur].Len);
+          Runs[Cur].Last := Pos_;
           if Runs[Cur].Delta <> D then Runs[Cur].Mixed := True;
           NoteDelta(Cur, D);
-          if Runs[Cur].NFirst < 32 then
-          begin
-            Runs[Cur].First[Runs[Cur].NFirst] := Buf[I];
-            Inc(Runs[Cur].NFirst);
-          end;
         end;
       end
-      else
-        InRun := False;
+      else if InRun then
+      begin
+        Inc(Gap);
+        if Gap > GAPOK then InRun := False;
+      end;
+
+      { The window is CONTIGUOUS from the run's start, matching bytes
+        included.  Capturing only the differing ones was fine for a ramp
+        and useless for the counter pattern, where the decode needs four
+        bytes in a row to read a word out of -- and with only mismatches
+        kept it never had them. }
+      if InRun and (Cur >= 0) and (Runs[Cur].NFirst < 32)
+         and (Pos_ - Runs[Cur].Start < 32) then
+      begin
+        Runs[Cur].First[Runs[Cur].NFirst] := Buf[I];
+        Inc(Runs[Cur].NFirst);
+      end;
       Inc(Pos_);
     end;
     Tick;
@@ -390,7 +489,7 @@ begin
       resynchronise by luck in its last few bytes -- the ramp repeats every
       256, so a tail that happens to line up ends the run early without
       making the diagnosis any less true. }
-    Tail := Runs[0].Start + Runs[0].Len;
+    Tail := Runs[0].Last + 1;
     if (NRuns = 1) and (not Runs[0].Mixed) and (Tail >= Pos_ - 512) then
     begin
       WriteLn('  VERDICT: SHIFTED, not altered.  From offset ', Runs[0].Start,

@@ -157,11 +157,31 @@ begin
     Halt(2);
   end;
 
+  { Say what was actually resolved, because getting this wrong is silent
+    and looks exactly like a network fault.  If the config override does
+    not take, NetMyIP falls back to the BRIDGE's address -- and then the
+    server's reply is sent to the NE2000's MAC, the USB-side listener never
+    sees it, and the failure reads as "no reply" with nothing to suggest
+    the cause was local. }
+  Write('USBGET: vector ', Vec, '  addr ');
+  for I := 0 to 3 do
+  begin
+    Write(NetMyIP[I]);
+    if I < 3 then Write('.');
+  end;
+  WriteLn('  cfg ', Cfg);
+
   { Ask for big blocks, exactly as UGET does for a file fetch: 1400 is the
     ceiling because Net drops fragments rather than reassembling them. }
   TftpWantBlk := 1400;
 
-  if TftpGet(TFTP_PORT, Remote, Local, 0, True) then
+  { 36 ticks, which is what UGET passes for a fetch -- about two seconds.
+    Passing 0 here was the first version's bug: the first-reply wait became
+    zero ticks, so it gave up in 1.3 seconds across three attempts and
+    reported "no reply after 3 requests", which reads as a dead network
+    rather than as a timeout that was never given a chance.  A driver
+    polled at 18.2 Hz cannot answer inside no time at all. }
+  if TftpGet(TFTP_PORT, Remote, Local, 36, True) then
   begin
     WriteLn('USBGET: ', TftpBytes, ' bytes on vector ', Vec, ' (no mTCP)');
     if Verbose then

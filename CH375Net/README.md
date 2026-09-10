@@ -816,6 +816,58 @@ legitimate frame breaks networking and this model of the layout has not
 earned that much trust yet. Measure first; enforce once it has been quiet
 for a while.
 
+#### Taking mTCP out of the path: USBGET
+
+`USBGET` fetches a file over the CH375 adapter using DOSBridge's own
+IPv4/UDP/TFTP stack, to the same disk, with mTCP nowhere in the path. It
+needs two additive overrides in `net.pas` because the Net unit otherwise
+takes the first packet driver on 60h..80h -- always the NE2000 here -- and
+reads the bridge's own config, so without them it would have tested the
+wrong adapter and come back reassuringly clean.
+
+**First result: 5 MB byte-exact.**
+
+```
+USBGET: vector 101  addr 192.168.50.222  cfg C:\CH375\MTCPAX.CFG
+USBGET: 5242880 bytes on vector 101 (no mTCP)
+  blocks 3745 of 1400  resends 110  dups 0  restarts 55
+VERDICT: exactly the ramp.
+```
+
+(101 decimal is 65h; the resolved address and config are printed precisely
+so that a silent fallback to the bridge's own `.66` cannot be mistaken for a
+network fault -- see below, where exactly that trap was walked into.)
+
+**What one clean run is worth, stated before more were run: very little,
+and only in one direction.** The test is asymmetric by construction and the
+tool's own header says so. Corruption here would convict the driver
+outright, because there is no TCP left to blame. Cleanliness cannot convict
+mTCP, because TFTP is stop-and-wait with one packet in flight and never
+builds the conditions a saturated TCP connection does. It can only fail to
+convict the driver.
+
+**55 flow restarts** is the number to keep from that run. The mid-transfer
+stall this link has always had is firing constantly, so the USB path is
+having a hard time under TFTP too -- it is just that TFTP's stop-and-wait
+recovers from it byte-exactly, and every restart re-requests from a known
+offset.
+
+##### And a self-inflicted failure worth recording
+
+The first attempt reported `no reply after 3 requests` and gave up in 1.3
+seconds. That reads as a dead network. It was a timeout that was never
+given a chance: `TftpGet`'s `FirstWait` was passed as **0** where `UGET`
+passes 36 ticks, and a driver polled at 18.2 Hz cannot answer inside no
+time at all.
+
+Worth recording because of how convincingly it framed the hardware -- three
+requests, two resends, no answer, over a driver already under suspicion for
+data corruption. The correct diagnosis was one line of my own argument
+list. It is also why the tool now prints its resolved address: the *other*
+way this fails silently is the config override not taking, which leaves
+`NetMyIP` as the bridge's `.66`, sends the server's reply to the NE2000's
+MAC, and produces the identical message with nothing to distinguish it.
+
 #### THE PARSER IS EXONERATED
 
 The paired experiment came back, and it is unambiguous. Eight downloads,

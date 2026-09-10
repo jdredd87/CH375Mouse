@@ -22,6 +22,8 @@ fixtures and the definition of what they contain cannot drift apart.
     RAMPSH.BIN   64 KB, 3 bytes dropped at offset 20000   -> rc 2, SHIFTED
     RAMPAL.BIN   64 KB, 3 bytes altered in place          -> rc 1, ALTERED
     BIG5M.BIN    5 MB, exactly the ramp
+    CNT5M.BIN    5 MB, a 32-bit counter -- period 4 GB, so displacements
+                 come out exact instead of modulo 256
 
 RAMPSH is the one worth understanding.  A dropped-byte fault does not stop
 at the seam: everything after it is still a clean ramp, just one that no
@@ -53,6 +55,32 @@ def ramp(n, start=0):
     return bytes((start + i) & 255 for i in range(n))
 
 
+def counter(n):
+    """n bytes of a 32-bit little-endian counter of the WORD index.
+
+    The ramp repeats every 256 bytes, which means a displacement is only
+    ever knowable modulo 256: the observed corruption reads as "-64 or -320
+    or -576" and nothing can separate them.  Worse, a displacement that
+    happens to be an exact multiple of 256 substitutes identical byte
+    values, so it produces a genuinely correct file and is not merely
+    invisible -- it is harmless, which makes the measured corruption rate an
+    underestimate of the event rate by an unknown factor.
+
+    This pattern has a period of four gigabytes, so every displacement
+    inside a 5 MB file is unique and readable straight out of the bytes:
+    decode the word and its index IS the source offset it came from.  That
+    turns the central unknown of this whole investigation from an inference
+    into a measurement."""
+    out = bytearray(n)
+    for i in range(0, n, 4):
+        w = i >> 2
+        out[i] = w & 0xFF
+        if i + 1 < n: out[i + 1] = (w >> 8) & 0xFF
+        if i + 2 < n: out[i + 2] = (w >> 16) & 0xFF
+        if i + 3 < n: out[i + 3] = (w >> 24) & 0xFF
+    return bytes(out)
+
+
 def cases():
     src = ramp(N64 + 16)                      # a little past the end, for the
     yield "RAMPOK.BIN", src[:N64]             # dropped-byte tail below
@@ -68,6 +96,21 @@ def cases():
     yield "RAMPAL.BIN", bytes(alt)
 
     yield "BIG5M.BIN", ramp(N5M)
+    yield "CNT5M.BIN", counter(N5M)
+
+    # The counter decode has to be shown to work before any reading of it
+    # is worth anything, so this injects the EXACT signature the real fault
+    # produces -- 162 bytes at offset 20000, the first 4 taken from 64
+    # bytes earlier and the remaining 158 from 76 bytes later -- into a
+    # counter file.  RAMPCHK /K must read back displacement -64 for the
+    # first word and +76 for the ones after it.  If it cannot recover a
+    # planted displacement it cannot be believed about a real one.
+    c = bytearray(counter(N64 + 512))
+    bad = bytearray(c[:N64])
+    O = 20000
+    bad[O:O + 4] = c[O - 64:O - 60]
+    bad[O + 4:O + 162] = c[O + 80:O + 238]
+    yield "CNTBAD.BIN", bytes(bad[:N64])
 
 
 def main():
@@ -84,7 +127,7 @@ def main():
             fh.write(blob)
         print("%-12s %9d bytes  CRC-32 %08X" % (name, len(blob),
                                                 zlib.crc32(blob)))
-        if a.stage and name == "BIG5M.BIN":
+        if a.stage and name in ("BIG5M.BIN", "CNT5M.BIN"):
             os.makedirs(a.stage, exist_ok=True)
             q = os.path.join(a.stage, name)
             with open(q, "wb") as fh:
