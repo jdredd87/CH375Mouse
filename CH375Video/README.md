@@ -122,6 +122,35 @@ The bench monitor is a DELL 1708FP whose preferred mode is 1280×1024 at
 108 MHz — nearly three times what this adapter will clock. Reading either
 side alone gets the answer wrong.
 
+### But EDID says what a display *advertises*, not what it will accept
+
+This turned out to matter, and it was measured rather than reasoned. When
+the VGA lead was moved to a capture card, `DLPROBE` started reading **that
+device's** EDID instead — and it advertises almost nothing:
+
+```
+manufacturer EXN, made week 0 of 2009
+preferred mode 1024x768 @ 65.0 MHz
+range limits   V 23-61 Hz, H 14-76 kHz
+established timings (none flagged)
+standard timings    (none)
+```
+
+No established timings at all, and a 61 Hz vertical maximum. Yet it
+demonstrably syncs **320×200@70** and **848×480@60** — both verified by
+photograph, and both outside what it claims.
+
+So the monitor column now reads **listed / not listed** rather than
+yes / no, because "no" read as "impossible" and that is simply untrue. The
+**adapter** column is the hard one: those are limits the chip states about
+itself. A display's list is a hint, and the right response to "not listed"
+is to try it.
+
+(The 320×200 result above was therefore confirmed on the capture card,
+whose hsync floor is 14 kHz. The padded 449-line frame puts hsync at 31.5
+kHz, which is inside the DELL's 30–81 kHz range too — so it should work
+there as well, but that is a prediction and not yet a photograph.)
+
 ## Speed: what was measured, and what it changed
 
 `DLBENCH` exists because CH375Net has four dead optimisation hypotheses

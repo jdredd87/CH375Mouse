@@ -496,9 +496,16 @@ begin
   if EdidValid then
   begin
     WriteLn;
-    WriteLn('  The monitor column is the intersection that matters -- a mode');
-    WriteLn('  needs BOTH ends to accept it, and neither end''s own list is');
-    WriteLn('  the answer on its own.');
+    WriteLn('  The monitor column says whether the display ADVERTISES the');
+    WriteLn('  mode, which is not the same as whether it will accept it --');
+    WriteLn('  and the difference has been measured here rather than');
+    WriteLn('  assumed.  A capture card on this bench advertises no');
+    WriteLn('  established timings at all and a 61 Hz vertical maximum, and');
+    WriteLn('  syncs 320x200@70 and 848x480@60 perfectly well.');
+    WriteLn;
+    WriteLn('  So read "not listed" as "the display did not claim it", and');
+    WriteLn('  try it anyway.  The ADAPTER column is the hard one: that is');
+    WriteLn('  a limit the chip states about itself.');
   end;
   WriteLn;
   WriteLn('    ', Pad('mode', 16), Pad('dot clock', 12), Pad('pixels', 12),
@@ -545,7 +552,7 @@ begin
     if EdidValid then
     begin
       MOk := MonitorOk(Modes[I]);
-      if MOk then MonSay := 'yes' else MonSay := 'no';
+      if MOk then MonSay := 'listed' else MonSay := 'not listed';
     end;
 
     Write('    ',
@@ -582,22 +589,24 @@ begin
     Exit;
   end;
 
-  WriteLn('  ', NBoth, ' are accepted by BOTH the adapter and this monitor.');
+  WriteLn('  ', NBoth, ' of those are also advertised by this display.');
   if Best >= 0 then
   begin
     WriteLn;
     WriteLn('  >> START WITH ', Dec1(Modes[Best].W), 'x', Dec1(Modes[Best].H),
-            '@', Dec1(Modes[Best].Hz), ' -- the largest mode both ends');
-    WriteLn('  >> accept without leaning on the 1% fencepost.');
+            '@', Dec1(Modes[Best].Hz), ' -- the largest mode the adapter');
+    WriteLn('  >> allows outright AND the display actually advertises.');
     WriteLn('  >> That is ', Dec1(LongInt(Modes[Best].W) * Modes[Best].H * 2),
             ' bytes a frame at 16bpp.');
   end
   else
   begin
     WriteLn;
-    WriteLn('  >> NOTHING in the list is accepted by both ends.  That is a');
-    WriteLn('  >> real finding, not a gap in the table: check the MARGINAL');
-    WriteLn('  >> rows before concluding the pair cannot work at all.');
+    WriteLn('  >> The display advertises none of the modes the adapter');
+    WriteLn('  >> allows.  That is NOT the same as nothing working -- a');
+    WriteLn('  >> display will often sync a mode it never claimed.  Take');
+    WriteLn('  >> the largest row marked ok in the adapter column and try');
+    WriteLn('  >> it; DLTEST /M= is there for exactly this.');
   end;
 end;
 
