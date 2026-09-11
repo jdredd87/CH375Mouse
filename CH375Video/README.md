@@ -22,8 +22,9 @@ output, taken through a capture card.
 | `DLCON` | a text console, which is what this hardware is actually good at |
 | `DLFRACT` | a Mandelbrot in fixed point — the one COMPUTE-bound tool |
 | `DLIMG` | load a BMP from disk and scale it to fit any mode |
+| `DLDASH` | a colour dashboard: panels, gauges, ticker, live keyboard |
 
-`build.cmd` builds all seven. `build.cmd probe` runs `DLPROBE` on the DOS
+`build.cmd` builds all eight. `build.cmd probe` runs `DLPROBE` on the DOS
 box; `build.cmd read` runs it with `/K` so nothing is written at all.
 
 ## Why this is a different problem from CH375Net
@@ -545,6 +546,66 @@ decodes top-down sequentially, suiting this design. Worth doing.
 chroma upsampling and a colour-space conversion, with no coprocessor on
 the machine. A single photo would take minutes. PCX would be the cheap
 next format: its RLE is a dozen lines.
+
+## A colour screen that changes a little, often
+
+`DLCON` draws a page and stops. `dlscr` is the other half — a text screen
+with 16-colour attributes and **dirty tracking**, which is what anything
+interactive needs.
+
+![The dashboard](doc/dash.png)
+
+*80×30 cells, everything above drawn from the ROM 8×16 font.*
+
+It keeps two cell buffers: what you asked for, and what is on the glass.
+`ScrFlush` sends the difference. The numbers say why that is not an
+optimisation but the only reason an interactive screen is possible:
+
+| | bytes |
+|---|---|
+| full 80×30 repaint | ~192,000 |
+| **one dashboard frame** | **5,750–14,500** |
+
+**Colour and boxes cost nothing extra.** The attribute is one byte a cell,
+ink in the low nibble and paper in the high — exactly what it has always
+meant in DOS — and the CP437 line-drawing characters are already in the
+ROM font, so a double-ruled border costs what the same number of letters
+costs. `ScrBox` is three lines. The gauges use the CP437 shade characters
+for the partial cell, which gives four sub-steps per cell free and makes a
+slow gauge visibly move instead of jumping.
+
+### What actually costs, measured
+
+| | cells/frame | bytes/frame | fps |
+|---|---|---|---|
+| with the scrolling ticker | 154 | 13,059 | 0.4 |
+| **ticker off** (`/T=0`) | **64** | **5,750** | **0.9** |
+
+**The ticker is 58% of everything the screen sends**, because scrolling
+text changes an entire row every time it moves. That is not a bug — it is
+what scrolling costs on a path where bytes are time — so it is a knob
+(`/T=n`) rather than a fixed tax.
+
+Two things got it there, both found by the same tell as everywhere else in
+this project:
+
+* the furniture — panels, borders, titles — was being rebuilt every
+  frame. The diff correctly declined to send any of it, so it was pure
+  CPU spent proving nothing had moved. Drawn once now.
+* the ticker built its row with `S := S + TICKER[C]`, which copies the
+  whole string on every append: 3,200 character moves a frame to produce
+  80 cells. It writes cells directly now.
+
+And one that **measured as nothing**: unrolling the 8-bit glyph inner
+loop, the innermost code in the unit at ~20,000 trips a frame, changed
+the frame rate not at all. It was applied and it is genuinely ineffective
+— recorded because `CLAUDE.md` keeps a list of exactly these, and a
+plausible optimisation that does nothing is worth knowing about twice.
+
+`/K` makes it interactive — Tab selects a gauge, `+`/`-` adjust it, `L`
+logs, `R` forces a full repaint, Esc quits. **That path is written but
+not yet verified by a human at the keyboard**, which is the only
+instrument that can check it.
 
 ## Traps, all of them paid for here
 
