@@ -200,19 +200,53 @@ That is the whole design, and the numbers say why: a full solid screen is
 0.66 s, a full screen of literal pixels is 43 s, and a 64×64 rectangle is
 44 ms.
 
+All five demos below are measured at 640×480 unless noted, and `build.cmd`
+has a target for each: `demo`, `stars`, `bars`, `raster`, `cube`, `lowres`.
+
+| `/D=` | what it is | fps | bytes/frame | bound by |
+|---|---|---|---|---|
+| `stars` | 120 single-pixel stars | 5.8 | 2,240 | what moved |
+| `bars` | sliding colour bars | 5.8 | 2,990 | what moved |
+| `balls` | 5 × 28² sprites bouncing | 5.0 | 2,944 | what moved |
+| `cube` | rotating 3D wireframe | 1.7 | 3,636 | **CPU** |
+| `raster` | **full-screen** raster bars | 1.3 | 12,695 | **pixel count** |
+| `raster` | the same at 320×200 | **4.5** | 2,873 | pixel count |
+
+### `stars` — the cheapest thing that can move
+
+![Starfield](doc/stars.png)
+
+*120 stars, one pixel each: erase one pixel, draw one pixel, about 18
+bytes per star. 2,240 bytes a frame is the floor for anything animated
+here.*
+
+### `balls` — dirty rectangles
+
 ![Bouncing sprites](doc/balls.png)
 
-*Five sprites at **5.0 fps**, 2,944 bytes a frame — erase where it was,
-draw where it is, touch nothing else.*
+*Five 28×28 sprites at **5.0 fps**. Erase where it was, draw where it is,
+touch nothing else. No stale pixels anywhere, which is what says the
+erase-and-draw bookkeeping is right.*
+
+### `bars` — full-width motion
+
+![Sliding bars](doc/bars.png)
+
+*Eight bars sliding down the screen. This one had a real bug: the first
+version drew without erasing, so 203 frames piled into a striped mess that
+looked deliberate enough in a screenshot to pass unnoticed. The capture
+caught it.*
+
+### `cube` — the only CPU-bound demo
 
 ![A rotating wireframe cube](doc/cube.png)
 
-*A 3D wireframe cube at **1.7 fps**, 3,636 bytes a frame.*
+*A 3D wireframe cube at **1.7 fps**, integer fixed point with a 64-entry
+quarter sine table — there is no coprocessor in this machine.*
 
-The cube is the interesting one because it is the **only demo here that is
-CPU-bound rather than transfer-bound**. It started at 0.4 fps with the
-same bytes per frame, which is the signature: the transfer was not the
-problem. Three fixes took it to 1.7 —
+It started at 0.4 fps **with the same bytes per frame**, which is the
+signature that the transfer was never the problem. Three fixes took it to
+1.7:
 
 * clearing the render tile with `FillWord` (`REP STOSW`) instead of a
   Pascal loop: `CLAUDE.md` measures 439,821 words/s against 68,322 for a
@@ -221,23 +255,17 @@ problem. Three fixes took it to 1.7 —
   staging buffer first — 61,952 needless far-pointer accesses a frame
 * shrinking the tile from 176² to 112², which the cube never needed
 
-All five, measured at 640×480 unless noted. `build.cmd` has a target for
-each: `demo`, `stars`, `bars`, `raster`, `cube`, `lowres`.
+### `raster` — full screen, and the slowest for that reason
 
-| `/D=` | what it is | fps | bytes/frame |
-|---|---|---|---|
-| `stars` | 120 single-pixel stars scrolling | 5.8 | 2,240 |
-| `bars` | sliding colour bars, erase-and-draw | 5.8 | 2,990 |
-| `balls` | 5 × 28² sprites bouncing | 5.0 | 2,944 |
-| `cube` | rotating 3D wireframe, CPU-bound | 1.7 | 3,636 |
-| `raster` | **full-screen** raster bars | 1.3 | 12,695 |
-| `raster` | the same at 320×200 | **4.5** | 2,873 |
+![Full-screen raster bars](doc/raster.png)
 
-`raster` is the odd one out and deliberately so: it is the only demo that
-repaints the whole screen, which is why it is the slowest here and the
-only one low resolution rescues. Everything else touches just what moved.
+*Five raster bars repainting the **whole** screen at **1.3 fps**, 12,695
+bytes a frame — an order of magnitude more than any other demo here.*
 
-![Sliding bars](doc/bars.png)
+`raster` is the odd one out deliberately: it is the only demo that
+repaints everything, which is why it is the slowest **and** the only one
+low resolution rescues. Everything else touches just what moved and does
+not care about the mode at all.
 
 ## Low resolution, and the one thing it actually buys
 
