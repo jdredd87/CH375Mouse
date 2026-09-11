@@ -56,7 +56,33 @@ SUPPORTED.
 
 | Chip | USB ID | Notes |
 |---|---|---|
-| ASIX AX88179 | `0B95:1790` | The reference part. Verified on **two physically different adapters** from different manufacturers — MACs `40:AE:30:6D:00:34` and `00:50:B6:B6:1C:64`. Both boot, link, and move 5 MB byte-exact with no counted errors. |
+| ASIX AX88179 | `0B95:1790` | The reference part. Verified on **two physically different adapters** from different manufacturers — MACs `40:AE:30:6D:00:34` and `00:50:B6:B6:1C:64`. Both boot, link, and move data. **They do NOT move 5 MB byte-exact reliably**, which this row used to claim: about one 5 MB download in nine comes back the right length with a corrupt region, and every error counter reads zero while it happens. See the README. The claim was true of the runs it was written from and was never a property of the adapter. |
+
+## Before you plug a new one in
+
+Run **`NETID`** first. The box an adapter came in is not evidence of what is
+inside it, and re-badged parts are the norm rather than the exception.
+
+Two of the IDs below need no new code at all -- `0B95:1790` and `0B95:178A`
+share a register map and `ax179.pas` drives both, which is why it is not
+called `ax88179.pas`.
+
+**A new adapter is also a free experiment on the open corruption fault.**
+Roughly one 5 MB download in nine comes back corrupt and the cause is
+narrowed to the CH375 read path or its transmit/receive contention, with
+everything above the driver excluded by measurement. So:
+
+* **another AX88179 or 178A** tests whether the fault follows the ADAPTER.
+  Two have already been tried and both corrupt, so a third that also does
+  points firmly away from one flaky piece of hardware.
+* **a different chipset** is worth more, because it keeps the CH375, the ISA
+  card, the driver above the bring-up and the whole machine constant while
+  changing the USB device. If it still corrupts, the CH375 read is
+  implicated and the adapter is exonerated. If it does not, the reverse.
+
+Either way, budget the volume: at 1 event per 44 MB a single clean 5 MB
+download means almost nothing, and treating a small clean result as a
+control is the mistake this project has made most often.
 
 ## Should work
 
