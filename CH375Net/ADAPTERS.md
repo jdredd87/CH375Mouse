@@ -117,15 +117,39 @@ reference part. Read `iProduct`.
 
 **How far it gets, which is most of the way and not all:** it enumerates,
 falls back to full speed correctly, accepts `set configuration`, takes every
-register write, reads its MAC (`A0:CE:C8:BC:0A:91`), reports **link up**, and
-receives frames. `USBPKT` loads it from `AUTOEXEC.BAT` with no changes and
-announces "USB Ethernet ready".
+register write, reads its MAC (`A0:CE:C8:BC:0A:91`) and reports **link up**.
+`USBPKT` loads it and goes resident.
 
-**And nothing it transmits is answered.** Pings all time out, the sending
-host never learns its address, and the frame counters show receive working
-while transmit goes nowhere. Tried at both link settings -- the default
-10BASE-T and `/G` for gigabit -- with no difference, so it is not speed
-negotiation.
+**And it moves no traffic in either direction.** Measured 2026-09-10 over a
+39-second window with `USBPKT /S`:
+
+```
+bursts collected=181      frames delivered=0
+frames sent=0
+bursts that made no sense=0      reads with an impossible length=0
+bursts too big for the buffer=0  bursts whose frames did not tile=0
+frames past the frame region=0   reads rescued by flipping the toggle=0
+```
+
+**Bursts arrive and the parser finds zero frames in them, with every error
+counter reading zero** -- so the burst is well-formed by the 179's rules and
+simply contains nothing, which points at a different trailer or packet-count
+layout on this part rather than at a fault in the parse. Transmit reports
+`last bulk IN: status 2A`.
+
+**An earlier version of this entry said it "receives frames" and announced
+"USB Ethernet ready" at boot. Both were wrong, and the second was
+measured.** On 2026-09-10 the box came up having taken `AUTOEXEC.BAT`'s
+`:NOUSB` branch -- no `MTCPCFG` set, no `TRYING.FLG` left behind -- so the
+boot-time bring-up returned a failure. Loading it by hand afterwards
+succeeded, so the boot failure is not reliably reproducible and is recorded
+as an observation rather than a property.
+
+The original reading came from frame counters during a session where the
+older AX88179 had also been in the machine, which is the likeliest way two
+adapters' results got attributed to one. Tried at both link settings -- the
+default 10BASE-T and `/G` for gigabit -- with no difference, so it is not
+speed negotiation.
 
 The endpoints are **not** the problem either, which was the first guess:
 the driver issues tokens to endpoint 2 IN and 3 OUT, and this part's vendor
