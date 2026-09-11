@@ -30,7 +30,7 @@ if "%DOSBRIDGE%"=="" set DOSBRIDGE=C:\dosbridge
 set TOOLS=%~dp0..\CH375USBTOOLS\src
 if not exist bin mkdir bin
 
-for %%T in (dlprobe) do (
+for %%T in (dlprobe dltest) do (
   echo --- %%T
   fpc -Tmsdos -Pi8086 -WmLarge -Fu"%TOOLS%" -FEbin -FUbin src\%%T.pas >nul
   if errorlevel 1 goto failed
