@@ -4,6 +4,97 @@ CH375Net -- StevenC -- https://github.com/jdredd87/CH375USBTools
 
 Versions live in the `VER` constant of each program.
 
+## USBPKT speaks CDC-ECM, and the adapter latches itself out of it
+
+`ecm.pas` proved the protocol; this puts it in the packet driver, so mTCP
+can run over a class adapter rather than only a known chip.
+
+**The two data paths turned out to share almost everything.** At the USB
+level they are the same transfers -- 64-byte bulk reads accumulated until a
+short packet ends them, 64-byte writes with a zero-length packet when the
+total lands on a multiple of 64 -- and `rx_go` was already exactly that. All
+that differs is what the bytes mean, so the ECM receive path is the vendor
+path with the parser removed: `rx_have` hands the accumulated bytes up as
+one frame instead of calling `rx_deliver`, and `psend` omits the 8-byte
+header. The entire AX88179 burst walk, entry array, tiling arithmetic and
+every counter that polices them have no counterpart and stay at zero, which
+is correct rather than suspicious. `/S` reports which protocol is running so
+those zeros can be read properly.
+
+Endpoint numbers stopped being assemble-time immediates. They were
+`(EP_BULK_IN << 4) | PID_IN`, correct for one chip family; an ECM adapter
+names its own endpoints and is entitled to any of them. This one happens to
+use the same 2 and 3, and relying on that would have been a coincidence
+dressed up as a design.
+
+`/X` forces the vendor path, which is the only way to compare the two on a
+device that offers both.
+
+### The adapter latches into vendor mode, and only a re-plug clears it
+
+This is the finding worth keeping. A freshly powered AX88179A reports
+**three** configurations; once its vendor bring-up has run it reports
+**one**, with the CDC-NCM and CDC-ECM configurations simply absent from the
+descriptor. From `/V`'s trace of the device descriptor read: `n12 03`
+fresh, `n12 01` afterwards.
+
+Nothing in software clears it -- not a USB bus reset (ECMLINK does one on
+every run and still read `01`), and **not a warm reboot**, because the
+CH375 card feeds the adapter off the ISA bus and a warm boot never drops
+that rail. Unplugging the adapter does.
+
+So `USBPKT` now asks the ECM question between SET_ADDRESS and
+SET_CONFIGURATION, before anything has been selected. The first build asked
+afterwards and worked *intermittently*, which is the worst way to be wrong:
+two runs of the same binary on the same adapter disagreed, and the
+difference was whether the previous run had left the device in the class
+configuration or the vendor one.
+
+### Three bugs, each found by an instrument rather than by reading
+
+**The chip was told to report NAKs during control transfers.** Carried over
+from `ecm.pas`, where it is right, and it is wrong here: on a data endpoint
+a NAK means "busy, ask again" and must be reported, but in a control
+transfer the data stage has to be retried INSIDE the transfer. Restarting
+from the SETUP asks the question again rather than waiting for the answer.
+Trace: twelve whole transfers, 10 ms apart, every one `S14 I2A`, on a device
+whose descriptors were there throughout. `read_mac` has said this in a
+comment for months.
+
+**Then the opposite, one layer up.** Forcing the chip back to 00 on the way
+out of the probe clobbered the `8F` that the rest of `usb_enum` depends on,
+and the very next step -- the configuration descriptor read -- began
+reporting NAKs instead of waiting them out. The bring-up failed at step 25
+with status 2A on an adapter that had worked a minute earlier. The probe now
+restores `8F` and lets `usb_enum`'s own tail set 00 exactly once, as it
+always did.
+
+**`ctrl_in` ends a data stage on a packet shorter than EIGHT.** That is
+right for a device whose endpoint 0 carries 8 bytes and wrong for this one,
+which carries 64: a 26-byte string descriptor arrives in one 26-byte packet
+-- short for the endpoint, not short by that test -- so `ctrl_in` asked for
+more and the device answered status 2B. Trace `S14 I14 n1A I2B`, then
+bring-up step 62. The MAC read now fetches the two-byte header and then
+exactly `bLength` bytes, which is the correct idiom anyway and sidesteps it.
+`ctrl_in` itself is left alone deliberately -- the AX88179 path shares it,
+that adapter is not on the bench, and a latent bug nobody is hitting is a
+poor reason to change untestable code. The one-line fix is recorded in
+NEXT.md.
+
+### What is verified, and what is not
+
+Verified on hardware: the probe finds the ECM function and reports the
+geometry it read -- `ECM: cfg 03 ctl if 00 data if 01 alt 01 ep in 02 out
+03`, identical to what ECMLINK discovers independently; the MAC comes out of
+the string descriptor; the packet filter is accepted; and the vendor path is
+unchanged when ECM is absent or `/X` is given.
+
+**NOT yet verified: the ECM data path inside USBPKT.** Every attempt to
+test it in this session ran on a device already latched into vendor mode by
+an earlier run, so the driver correctly took the vendor path and the class
+path never carried a frame. It needs the adapter re-plugged. Do not read
+this entry as "mTCP works over ECM" -- that has not been shown.
+
 ## CDC-ECM: a class driver, and an adapter that could not transmit now does
 
 `ecm.pas` and `ECMLINK`. CDC-ECM is a USB **class**, not a chip: the device

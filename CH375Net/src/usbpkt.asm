@@ -245,6 +245,45 @@ rx_peeklen: dw  0
 
 cfg_val:    db  1
 
+; --------------------------------------------------------------------------
+; WHICH PROTOCOL THIS ADAPTER SPEAKS.
+;
+; Two data paths share every line of the chip access below, because at the
+; USB level they are the same transfers: 64-byte bulk reads accumulated
+; until a short packet ends them, and 64-byte bulk writes with a
+; zero-length packet when the total lands on a multiple of 64.
+;
+; What differs is only what those bytes MEAN.  The AX88179 packs several
+; frames into one burst behind an 8-byte header, with an entry array and a
+; trailer to unpick.  CDC-ECM carries ONE RAW FRAME and nothing else -- no
+; header, no trailer, no entry array, no tiling, no padding.  So the ECM
+; path is the vendor path with the parser removed, which is why adding it
+; costs so little: rx_have skips rx_deliver, and psend skips the header.
+;
+; ecm_mode is set by the bring-up in usbpktini.inc, from what the device's
+; own descriptors say.  Nothing here is chosen by the user or by USB ID.
+; --------------------------------------------------------------------------
+ecm_mode:   db  0
+
+; The endpoint TOKENS, held as data rather than assembled into the
+; instruction.  They used to be immediates -- (EP_BULK_IN << 4) | PID_IN --
+; which was correct for exactly one chip family.  An ECM adapter states its
+; endpoint numbers in its descriptors and is entitled to any of them; this
+; one happens to use the same 2 and 3, and relying on that would have been
+; a coincidence dressed up as a design.  The cost is a memory read instead
+; of an immediate, inside an operation that then waits microseconds for a
+; USB transaction.
+tok_in:     db  (EP_BULK_IN << 4) | PID_IN
+tok_out:    db  (EP_BULK_OUT << 4) | PID_OUT
+ep_in_n:    db  EP_BULK_IN                ; bare number, for CLEAR_FEATURE
+ep_out_n:   db  EP_BULK_OUT
+
+; Bytes of vendor header in front of a transmitted frame: 8 for the
+; AX88179, 0 for ECM.  A length rather than a flag because three separate
+; places need the number, and a flag tested three times is how the two
+; halves of a decision drift apart.
+tx_hdrlen:  dw  8
+
 ; Does this CPU have the 80186 string I/O instructions?  REP INSB and REP
 ; OUTSB move a byte between a port and memory in ONE instruction, where the
 ; portable loops below need three or more -- and on an 8086 they are invalid
@@ -406,6 +445,12 @@ rx_handle:  dw  0
 rcv_tmp:    dd  0
 
 drv_name:   db  'AX88179/CH375', 0
+drv_ecm:    db  'CDC-ECM/CH375', 0
+
+; driver_info hands back a name, and PKTDRV and NETID both print it. It is
+; the only place a user finds out WHICH of the two paths came up, so it has
+; to follow the bring-up rather than the binary.
+drv_nptr:   dw  drv_name
 
 rxbuf:      times RXBUF_SZ db 0
 txbuf:      times TXBUF_SZ db 0
@@ -599,7 +644,7 @@ bulk_in_go:
         call    ch_wr
         mov     al, CMD_ISSUE_TOKEN
         call    ch_cmd
-        mov     al, (EP_BULK_IN << 4) | PID_IN
+        mov     al, [cs:tok_in]
         call    ch_wr
         push    cx
         mov     cx, 0x3000
@@ -718,7 +763,7 @@ bulk_out_sent:
         call    ch_wr
         mov     al, CMD_ISSUE_TOKEN
         call    ch_cmd
-        mov     al, (EP_BULK_OUT << 4) | PID_OUT
+        mov     al, [cs:tok_out]
         call    ch_wr
         mov     cx, 0x3000
         call    ch_wait
@@ -1052,7 +1097,7 @@ rx_unwedge:
         ; constant is 2, not 82h.  Passing 82h here asked the chip to clear
         ; an endpoint that does not exist, which is why the unwedge below
         ; never unwedged anything.
-        mov     al, EP_BULK_IN
+        mov     al, [cs:ep_in_n]
         call    res_clr_ep
         mov     byte [cs:rx_tog], 0x80
         pop     cx
@@ -1220,6 +1265,26 @@ rx_have:
         cmp     byte [n_handles], 0
         je      short rx_done            ; drained, and nobody wants it
         mov     cx, bp
+        cmp     byte [ecm_mode], 0
+        je      short rx_have_burst
+
+        ; CDC-ECM: what we just accumulated IS the frame.  The transfer
+        ; ended because the device sent a short packet, and that short
+        ; packet is the only frame delimiter the class has -- there is
+        ; nothing to parse, so there is nothing that can mis-parse.
+        ;
+        ; Every counter below rx_deliver -- bursts that made no sense,
+        ; reads with an impossible length, frames that did not tile, frames
+        ; past the frame region -- exists to police a layout this path does
+        ; not have.  They stay at zero in ECM mode and that is correct
+        ; rather than suspicious.
+        cmp     cx, 14
+        jb      short rx_done            ; shorter than an Ethernet header
+        xor     di, di                   ; offset 0: the frame starts there
+        inc     word [n_frames]
+        call    rx_one
+        ret
+rx_have_burst:
         call    rx_deliver
 rx_done:
         ret
@@ -1577,7 +1642,7 @@ __ovr10:
 pkt_info:
         push    cs
         pop     ds
-        mov     si, drv_name
+        mov     si, [drv_nptr]
         mov     bx, 1                    ; version
         mov     ch, 1                    ; class 1 = DIX Ethernet
         mov     dx, 0                    ; type: unregistered
@@ -1822,12 +1887,20 @@ __ovr12:
         push    cs
         pop     es
         mov     di, txbuf
+        mov     bx, cx
+        add     bx, [cs:tx_hdrlen]       ; BX = what goes on the wire
+        cmp     byte [cs:ecm_mode], 0
+        jne     short psend_body         ; ECM sends the frame and nothing
+                                         ; else.  The zero-length packet at
+                                         ; the end is still needed and is
+                                         ; still decided by BX below, which
+                                         ; is why the length is computed
+                                         ; before the branch rather than
+                                         ; inside each arm.
         mov     ax, cx
         stosw                            ; length, low word
         xor     ax, ax
         stosw                            ; length, high word
-        mov     bx, cx
-        add     bx, 8
         test    bx, 0x003F
         jnz     short psend_nopad
         mov     ax, 0x8000
@@ -1852,7 +1925,8 @@ psend_body:
         push    ds
         push    cs
         pop     ds
-        mov     si, txbuf + 8
+        mov     si, txbuf
+        add     si, [cs:tx_hdrlen]
         mov     di, tx_peek
         mov     cx, 16
         rep     movsb
@@ -1860,7 +1934,7 @@ psend_body:
         pop     di
         pop     si
         pop     cx
-        add     cx, 8                    ; CX = total to push out
+        mov     cx, bx                   ; CX = total to push out
 
         push    cs
         pop     ds
@@ -1890,7 +1964,7 @@ psend_ok:
         mov     byte [cs:chip_busy], 0
         add     word [cs:st_pkts_out], 1
         adc     word [cs:st_pkts_out+2], 0
-        sub     bx, 8                    ; BX was length + header
+        sub     bx, [cs:tx_hdrlen]       ; BX was length + header
         add     word [cs:st_bytes_out], bx
         adc     word [cs:st_bytes_out+2], 0
         pop     es

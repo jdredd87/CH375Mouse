@@ -46,12 +46,13 @@ descriptor, ARP request sent and **answered by the host it asked about**.
 That is a transmit path on an adapter that had none. `ADAPTERS.md` has the
 full entry.
 
-**What it is not yet:** a packet driver. `USBPKT.COM` still speaks only the
-ASIX vendor path, so mTCP cannot run over an ECM adapter today. Turning
-`ecm.pas` into a second back-end for `USBPKT` is the obvious follow-on and is
-the largest remaining piece of work in this project -- it needs the send and
-receive paths rewritten in assembler, inside the timer interrupt, where
-`ecm.pas`'s comfortable Pascal loops cannot go.
+**And `USBPKT` now speaks it too** -- the back-end is written, the bring-up
+is verified on hardware, and the data path is NOT yet verified. See below;
+finishing that is the first job.
+
+It was far less work than expected, because at the USB level the two paths
+are the same transfers and `rx_go` already was the ECM receive loop. The
+ECM path is the vendor path with the parser removed.
 
 ### Fixed this session
 
@@ -176,7 +177,38 @@ outright.
 hiding the fault: a planted displacement reads back exactly, and a 4 GB
 period has no blind spot the way a 256-byte ramp does.
 
-### 3. Or: make `USBPKT` speak ECM as well
+### 1b. FIRST: prove the ECM data path in USBPKT, which needs a RE-PLUG
+
+Everything up to carrying a frame is verified: the probe finds the function,
+reports the geometry it read (`cfg 03 ctl if 00 data if 01 alt 01 ep in 02
+out 03`, matching ECMLINK independently), reads the MAC out of the string
+descriptor, and the packet filter is accepted.
+
+**The data path has never carried a frame, and the reason is the latch.**
+The AX88179A stops offering its ECM configuration once its vendor bring-up
+has run -- `bNumConfigurations` goes from 3 to 1 -- and nothing in software
+clears that, not a USB bus reset and not a warm reboot, because the CH375
+feeds the adapter off the ISA bus and a warm boot never drops that rail.
+Every attempt to test ECM in a session where the vendor path had already run
+therefore ran on the vendor path, correctly and uselessly. `ADAPTERS.md` has
+the measurement.
+
+So the test is:
+
+1. **Unplug the USB adapter and plug it back in**, or power-cycle the
+   machine. Nothing else works.
+2. `USBPKT /I=65` -- the banner must say `CDC-ECM adapter - using the class
+   driver.` and print the `ECM: cfg ...` line. If it says `link up`, the
+   device was still latched and the run proves nothing.
+3. `USBPKT /S` -- confirm `protocol=CDC-ECM`.
+4. `PKTTEST /M=<ours> /I=65 /T=<a live host> /S=8` -- an ARP that is
+   answered proves the whole loop.
+5. `SET MTCPCFG=C:\CH375\MTCPAX.CFG` then `PING <that host>`.
+
+Step 4 is the one that matters. Steps 1-3 only establish that the right path
+came up.
+
+### 3. Or: the other half of the class work
 
 This is now the better second job, and it is a different kind of work from
 chasing the corruption -- so it is a reasonable thing to pick up when the
@@ -245,6 +277,21 @@ count before believing a null.
 **Do not treat a small clean control as an exclusion.** 15 MB of clean
 NE2000 was called an exoneration of mTCP; it was a 71% outcome. It took 165
 MB to exclude them properly.
+
+**Say what state the device was in when you measured it.** The AX88179A's
+row in `ADAPTERS.md` has now been wrong twice in opposite directions, both
+times from a real measurement taken on a device somebody had disturbed --
+once reading "receives frames", once "moves no traffic in either
+direction", on the same adapter and the same binary. A USB device is
+stateful and the state survives your program.
+
+**`ctrl_in` ends a control data stage on a packet shorter than EIGHT.** It
+should be `cmp dl, [ep0max]`. On a device whose endpoint 0 carries 64 bytes
+an exactly-26-byte descriptor is short for the endpoint but not by that
+test, so `ctrl_in` asks for more and gets status 2B. Nothing hits it today
+because every descriptor read in the driver asks for an exact length, and
+it is left alone because the AX88179 shares that code and is not on the
+bench. Fix it with that adapter plugged in, not without.
 
 **`BusUp` leaves the chip retrying NAKs, and you must put it back.**
 `ch375.pas` issues `SetRetry($8F)` while enumerating -- right there, because a

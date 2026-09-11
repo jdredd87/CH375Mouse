@@ -738,6 +738,39 @@ __uev6:
         call    delay_ms
 ue_addrdone:
 
+        ; ---- CDC-ECM, asked BEFORE anything is configured ----
+        ;
+        ; THE ORDER HERE IS LOAD-BEARING, and it was found the hard way.
+        ; This used to run after the vendor configuration had been
+        ; selected, and it worked intermittently -- which is the worst way
+        ; for it to be wrong, because two runs of the same binary on the
+        ; same adapter disagreed.
+        ;
+        ; The trace says why.  On a device that has not been configured the
+        ; device descriptor reads `n12 03`: eighteen bytes,
+        ; bNumConfigurations = 3.  Once the vendor configuration has been
+        ; selected the same read gives `n12 01`, and the two configurations
+        ; carrying CDC-NCM and CDC-ECM are simply not there to be found.
+        ; The probe then concluded, correctly on the evidence, that this
+        ; adapter has no ECM function.
+        ;
+        ; So: SELECTING A CONFIGURATION IS NOT A READ-ONLY ACT, and any
+        ; question about what a device can do has to be asked before one is
+        ; chosen.  ECMLINK never hit this because it enumerates from a bus
+        ; reset every time and asks immediately.
+        cmp     byte [cs:op_noecm], 0
+        jne     short ue_novecm
+        call    ecm_probe
+        jc      short ue_novecm
+        call    ecm_bring
+        jc      short ue_ecmbad
+        jmp     __uev10                  ; ecm_bring has already chosen its
+                                         ; configuration, so skip the one
+                                         ; below and join the common tail
+ue_ecmbad:
+        call    ecm_undo
+ue_novecm:
+
         ; ---- the configuration descriptor, for its value ----
         mov     byte [cs:bu_step], 25
         mov     al, CMD_GET_DESCR
@@ -1147,6 +1180,657 @@ dt_out:
 enum_tries: db 0
 reset_hold: dw 40
 
+
+; ==========================================================================
+; CDC-ECM -- the CLASS path.
+;
+; Everything above this point drives one chip family.  This drives a
+; STANDARD: the device describes itself, and the same code brings up an
+; adapter from any vendor that implements the class.
+;
+; It is here because the AX88179A made the case unanswerable.  That part
+; reports 0B95:1790 -- the AX88179's own USB ID -- and its vendor path
+; collects bursts and delivers no frames out of them.  The same adapter
+; offers CDC-ECM as a configuration, and through it, it works.  So the
+; adapter is fine and the ID is worthless; what the descriptors say is the
+; only thing worth asking.
+;
+; NOTHING HERE IS SPECIFIC TO THAT ADAPTER.  The configuration value, both
+; interface numbers, the alternate setting, both bulk endpoints and the
+; MAC's string index are read out of the descriptors.  Hardcoding the ones
+; this device happens to use would have worked on it alone and thrown away
+; the entire point of writing a class driver.
+;
+; ecm.pas and ECMLINK prove the same protocol in Pascal and are where to
+; debug it from: they can print, and this cannot -- it runs before anything
+; is installed and its failures are a machine that stops answering.
+; ==========================================================================
+
+ECM_MAXCFG      equ 200          ; ctrl_in takes a BYTE length, so a
+                                 ; configuration bigger than this cannot be
+                                 ; read whole.  Real ECM configurations are
+                                 ; 70-90 bytes; this is headroom, not a fit.
+
+ecm_setup:  times 8 db 0         ; a setup packet built by hand
+ecm_cfgv:   db  0                ; bConfigurationValue holding the function
+ecm_ctlif:  db  0                ; the communications interface
+ecm_dif:    db  0                ; the CDC-data interface
+ecm_alt:    db  0                ; its alt setting that HAS endpoints
+ecm_epi:    db  0                ; bulk IN endpoint number
+ecm_epo:    db  0                ; bulk OUT
+ecm_maci:   db  0                ; iMACAddress string index
+ecm_ncfg:   db  0
+ecw_len:    db  0                ; bLength of the descriptor being walked
+ecm_glen:   db  0                ; wLength of the descriptor being fetched
+
+; --------------------------------------------------------------------------
+; One GET_DESCRIPTOR, into rxbuf.
+;   AH = type, AL = index, DX = wIndex (language id), CL = how many bytes.
+; Returns BH = bytes stored, CF set on failure.
+;
+; rxbuf is borrowed deliberately: it is 2048 bytes of resident buffer that
+; cannot be in use yet, because nothing is receiving until this finishes.
+; desc_buf is 80 bytes and this adapter's ECM configuration is exactly 80 --
+; which would have fitted, and would have been a trap for the next device.
+; --------------------------------------------------------------------------
+ecm_get:
+        push    cs
+        pop     ds
+        push    cs
+        pop     es
+        mov     di, ecm_setup
+        mov     byte [di], 0x80          ; IN, standard, device
+        mov     byte [di+1], 6           ; GET_DESCRIPTOR
+        mov     [di+2], al               ; wValue low  = index
+        mov     [di+3], ah               ; wValue high = type
+        mov     [di+4], dl               ; wIndex = language, or zero
+        mov     [di+5], dh
+        mov     [di+6], cl               ; wLength
+        mov     byte [di+7], 0
+        mov     [ecm_glen], cl
+
+        ; Retried, for the same reason read_mac is: a device that is busy
+        ; answers NAK, the chip is deliberately set to REPORT that rather
+        ; than absorb it, and a single attempt therefore reads a perfectly
+        ; healthy device as absent.  Asking once is how the first build of
+        ; this fell through to the vendor path on an adapter whose
+        ; descriptors were there all along.
+        mov     bp, 12
+ecmg_try:
+        push    bp
+        push    cs
+        pop     ds
+        push    cs
+        pop     es
+        mov     si, ecm_setup
+        mov     di, rxbuf
+        mov     bl, [cs:ecm_glen]
+        call    ctrl_in
+        pop     bp
+        jnc     short ecmg_ok
+        cmp     byte [cs:bu_st], INT_RET_STALL
+        jne     short ecmg_wait
+        call    clr_ep0
+ecmg_wait:
+        mov     cx, 10
+        call    delay_ms
+        dec     bp
+        jnz     short ecmg_try
+        stc
+        ret
+ecmg_ok:
+        clc
+        ret
+
+; --------------------------------------------------------------------------
+; Walk one configuration's descriptors, already in rxbuf.  CX = how many
+; bytes.  CF clear if this configuration holds a usable ECM function.
+; --------------------------------------------------------------------------
+ecm_walk:
+        mov     di, cx                   ; DI = end of the buffer
+        xor     si, si                   ; SI = offset of this descriptor
+        xor     dl, dl                   ; bit0 = ECM control seen
+                                         ; bit1 = a data alt chosen
+        xor     bx, bx                   ; BL = current interface number
+                                         ; BH = current alt setting
+ecw_loop:
+        mov     ax, si
+        inc     ax
+        inc     ax
+        cmp     ax, di
+        ja      short ecw_fin
+        mov     al, [si + rxbuf]         ; bLength
+        or      al, al
+        je      short ecw_fin            ; a zero length would never advance
+        mov     [ecw_len], al
+        xor     ah, ah
+        mov     cx, si
+        add     cx, ax
+        cmp     cx, di
+        jbe     short ecw_inb            ; this one runs off the end, so no
+ecw_fin:                                 ; field in it can be trusted
+        jmp     ecw_end
+ecw_inb:
+        mov     al, [si + rxbuf + 1]     ; bDescriptorType
+
+        ; The dispatch goes through NEAR jumps and each arm returns through
+        ; its own local trampoline.  On an 8086 every conditional jump is
+        ; short -- 128 bytes -- and these arms are bigger than that, so the
+        ; obvious `je short ecw_iface` stops assembling the moment one of
+        ; them grows.  Writing it this way now costs three bytes an arm and
+        ; means the next person to add a descriptor type does not have to
+        ; rediscover it.
+        cmp     al, 4                    ; INTERFACE
+        jne     short ecw_d1
+        jmp     ecw_iface
+ecw_d1:
+        test    dl, 1
+        je      short ecw_next           ; nothing before the ECM control
+                                         ; interface can belong to it
+        cmp     al, 0x24                 ; CS_INTERFACE
+        jne     short ecw_d2
+        jmp     ecw_cs
+ecw_d2:
+        cmp     al, 5                    ; ENDPOINT
+        jne     short ecw_next
+        jmp     ecw_ep
+ecw_next:
+        mov     al, [ecw_len]
+        xor     ah, ah
+        add     si, ax
+        jmp     short ecw_loop
+
+ecw_iface:
+        cmp     byte [ecw_len], 9
+        jb      short ecwi_out
+        mov     bl, [si + rxbuf + 2]     ; bInterfaceNumber
+        mov     bh, [si + rxbuf + 3]     ; bAlternateSetting
+        mov     al, [si + rxbuf + 5]     ; bInterfaceClass
+        mov     ah, [si + rxbuf + 6]     ; bInterfaceSubClass
+        cmp     al, 2                    ; Communications
+        jne     short ecw_ifdata
+        cmp     ah, 6                    ; Ethernet Networking Control Model
+        jne     short ecw_ifdata
+        or      dl, 1
+        mov     [ecm_ctlif], bl
+        mov     al, [rxbuf + 5]          ; bConfigurationValue, from the
+        mov     [ecm_cfgv], al           ; configuration descriptor itself
+ecwi_out:
+        jmp     ecw_next
+ecw_ifdata:
+        test    dl, 1
+        je      short ecwi_out
+        test    dl, 2
+        jne     short ecwi_out           ; keep the FIRST endpoint-bearing
+                                         ; alt.  A device may offer several
+                                         ; at different bandwidths, and
+                                         ; without this the walk silently
+                                         ; ends up on whichever came last
+        cmp     al, 0x0A                 ; CDC data
+        jne     short ecwi_out
+        mov     al, [si + rxbuf + 4]     ; bNumEndpoints
+        cmp     al, 2
+        jb      short ecwi_out           ; alt 0 has NONE, by design -- an
+                                         ; idle ECM device reserves no bus
+                                         ; bandwidth.  Selecting it and
+                                         ; wondering why nothing moves is
+                                         ; the classic ECM mistake
+        or      dl, 2
+        mov     [ecm_dif], bl
+        mov     [ecm_alt], bh
+        jmp     short ecwi_out
+
+ecw_cs:
+        cmp     byte [ecw_len], 13
+        jb      short ecwc_out
+        mov     al, [si + rxbuf + 2]     ; bDescriptorSubtype
+        cmp     al, 0x0F                 ; Ethernet Networking functional
+        jne     short ecwc_out
+        ; The MAC is in a STRING descriptor and this carries its index.
+        ; Not a register, not a field here -- the class spec really does
+        ; put a hardware address in a string, as twelve hex characters.
+        mov     al, [si + rxbuf + 3]     ; iMACAddress
+        mov     [ecm_maci], al
+ecwc_out:
+        jmp     ecw_next
+
+ecw_ep:
+        cmp     byte [ecw_len], 7
+        jb      short ecwe_out
+        test    dl, 2
+        je      short ecwe_out           ; no data alt chosen yet
+        ; An endpoint descriptor belongs to whichever interface descriptor
+        ; last preceded it, so BL/BH say who owns this one.  Taking any
+        ; bulk endpoint that happens to appear would pick up another
+        ; function's -- an endpoint number that will never answer.
+        cmp     bl, [ecm_dif]
+        jne     short ecwe_out
+        cmp     bh, [ecm_alt]
+        jne     short ecwe_out
+        mov     al, [si + rxbuf + 3]     ; bmAttributes
+        and     al, 3
+        cmp     al, 2                    ; bulk
+        jne     short ecwe_out
+        mov     al, [si + rxbuf + 2]     ; bEndpointAddress
+        test    al, 0x80
+        jne     short ecw_epin
+        and     al, 0x0F
+        mov     [ecm_epo], al
+ecwe_out:
+        jmp     ecw_next
+ecw_epin:
+        and     al, 0x0F
+        mov     [ecm_epi], al
+        jmp     short ecwe_out
+
+ecw_end:
+        test    dl, 1
+        je      short ecw_no
+        cmp     byte [ecm_epi], 0
+        je      short ecw_no
+        cmp     byte [ecm_epo], 0
+        je      short ecw_no
+        clc
+        ret
+ecw_no:
+        stc
+        ret
+
+; --------------------------------------------------------------------------
+; One configuration, by INDEX in AL.  CF clear if it holds an ECM function.
+; --------------------------------------------------------------------------
+ecm_one:
+        mov     byte [cs:ecm_epi], 0     ; per configuration, not per device:
+        mov     byte [cs:ecm_epo], 0     ; a half-filled match from the one
+        mov     byte [cs:ecm_maci], 0    ; before must not vote in this one
+
+        ; Nine bytes first, for wTotalLength.  A configuration descriptor is
+        ; only meaningful ENTIRE -- the interface, functional and endpoint
+        ; descriptors trail it and are what all of this is looking for.
+        push    ax
+        mov     ah, 2                    ; CONFIGURATION
+        xor     dx, dx
+        mov     cl, 9
+        call    ecm_get
+        pop     ax
+        jc      short ecm1_no
+        cmp     bh, 9
+        jb      short ecm1_no
+        mov     cx, [cs:rxbuf + 2]       ; wTotalLength
+        cmp     cx, ECM_MAXCFG
+        jbe     short ecm1_len
+        mov     cx, ECM_MAXCFG
+ecm1_len:
+        push    ax
+        mov     ah, 2
+        xor     dx, dx
+        call    ecm_get                  ; CL is already the length
+        pop     ax
+        jc      short ecm1_no
+        or      bh, bh
+        je      short ecm1_no
+        mov     cl, bh
+        xor     ch, ch
+        call    ecm_walk
+        ret
+ecm1_no:
+        stc
+        ret
+
+; --------------------------------------------------------------------------
+; Is there a CDC-ECM function anywhere on this device?
+; CF clear = yes, and every ecm_* field above is filled in.
+; --------------------------------------------------------------------------
+ecm_probe:
+        push    cs
+        pop     ds
+        mov     al, 'P'
+        call    mark
+
+        ; Let the CHIP absorb NAKs while we ask questions, and put it back
+        ; to 00 on every exit below.  This is what read_mac does and the
+        ; note there explains why; the first build of this file ignored it
+        ; on the strength of the OPPOSITE lesson, learned in ecm.pas, and
+        ; the two are about different things.
+        ;
+        ; On a DATA endpoint a NAK means "busy, ask again" and the chip
+        ; must report it, or a transfer raises no interrupt at all.  In a
+        ; CONTROL transfer the data stage has to be retried INSIDE the
+        ; transfer -- restarting from the SETUP asks the question again
+        ; rather than waiting for the answer.  Measured here: twelve whole
+        ; transfers, 10 ms apart, every one of them S14 I2A, on a device
+        ; whose descriptors were there the entire time.  The driver read
+        ; that as "no ECM function" and quietly took the vendor path.
+        mov     al, 0x8F
+        call    set_retry
+
+        ; How many configurations are there?  The device descriptor says,
+        ; at offset 17 -- and the CH375's own CMD_GET_DESCR cannot ask for
+        ; a configuration by INDEX, only ever the first, which is why all
+        ; of this goes through hand-built control transfers.
+        mov     ah, 1                    ; DEVICE
+        xor     al, al
+        xor     dx, dx
+        mov     cl, 18
+        call    ecm_get
+        jc      short ecm_pno
+        cmp     bh, 18
+        jb      short ecm_pno
+        mov     al, [rxbuf + 17]         ; bNumConfigurations
+        or      al, al
+        je      short ecm_pno
+        mov     [ecm_ncfg], al
+        call    markhex                  ; how many there are to look at
+
+        xor     al, al                   ; AL = configuration INDEX
+ecm_ploop:
+        push    ax
+        call    ecm_one
+        pop     ax
+        jnc     short ecm_pyes
+        inc     al
+        cmp     al, [ecm_ncfg]
+        jb      short ecm_ploop
+; Both exits RESTORE 8F rather than forcing 00, because this now runs in
+; the middle of usb_enum, where 8F is the ambient policy and everything
+; after it depends on that.  Forcing 00 here broke the very next step: the
+; configuration descriptor read began reporting NAKs instead of waiting
+; them out, and the bring-up failed at step 25 with status 2A on an adapter
+; that had been working a minute earlier.  usb_enum's own tail puts the
+; chip back to 00 exactly once, as it always did.
+ecm_pno:
+        mov     al, 'n'
+        call    mark
+        mov     al, 0x8F
+        call    set_retry
+        stc
+        ret
+ecm_pyes:
+        mov     al, 'Y'
+        call    mark
+        mov     al, 0x8F
+        call    set_retry
+        clc
+        ret
+
+; --------------------------------------------------------------------------
+; One UTF-16 character at DS:SI -> AL = its hex value.  SI advances by 2.
+; --------------------------------------------------------------------------
+ecm_hexn:
+        mov     al, [si]
+        inc     si
+        inc     si
+        cmp     al, '0'
+        jb      short ecmh_bad
+        cmp     al, '9'
+        ja      short ecmh_af
+        sub     al, '0'
+        clc
+        ret
+ecmh_af:
+        and     al, 0xDF
+        cmp     al, 'A'
+        jb      short ecmh_bad
+        cmp     al, 'F'
+        ja      short ecmh_bad
+        sub     al, 'A' - 10
+        clc
+        ret
+ecmh_bad:
+        stc
+        ret
+
+; --------------------------------------------------------------------------
+; The MAC, out of the string descriptor the functional descriptor named.
+; --------------------------------------------------------------------------
+ecm_mac:
+        ; TWO reads: the two-byte header for its bLength, then exactly that
+        ; many bytes.  Asking for "64, whatever you have" is the obvious
+        ; thing and it does not work here.
+        ;
+        ; ctrl_in ends a data stage on a packet shorter than EIGHT, which
+        ; is right for a device whose endpoint 0 carries 8 bytes and wrong
+        ; for this one, which carries 64.  A 26-byte string arrives in one
+        ; 26-byte packet -- short for the endpoint, not short by that test
+        ; -- so ctrl_in asked for more, and the device answered status 2B.
+        ; Trace: `S14 I14 n1A I2B`, twelve times, then bring-up step 62.
+        ;
+        ; The exact-length read sidesteps it, and every other descriptor
+        ; read here is already exact by construction.  ctrl_in itself is
+        ; left alone deliberately: the AX88179 path shares it, that part is
+        ; not on the bench today, and a latent bug nobody is hitting is a
+        ; poor reason to change code that cannot be tested.  It is written
+        ; up in NEXT.md as the one-line fix it is -- `cmp dl, [ep0max]`.
+        mov     al, [cs:ecm_maci]
+        or      al, al
+        je      short ecmac_no
+        mov     ah, 3                    ; STRING
+        mov     dx, 0x0409               ; en-US, and the only language any
+                                         ; of these devices offers
+        mov     cl, 2
+        call    ecm_get
+        jc      short ecmac_no
+        cmp     bh, 2
+        jb      short ecmac_no
+        mov     cl, [cs:rxbuf]           ; bLength, the whole descriptor
+        cmp     cl, 26                   ; 2 header + 12 characters x 2
+        jb      short ecmac_no
+        mov     al, [cs:ecm_maci]
+        mov     ah, 3
+        mov     dx, 0x0409
+        call    ecm_get
+        jc      short ecmac_no
+        cmp     bh, 26
+        jb      short ecmac_no
+        push    cs
+        pop     ds
+        mov     si, rxbuf + 2
+        mov     di, mac
+        mov     cx, 6
+ecmac_byte:
+        push    cx
+        call    ecm_hexn
+        jc      short ecmac_pop
+        mov     ah, al
+        call    ecm_hexn
+        jc      short ecmac_pop
+        mov     cl, 4
+        shl     ah, cl
+        or      al, ah
+        mov     [di], al
+        inc     di
+        pop     cx
+        loop    ecmac_byte
+        clc
+        ret
+ecmac_pop:
+        pop     cx
+ecmac_no:
+        stc
+        ret
+
+; --------------------------------------------------------------------------
+; Open the packet filter.  Never fatal: a device is allowed to STALL this
+; and plenty default to a usable filter anyway.  But a device that does
+; honour it and was never asked delivers NOTHING, and a silent receive path
+; is a miserable thing to debug from inside a driver that cannot print.
+; --------------------------------------------------------------------------
+ecm_filter:
+        push    cs
+        pop     ds
+        push    cs
+        pop     es
+        mov     di, ecm_setup
+        mov     byte [di], 0x21          ; OUT, class, interface
+        mov     byte [di+1], 0x43        ; SET_ETHERNET_PACKET_FILTER
+        mov     byte [di+2], 0x1C        ; directed | broadcast | multicast
+        mov     byte [di+3], 0
+        mov     al, [ecm_ctlif]
+        mov     [di+4], al               ; wIndex = the control interface
+        mov     byte [di+5], 0
+        mov     byte [di+6], 0
+        mov     byte [di+7], 0
+        mov     si, ecm_setup
+        xor     bl, bl
+        call    ctrl_out_n
+        ret                              ; the CALLER decides what a refusal
+                                         ; means.  It used to `clc` here,
+                                         ; which threw away the one fact
+                                         ; that distinguishes "the device
+                                         ; ignores filters" from "the device
+                                         ; is delivering nothing because we
+                                         ; never opened it"
+
+; --------------------------------------------------------------------------
+; Select the ECM function and hand the resident half what it needs.
+; --------------------------------------------------------------------------
+ecm_bring:
+        push    cs
+        pop     ds
+        mov     al, 'B'
+        call    mark
+        mov     al, 0x8F
+        call    set_retry
+
+        mov     byte [bu_step], 60
+        mov     al, CMD_SET_CONFIG
+        mov     ah, [ecm_cfgv]
+        call    ch_hi
+        jnc     short ecb_k1
+        jmp     ecb_no                   ; ecb_no is more than 128 bytes
+ecb_k1:                                  ; below here, and every 8086
+                                         ; conditional jump is short only
+        mov     cx, 50
+        call    delay_ms
+
+        ; SET_INTERFACE to the alt setting that HAS endpoints.  Skipping
+        ; this leaves a device that is perfectly healthy and completely
+        ; silent, which reads as a broken driver.
+        mov     byte [bu_step], 61
+        push    cs
+        pop     es
+        mov     di, ecm_setup
+        mov     byte [di], 0x01          ; OUT, standard, interface
+        mov     byte [di+1], 0x0B        ; SET_INTERFACE
+        mov     al, [ecm_alt]
+        mov     [di+2], al               ; wValue = alternate setting
+        mov     byte [di+3], 0
+        mov     al, [ecm_dif]
+        mov     [di+4], al               ; wIndex = the data interface
+        mov     byte [di+5], 0
+        mov     byte [di+6], 0
+        mov     byte [di+7], 0
+        mov     si, ecm_setup
+        xor     bl, bl
+        call    ctrl_out_n
+        jnc     short ecb_k2
+        jmp     ecb_no
+ecb_k2:
+        mov     cx, 20
+        call    delay_ms
+
+        mov     byte [bu_step], 62
+        call    ecm_mac
+        jnc     short ecb_k3
+        jmp     ecb_no
+ecb_k3:
+
+        mov     byte [bu_step], 63
+        call    ecm_filter
+        pushf
+
+        ; Print what the walk ACTUALLY chose.  Every one of these is read
+        ; from the device and any of them being wrong produces the same
+        ; symptom -- an endpoint that NAKs for ever -- so the numbers have
+        ; to be visible or the next fault costs another evening.  The
+        ; transient half is the only place they exist: they are discovery
+        ; results, not driver state, and nothing resident needs them.
+        mov     dx, msg_e_geom
+        call    puts
+        mov     al, [ecm_cfgv]
+        call    puthex
+        mov     dx, msg_e_ctl
+        call    puts
+        mov     al, [ecm_ctlif]
+        call    puthex
+        mov     dx, msg_e_dat
+        call    puts
+        mov     al, [ecm_dif]
+        call    puthex
+        mov     dx, msg_e_alt
+        call    puts
+        mov     al, [ecm_alt]
+        call    puthex
+        mov     dx, msg_e_eps
+        call    puts
+        mov     al, [ecm_epi]
+        call    puthex
+        mov     dx, msg_e_epo
+        call    puts
+        mov     al, [ecm_epo]
+        call    puthex
+        popf
+        jnc     short ecb_filtok
+        mov     dx, msg_e_filt
+        call    puts
+ecb_filtok:
+        call    crlf
+
+        ; ---- tell the resident half which protocol it is speaking ----
+        mov     byte [ecm_mode], 1
+        mov     word [tx_hdrlen], 0
+        mov     word [drv_nptr], drv_ecm
+        mov     al, [ecm_epi]
+        mov     [ep_in_n], al
+        mov     cl, 4
+        shl     al, cl
+        or      al, PID_IN
+        mov     [tok_in], al
+        mov     al, [ecm_epo]
+        mov     [ep_out_n], al
+        mov     cl, 4
+        shl     al, cl
+        or      al, PID_OUT
+        mov     [tok_out], al
+        mov     byte [dev_live], 1
+        mov     byte [bu_step], 0
+        xor     al, al
+        call    set_retry
+        clc
+        ret
+ecb_no:
+        mov     al, 'b'
+        call    mark
+        mov     al, [bu_step]
+        call    markhex
+        mov     al, 0x8F
+        call    set_retry
+        call    clr_ep0
+        stc
+        ret
+
+; --------------------------------------------------------------------------
+; Put everything back, for a device that claimed ECM and would not come up
+; on it.  Falling back to the vendor path beats refusing to load: on a part
+; that offers both, one working path is the entire point.
+; --------------------------------------------------------------------------
+ecm_undo:
+        push    cs
+        pop     ds
+        mov     byte [ecm_mode], 0
+        mov     word [tx_hdrlen], 8
+        mov     word [drv_nptr], drv_name
+        mov     byte [tok_in], (EP_BULK_IN << 4) | PID_IN
+        mov     byte [tok_out], (EP_BULK_OUT << 4) | PID_OUT
+        mov     byte [ep_in_n], EP_BULK_IN
+        mov     byte [ep_out_n], EP_BULK_OUT
+        ; No SET_CONFIGURATION here.  This is now reached from inside
+        ; usb_enum, BEFORE any configuration has been chosen, and the code
+        ; immediately below the call site goes on to read and select the
+        ; vendor one.  The earlier version re-selected cfg_val_e, which at
+        ; this point has not been read yet.
+        ret
+
 ax_bringup:
         ; Three goes at the enumeration, with a full teardown between them.
         ; A device left configured by a bring-up that stopped half way does
@@ -1175,6 +1859,19 @@ bu_giveup:
         stc
         ret
 bu_enumok:
+        ; Did the enumeration bring this up as a CLASS device?  If so there
+        ; is no vendor bring-up to do: no PHY to power, no MII to poll, no
+        ; registers at all.  usb_enum decides that, because the question has
+        ; to be asked before a configuration is selected -- see the long
+        ; note there.
+        cmp     byte [cs:ecm_mode], 0
+        je      short bu_vendor
+        mov     al, 'E'
+        call    mark
+        mov     byte [cs:bu_step], 0
+        clc
+        ret
+bu_vendor:
         mov     byte [cs:bu_step], 1
         ; Power the PHY. The reset line has to be seen low and then high,
         ; and the settle afterwards is not optional: before it the PHY
@@ -1514,6 +2211,7 @@ op_status:  db 0
 op_verb:    db 0
 op_help:    db 0
 op_giga:    db 0
+op_noecm:   db 0        ; /X -- refuse the class path even where it exists
 op_test:    db 0
 
 ; /8 -- use the portable 8086 byte loops even on a CPU that has REP INSB
@@ -1611,8 +2309,15 @@ pa_s3:
         jmp     near pa_more
 pa_s4:
         cmp     al, 'G'
-        jne     short pa_s5
+        jne     short pa_s4x
         mov     byte [op_giga], 1
+        jmp     near pa_more
+pa_s4x:
+        ; /X -- never use CDC-ECM, even on a device that offers it.  The
+        ; only way to compare the two paths on one adapter.
+        cmp     al, 'X'
+        jne     short pa_s5
+        mov     byte [op_noecm], 1
         jmp     near pa_more
 pa_s5:
         ; /A, not /N: /N already means "do not hook the timer" and has
@@ -2030,15 +2735,26 @@ init_gotmac:
         ; CLEAR_FEATURE(ENDPOINT_HALT) resets the toggle at BOTH ends,
         ; which is exactly the handshake needed to adopt an endpoint
         ; somebody else was already using.
-        mov     al, EP_BULK_IN           ; the endpoint NUMBER -- ch375.pas
-        call    clr_ep                   ; passes 2, not 82h
-        mov     al, EP_BULK_OUT
-        call    clr_ep
+        mov     al, [ep_in_n]            ; the endpoint NUMBER -- ch375.pas
+        call    clr_ep                   ; passes 2, not 82h.  Read from the
+        mov     al, [ep_out_n]           ; variables because an ECM adapter
+        call    clr_ep                   ; names its own endpoints
         mov     byte [rx_tog], 0x80
         mov     byte [tx_tog], 0x80
 
+        cmp     byte [ecm_mode], 0
+        je      short init_sayax
+        ; No 'link up' here: ECM reports the link through its interrupt
+        ; endpoint, on CHANGE, and a device that has just been configured
+        ; has not changed anything yet.  Claiming a link we have not been
+        ; told about would be worse than saying nothing.
+        mov     dx, msg_i_ecm
+        call    puts
+        jmp     short init_saidit
+init_sayax:
         mov     dx, msg_buok
         call    puts
+init_saidit:
         mov     al, 'd'
         call    mark
 
@@ -2153,6 +2869,20 @@ stat_have:
         call    puts
         mov     ax, [es:io_dat]
         call    puthexw
+        call    crlf
+
+        ; WHICH protocol, because every counter below it means something
+        ; different depending on the answer -- the burst counters police a
+        ; layout the class path does not have, so zeros there are correct
+        ; rather than alarming.
+        mov     dx, msg_s_path
+        call    puts
+        mov     dx, msg_p_ax
+        cmp     byte [es:ecm_mode], 0
+        je      short stat_path
+        mov     dx, msg_p_ecm
+stat_path:
+        call    puts
         call    crlf
 
         mov     dx, msg_s_bmov
@@ -2624,6 +3354,17 @@ msg_hooked08:
 msg_isres:     db 'Loaded: USBPKT $'
 msg_s_vec:     db '  vector=$'
 msg_s_base:    db '  I/O base=$'
+msg_e_geom:    db 'ECM: cfg $'
+msg_e_ctl:     db ' ctl if $'
+msg_e_dat:     db ' data if $'
+msg_e_alt:     db ' alt $'
+msg_e_eps:     db ' ep in $'
+msg_e_epo:     db ' out $'
+msg_e_filt:    db ' filter REFUSED$'
+msg_s_path:    db '  protocol=$'
+msg_p_ecm:     db 'CDC-ECM (class, from the descriptors)$'
+msg_p_ax:      db 'AX88179 vendor$'
+msg_i_ecm:     db 'CDC-ECM adapter - using the class driver.', 13, 10, '$'
 msg_s_bmov:    db '  byte moves=$'
 msg_bmov_fast: db 'REP INSB/OUTSB$'
 msg_bmov_slow: db '8086 loops$'

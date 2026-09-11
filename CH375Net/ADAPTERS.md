@@ -57,7 +57,7 @@ SUPPORTED.
 
 | Chip | USB ID | Notes |
 |---|---|---|
-| ASIX AX88179A **over CDC-ECM** | `0B95:1790`, `iProduct` "AX88179A" | Works, and **only** through `ecm.pas` -- the vendor path enumerates it and cannot transmit through it. Verified on hardware 2026-09-10: `ECMLINK` discovered configuration 3, control interface 0, data interface 1 alt 1, bulk endpoints 2 IN / 3 OUT, read MAC `A0:CE:C8:BC:0A:91` out of the string descriptor, sent an ARP request and was answered by the host it asked about. Sold as a **USB-C** adapter, model `UTC-GE-AL-AX01`, used here through a USB-C-to-A adapter. See below for how thoroughly its USB ID lies about it. |
+| ASIX AX88179A **over CDC-ECM** | `0B95:1790`, `iProduct` "AX88179A" | Works through the class path. Verified on hardware 2026-09-10: `ECMLINK` discovered configuration 3, control interface 0, data interface 1 alt 1, bulk endpoints 2 IN / 3 OUT, read MAC `A0:CE:C8:BC:0A:91` out of the string descriptor, sent an ARP request and was answered by the host it asked about. `USBPKT` discovers the identical geometry. **But read the vendor-mode latch below before testing it** -- the adapter stops offering the ECM configuration at all once its vendor path has run. Sold as a **USB-C** adapter, model `UTC-GE-AL-AX01`, used here through a USB-C-to-A adapter. |
 | ASIX AX88179 | `0B95:1790` | The reference part. Verified on **two physically different adapters** from different manufacturers — MACs `40:AE:30:6D:00:34` and `00:50:B6:B6:1C:64`. Both boot, link, and move data. **They do NOT move 5 MB byte-exact reliably**, which this row used to claim: about one 5 MB download in nine comes back the right length with a corrupt region, and every error counter reads zero while it happens. See the README. The claim was true of the runs it was written from and was never a property of the adapter. |
 
 ## Before you plug a new one in
@@ -120,36 +120,30 @@ falls back to full speed correctly, accepts `set configuration`, takes every
 register write, reads its MAC (`A0:CE:C8:BC:0A:91`) and reports **link up**.
 `USBPKT` loads it and goes resident.
 
-**And it moves no traffic in either direction.** Measured 2026-09-10 over a
-39-second window with `USBPKT /S`:
+**It carries frames both ways and mTCP still cannot use it.** Measured
+2026-09-10 after a clean boot, over 83 seconds:
 
 ```
-bursts collected=181      frames delivered=0
-frames sent=0
-bursts that made no sense=0      reads with an impossible length=0
-bursts too big for the buffer=0  bursts whose frames did not tile=0
-frames past the frame region=0   reads rescued by flipping the toggle=0
+bursts collected=163      frames delivered=18      frames sent=7
+bursts whose frames did not tile=0   frames past the frame region=0
 ```
 
-**Bursts arrive and the parser finds zero frames in them, with every error
-counter reading zero** -- so the burst is well-formed by the 179's rules and
-simply contains nothing, which points at a different trailer or packet-count
-layout on this part rather than at a fault in the parse. Transmit reports
-`last bulk IN: status 2A`.
+`PKTTEST /T=192.168.50.46` ARPs that host and **gets the reply**, so a frame
+reaches the wire and the answer comes back. `PING` over mTCP on the same
+driver, seconds later, times out on all four packets. So the fault is
+narrower than "it cannot transmit": something works at the ARP level and
+does not at the IP level, and that has not been chased because the class
+path below makes it moot.
 
-**An earlier version of this entry said it "receives frames" and announced
-"USB Ethernet ready" at boot. Both were wrong, and the second was
-measured.** On 2026-09-10 the box came up having taken `AUTOEXEC.BAT`'s
-`:NOUSB` branch -- no `MTCPCFG` set, no `TRYING.FLG` left behind -- so the
-boot-time bring-up returned a failure. Loading it by hand afterwards
-succeeded, so the boot failure is not reliably reproducible and is recorded
-as an observation rather than a property.
-
-The original reading came from frame counters during a session where the
-older AX88179 had also been in the machine, which is the likeliest way two
-adapters' results got attributed to one. Tried at both link settings -- the
-default 10BASE-T and `/G` for gigabit -- with no difference, so it is not
-speed negotiation.
+**This entry has now been wrong twice, in opposite directions, and both
+times from a measurement taken in a state nobody had checked.** It first
+said the adapter "receives frames"; then, on 2026-09-10, that it "moves no
+traffic in either direction" on the strength of 181 bursts and 0 frames
+delivered. That reading was real but the device was not in a clean state --
+ECMLINK had reconfigured it into the ECM configuration and USBPKT had then
+re-enumerated it. After a reboot the same binary delivers frames. **Take
+adapter measurements from a freshly powered device, and say which state the
+device was in.**
 
 The endpoints are **not** the problem either, which was the first guess:
 the driver issues tokens to endpoint 2 IN and 3 OUT, and this part's vendor
@@ -161,6 +155,48 @@ expect transmit on a different queue, or need a register the 179 does not.
 Every register access reports NAK in that case and the MAC read "fails",
 which looks like a dead device and is an artifact of re-initialising one
 that is already configured. Power cycle first, or believe the boot banner.
+
+### The vendor bring-up LATCHES it, and only a re-plug clears that
+
+The most important thing on this page, because it makes everything else
+here intermittent if you do not know it.
+
+A freshly powered AX88179A reports **three configurations**: vendor,
+CDC-NCM, CDC-ECM. Once the vendor bring-up has run, the same adapter
+reports **one**, and the two class configurations are not merely
+unselectable -- they are absent from the descriptor it hands back.
+
+Measured 2026-09-10, from `USBPKT /V`'s trace of the device descriptor
+read, where the last byte is `bNumConfigurations`:
+
+| | |
+|---|---|
+| fresh device | `n12 03` -- eighteen bytes, three configurations |
+| after the vendor bring-up | `n12 01` -- one |
+
+**Nothing in software clears it.** Confirmed one at a time:
+
+* a USB bus reset does not -- `ECMLINK` does a full mode-7/mode-6 reset on
+  every run and still read `01`;
+* `SET_CONFIGURATION(0)` is weaker than a bus reset, so it cannot;
+* **a warm reboot does not**, which is the one that catches people. The
+  CH375 card feeds the adapter off the ISA bus and a warm boot never drops
+  that rail, so the adapter is never re-powered. Verified: rebooted, and
+  `AUTOEXEC.BAT`'s own `USBPKT` still came up on the vendor path.
+
+What does clear it is **unplugging the adapter and plugging it back in**,
+or a full power cycle of the machine.
+
+Two consequences worth carrying:
+
+* **Ask what a device can do before configuring it.** `USBPKT` probes for
+  CDC-ECM between SET_ADDRESS and SET_CONFIGURATION for exactly this
+  reason. An earlier build probed afterwards and worked intermittently --
+  the worst possible symptom, since two runs of one binary on one adapter
+  disagreed.
+* **A session that has run the vendor path cannot test the class path.**
+  Re-plug the adapter first, or every ECM result in that session is a null
+  you cannot interpret.
 
 ### The opportunity in it -- taken, and it worked
 
