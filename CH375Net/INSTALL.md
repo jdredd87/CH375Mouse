@@ -77,6 +77,26 @@ the detail.
 If it finds no CH375 at all, your board is on a different I/O address —
 `NETID /P=<hex>` and `USBPKT /P=<hex>` both take one.
 
+**If `USBPKT` brings it up and then nothing you send is answered, try
+`ECMLINK`.** Some adapters offer a standard **CDC-ECM** configuration
+alongside their vendor one, and at least one part here works through the
+former and not the latter:
+
+```
+C:\CH375> USBPKT /U            <- one program owns the chip at a time
+C:\CH375> ECMLINK
+```
+
+It brings the adapter up entirely from its own descriptors, then ARPs a host
+and requires that host's reply, so a successful run is proof of transmit and
+not merely of enumeration. `ECMLINK [@260] [our-ip] [target-ip]` overrides
+the I/O address and the two addresses it uses.
+
+The catch is worth stating plainly: **ECM is not wired into `USBPKT` yet**,
+so an adapter that only works this way has no packet driver and mTCP cannot
+run over it. `ECMLINK` tells you the adapter is good; making it useful is
+the job described in `NEXT.md`.
+
 ## Step 2: pick an interrupt vector
 
 Packet drivers live on a software interrupt between `60h` and `80h`. The
@@ -258,6 +278,7 @@ on the DOS box and compared against the source. All exact.
 | `USBRECV.EXE` | read the adapter directly, no packet driver involved |
 | `USBSEND.EXE` | send an ARP directly and prove something answered |
 | `PKTTICK.EXE` | foreground vs timer-interrupt receive, for driver work |
+| `ECMLINK.EXE` | for a **CDC-ECM** adapter: brings it up from its own descriptors and proves it can transmit. Not a packet driver -- see below |
 
 Only `USBPKT.COM` is needed to use the adapter. The rest are for finding out
 why it is not working.

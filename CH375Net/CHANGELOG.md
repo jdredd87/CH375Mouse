@@ -4,6 +4,100 @@ CH375Net -- StevenC -- https://github.com/jdredd87/CH375USBTools
 
 Versions live in the `VER` constant of each program.
 
+## CDC-ECM: a class driver, and an adapter that could not transmit now does
+
+`ecm.pas` and `ECMLINK`. CDC-ECM is a USB **class**, not a chip: the device
+describes itself in its own descriptors and one bring-up covers adapters
+from any vendor, including ones nobody here has bought.
+
+It was written because an **AX88179A** turned up that reports the same USB
+ID as the AX88179 (`0B95:1790`) and behaves differently: it enumerates on the
+vendor path, takes every register write, reads its MAC, reports link up,
+receives frames -- and **nothing it transmits is ever answered**. The same
+part offers CDC-ECM as configuration 3. So rather than reverse-engineer what
+the 179A wants that the 179 does not, the standard was implemented.
+
+Verified on hardware 2026-09-10, reproduced on four consecutive runs:
+
+```
+ECM found, and every one of these was READ, not assumed:
+  configuration  : 3
+  control iface  : 0
+  data iface     : 1  alt 1
+  bulk in / out  : 2 / 3
+  interrupt in   : 1
+  max segment    : 1514
+MAC      : A0:CE:C8:BC:0A:91
+ARP      : who has 192.168.50.46?  tell 192.168.50.222
+           REPLY from 192.168.50.46  is at EC:8E:B5:7A:2C:F5
+link     : UP, now that the PHY has settled
+```
+
+**Nothing in it is hardcoded to that adapter.** The configuration number,
+both interface numbers, the alt setting, all three endpoints and the MAC's
+string index are read out of the descriptors. Hardcoding "configuration 3"
+would have worked on this one device and made the whole exercise pointless.
+
+Three things in ECM are easy to get wrong and all three bit:
+
+* **The data interface's alt 0 has NO endpoints.** That is by design -- an
+  idle ECM device reserves no bus bandwidth -- so a driver that selects the
+  configuration and stops has a device that is perfectly healthy and
+  completely silent. `SET_INTERFACE` to the alt setting that has endpoints
+  is not optional.
+* **The MAC is in a STRING descriptor**, as twelve UTF-16 hex characters.
+  Not a register, not a descriptor field. The Ethernet Networking functional
+  descriptor carries the string index and nothing else useful.
+* **A frame ends when a short packet ends it**, so a frame whose length is an
+  exact multiple of 64 needs an explicit zero-length packet after it or the
+  device waits for a continuation that never comes.
+
+### Two bugs found by running it, both worth keeping
+
+**The chip was left retrying NAKs, and that broke transmit entirely.**
+`ch375.pas`'s `BusUp` sets `CMD_SET_RETRY` to `8F` -- absorb NAKs in hardware
+-- which is right while enumerating and exactly wrong on a data endpoint,
+where a NAK means "busy, ask again". A chip retrying in hardware raises no
+interrupt at all, so every transfer reports `no interrupt`. First hardware
+run: frame 1 went out, then every later bulk OUT and all forty receive polls
+failed. `ax179.pas` and `usbpoll.pas` already put it back to `00`;
+`usbpkt.asm` says the same thing at length and retries in software instead.
+`ecm.pas` was simply missing the line.
+
+Its second-order effect is nastier: a chip walked away from on `8F` is still
+grinding when the program exits, so it does not answer `CHECK_EXIST`, and
+the **next** program prints a thoroughly convincing `No CH375 at 0260h` for a
+card that is plainly fitted. Two runs were lost to that. The policy is now
+restored from an `ExitProc`, because the paths that need it are the ones
+that `Halt` early, and `ECMLINK` resets and re-asks rather than believing a
+single failed `CHECK_EXIST`.
+
+**The test accepted somebody else's ARP reply.** The first version required
+only "an ARP reply arrived", and on the second run it duly reported
+`REPLY from 192.168.50.249` to a request for `.46` -- and declared the
+transmit path proven on the strength of it. A live segment carries other
+people's ARP traffic; that reading proves the RECEIVE path, which on this
+adapter was never in doubt. It now requires the sender protocol address to
+be the host asked about **and** the target hardware address to be ours,
+which is what makes it an answer rather than an overheard frame.
+
+Also: the link is read from the interrupt endpoint, the whole queue is
+drained, and the **last** notification is believed. An ECM device queues
+`NETWORK_CONNECTION = 0` as it comes up and only reports `1` once the PHY has
+negotiated seconds later, so reading one notification reports the link as
+down for as long as the device has been alive. Reading one is worse than
+reading none, because it is confidently stale -- the first run printed
+`link: DOWN` and then transmitted a frame that was answered.
+
+### What this is not
+
+**It is not a packet driver.** `USBPKT.COM` still speaks only the ASIX vendor
+path, so mTCP cannot yet run over an ECM adapter. `NEXT.md` has what turning
+`ecm.pas` into a second `USBPKT` back-end involves; the short version is that
+the receive half gets much simpler -- raw frames, no burst header, no entry
+array, no tiling, so the whole AX88179 parser has no counterpart -- and the
+work is in getting it into the timer interrupt in assembler.
+
 ## REP INSB and REP OUTSB: the interrupt is a third shorter
 
 The job the entry below left "still unwritten" is written, and both halves

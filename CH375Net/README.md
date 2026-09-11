@@ -55,9 +55,59 @@ Nothing to add to `CONFIG.SYS`, nothing to configure. `USBPKT` enumerates the
 device over the CH375, brings the AX88179 up, and goes resident. `USBPKT /U`
 unloads it again.
 
+For a **CDC-ECM** adapter there is `ECMLINK` instead — a class driver rather
+than a packet driver, so it proves the adapter works but does not yet carry
+mTCP. See below.
+
 The rest of this file is the engineering: what was measured, what was tried
 and thrown away, and why the code looks the way it does. It is a notebook,
 not a manual.
+
+---
+
+## There is a second driver now, and it is a CLASS driver
+
+`ecm.pas` implements **CDC-ECM**, and `ECMLINK` is its proof-of-life tool.
+The difference from everything else here is that ECM is a USB *class* rather
+than a chip: the device describes itself, so one bring-up covers adapters
+from many vendors — including ones nobody here has bought.
+
+```
+C:\CH375> ECMLINK
+ECM found, and every one of these was READ, not assumed:
+  configuration  : 3
+  control iface  : 0
+  data iface     : 1  alt 1
+  bulk in / out  : 2 / 3
+  interrupt in   : 1
+  max segment    : 1514
+MAC      : A0:CE:C8:BC:0A:91
+ARP      : who has 192.168.50.46?  tell 192.168.50.222
+           REPLY from 192.168.50.46  is at EC:8E:B5:7A:2C:F5
+link     : UP, now that the PHY has settled
+
+  VERDICT: the adapter TRANSMITS and RECEIVES over CDC-ECM.
+```
+
+That adapter is an **AX88179A**. It reports the same USB ID as the AX88179,
+enumerates on the vendor path, reads its MAC, reports link up, receives
+frames — and transmits nothing that is ever answered. Through the class
+driver it works. `ADAPTERS.md` has the whole entry and `CHANGELOG.md` has
+the three ECM details that are easy to get wrong, all of which bit.
+
+**`ECMLINK` proves TRANSMIT, not just bring-up, and that is deliberate.** A
+tool that enumerated the device and printed what it found would have declared
+this adapter working, because everything up to and including the MAC read
+succeeds on the path that cannot send. An ARP request answered by the host it
+asked about is the smallest thing that proves the whole loop: the frame
+reached the wire, another machine parsed it, and the reply came back up
+through the chip. The reply is checked against both the address asked about
+and our own hardware address — the first version accepted any ARP reply and
+promptly reported one from a host nobody had asked about.
+
+**It is not a packet driver yet.** `USBPKT.COM` still speaks only the vendor
+path, so mTCP cannot run over an ECM adapter today. `NEXT.md` has what that
+involves.
 
 ---
 

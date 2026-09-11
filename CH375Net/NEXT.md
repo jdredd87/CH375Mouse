@@ -1,8 +1,8 @@
 # Picking this up next
 
 Written 2026-09-09, rewritten 2026-09-10 after a long session on the data
-corruption. For whoever continues this, including a fresh Claude Code
-instance.
+corruption and again the same evening after CDC-ECM started working. For
+whoever continues this, including a fresh Claude Code instance.
 
 ## Read these first, in this order
 
@@ -28,6 +28,30 @@ and `dosd` runs from it. `C:\dosbridge` is an old runtime copy whose
 ISA card. One command, like `NE2000.COM`. mTCP runs over it at
 `packetint 0x65` and DOSBridge stays on the NE2000 at 60h throughout. Ping,
 DNS, HTTP, FTP and telnet all work.
+
+### Added this session: a CLASS driver, and it transmits
+
+`ecm.pas` drives **CDC-ECM**, which is a USB class rather than a chip: the
+device describes itself and one bring-up covers adapters from any vendor.
+`ECMLINK` is the proof-of-life tool for it, and `build.cmd ecm` runs the
+whole thing on the DOS machine.
+
+It exists because an **AX88179A** arrived reporting the same USB ID as the
+AX88179 (`0B95:1790`), enumerating fine on the vendor path and transmitting
+nothing at all through it. That part also offers ECM as configuration 3.
+Verified on hardware 2026-09-10, four consecutive runs: everything about the
+device discovered from its own descriptors, MAC read out of the string
+descriptor, ARP request sent and **answered by the host it asked about**.
+
+That is a transmit path on an adapter that had none. `ADAPTERS.md` has the
+full entry.
+
+**What it is not yet:** a packet driver. `USBPKT.COM` still speaks only the
+ASIX vendor path, so mTCP cannot run over an ECM adapter today. Turning
+`ecm.pas` into a second back-end for `USBPKT` is the obvious follow-on and is
+the largest remaining piece of work in this project -- it needs the send and
+receive paths rewritten in assembler, inside the timer interrupt, where
+`ecm.pas`'s comfortable Pascal loops cannot go.
 
 ### Fixed this session
 
@@ -152,11 +176,32 @@ outright.
 hiding the fault: a planted displacement reads back exactly, and a 4 GB
 period has no blind spot the way a 256-byte ramp does.
 
-### 3. Only then, a second chipset
+### 3. Or: make `USBPKT` speak ECM as well
 
-`ADAPTERS.md` has the survey: AX88772, then RTL8152/8153, then CDC-ECM as a
-class driver. Not before the corruption is understood -- a second bring-up on
-top of an unexplained receive fault makes both harder to diagnose.
+This is now the better second job, and it is a different kind of work from
+chasing the corruption -- so it is a reasonable thing to pick up when the
+statistics above need hours of unattended running anyway.
+
+`ecm.pas` proves the protocol on hardware. What it does not do is run inside
+an interrupt: `USBPKT` polls the chip from INT 08h, in assembler, with a
+budget measured in microseconds, and every Pascal convenience in `ecm.pas`
+is unavailable there. The receive half is the easy direction -- ECM carries
+**raw frames with no header, trailer, entry array or tiling**, so the entire
+AX88179 burst parser and every counter that exists to police it simply have
+no counterpart. The transmit half needs the NAK retry that `bulk_out`
+already has, plus the zero-length terminating packet.
+
+A useful property: the two back-ends can be chosen at load time from what
+the descriptors say, which is what `NETID` already reads. Nothing needs to
+be decided by the user.
+
+### 4. Only then, a third chipset
+
+`ADAPTERS.md` has the survey: AX88772, then RTL8152/8153. Not before the
+corruption is understood -- a second vendor bring-up on top of an unexplained
+receive fault makes both harder to diagnose. Note ECM does not carry this
+caveat, because it was written to a published spec rather than reverse
+engineered, and its proof was a round trip rather than a byte count.
 
 ## Tools
 
@@ -172,6 +217,8 @@ top of an unexplained receive fault makes both harder to diagnose.
 | `mkramp.py` | generates every fixture, byte-identically |
 | `mkblast.py` | the Windows sender for `USBVFY` |
 | `USBLINK /V` | bring-up narrated, chip status at every register access |
+| `ECMLINK` | CDC-ECM: discover, bring up, print what was READ, then ARP a host and require **that host's** reply. `ECMLINK [@260] [our-ip] [target-ip]` |
+| `build.cmd ecm` | unload `USBPKT`, then run `ECMLINK` on the DOS machine |
 | `TICKCHK` | INT 08h and 1Ch rates -- tells you if the PIT is disturbed |
 
 **`mkblast.py --corrupt-every N`** plants the real fault's signature -- 4
@@ -198,6 +245,26 @@ count before believing a null.
 **Do not treat a small clean control as an exclusion.** 15 MB of clean
 NE2000 was called an exoneration of mTCP; it was a 71% outcome. It took 165
 MB to exclude them properly.
+
+**`BusUp` leaves the chip retrying NAKs, and you must put it back.**
+`ch375.pas` issues `SetRetry($8F)` while enumerating -- right there, because a
+device still waking up should be waited for. It is exactly wrong afterwards:
+on a data endpoint a NAK means "busy, ask again", and a chip told to retry it
+in hardware raises **no interrupt at all**, so every transfer reports `no
+interrupt` and a busy endpoint is indistinguishable from a dead one.
+`ax179.pas` and `usbpoll.pas` both do `SetRetry($00)` after bring-up;
+`ecm.pas` did not, and its first hardware run sent one frame and then failed
+every transfer and all forty receive polls. Retry NAKs in software, the way
+`usbpkt.asm`'s `bulk_out` does.
+
+**And a chip left on 8F wedges the NEXT program.** It is still grinding on a
+transaction after your own wait expired, so it does not answer `CHECK_EXIST`
+-- and the next tool prints a completely convincing `No CH375 at 0260h` for a
+card that is plainly fitted. Two runs were lost to that before the cause was
+obvious. Put the retry policy back from an **exit hook**, not from a line at
+the end of `main`: the paths that need it most are the ones that `Halt`
+early. `ECMLINK` also resets and re-asks rather than believing the first
+failed `CHECK_EXIST`, which is worth copying.
 
 **`doscap` first when the box goes quiet.** A long job makes `dosctl status`
 say STALE, which is not a fault. And a job that runs but returns **zero

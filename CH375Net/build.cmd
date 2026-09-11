@@ -11,6 +11,10 @@ REM    build.cmd recv       ...then watch frames arrive, promiscuous
 REM    build.cmd raw        ...then watch them without interpreting the
 REM                         buffer at all, hex only
 REM    build.cmd send       ...then ARP the router and wait to be answered
+REM    build.cmd ecm        ...then bring the adapter up as CDC-ECM and prove
+REM                         it can TRANSMIT, by ARPing a host and being
+REM                         answered.  Nothing in it is specific to the
+REM                         adapter it was written against
 REM
 REM  NEEDS
 REM    fpc    Free Pascal cross-compiling to MS-DOS real mode (-Tmsdos -Pi8086)
@@ -21,7 +25,8 @@ REM  files are compiled into THIS project's bin\, so the projects share
 REM  source and never a compiled unit.
 REM
 REM  Every target that runs something on the DOS machine needs DOSBridge to
-REM  reach it -- set DOSBRIDGE if it is not in C:\dosbridge.
+REM  reach it -- set DOSBRIDGE if it is not in C:\dosbridge.  USBGET and
+REM  USBVFY also COMPILE against it, for its Net and Tftp units.
 REM      https://github.com/jdredd87/DOSBridge
 
 setlocal
@@ -39,9 +44,19 @@ echo --- USBPKT.COM
 nasm -f bin -Isrc\ src\usbpkt.asm -o bin\USBPKT.COM
 if errorlevel 1 goto failed
 
-for %%T in (netid usblink usbrecv usbsend pktscan pkttest pkttick rampchk) do (
+for %%T in (netid usblink usbrecv usbsend pktscan pkttest pkttick rampchk ecmlink) do (
   echo --- %%T
   fpc -Tmsdos -Pi8086 -WmLarge -Fu"%TOOLS%" -FEbin -FUbin src\%%T.pas >nul
+  if errorlevel 1 goto failed
+)
+
+REM  USBGET and USBVFY drive the PACKET DRIVER rather than the CH375, so
+REM  they link DOSBridge's own Net and Tftp units and need a second -Fu.
+REM  They are the instruments the corruption hunt was measured with, not
+REM  part of the adapter driver, which is why they build separately.
+for %%T in (usbget usbvfy) do (
+  echo --- %%T
+  fpc -Tmsdos -Pi8086 -WmLarge -Fu"%TOOLS%" -Fu"%DOSBRIDGE%\starter" -FEbin -FUbin src\%%T.pas >nul
   if errorlevel 1 goto failed
 )
 if exist bin\*.a   del /q bin\*.a
@@ -58,6 +73,7 @@ if /I "%1"=="giga"  goto rungiga
 if /I "%1"=="recv"  goto runrecv
 if /I "%1"=="raw"   goto runraw
 if /I "%1"=="send"  goto runsend
+if /I "%1"=="ecm"   goto runecm
 echo Built.  "build.cmd probe" brings the adapter up on the DOS machine.
 exit /b 0
 
@@ -78,6 +94,13 @@ python "%DOSBRIDGE%\dosctl.py" run bin\USBRECV.EXE /A /S=20 /N=3 /X /R
 exit /b %ERRORLEVEL%
 :runsend
 python "%DOSBRIDGE%\dosctl.py" run bin\USBSEND.EXE
+exit /b %ERRORLEVEL%
+:runecm
+REM  USBPKT owns the CH375 through a timer hook while it is loaded, so it has
+REM  to be out of the way first -- two programs driving one chip is not a race
+REM  anybody wins.  /U is harmless if it was never loaded.
+python "%DOSBRIDGE%\dosctl.py" exec "C:\CH375\USBPKT.COM /U"
+python "%DOSBRIDGE%\dosctl.py" run bin\ECMLINK.EXE
 exit /b %ERRORLEVEL%
 
 :failed

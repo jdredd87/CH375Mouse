@@ -46,6 +46,7 @@ SUPPORTED.
 | | |
 |---|---|
 | **Works** | driven, on hardware, by this project |
+| **Works (class)** | driven by `ecm.pas`, which reads the device's own descriptors rather than knowing the chip. Any adapter offering CDC-ECM should land here |
 | **Should work** | same register map as something that works, not yet tried |
 | **Needs a driver** | understood part, no bring-up written for it yet |
 | **Unlikely** | needs more than the CH375 can give it |
@@ -56,6 +57,7 @@ SUPPORTED.
 
 | Chip | USB ID | Notes |
 |---|---|---|
+| ASIX AX88179A **over CDC-ECM** | `0B95:1790`, `iProduct` "AX88179A" | Works, and **only** through `ecm.pas` -- the vendor path enumerates it and cannot transmit through it. Verified on hardware 2026-09-10: `ECMLINK` discovered configuration 3, control interface 0, data interface 1 alt 1, bulk endpoints 2 IN / 3 OUT, read MAC `A0:CE:C8:BC:0A:91` out of the string descriptor, sent an ARP request and was answered by the host it asked about. Sold as a **USB-C** adapter, model `UTC-GE-AL-AX01`, used here through a USB-C-to-A adapter. See below for how thoroughly its USB ID lies about it. |
 | ASIX AX88179 | `0B95:1790` | The reference part. Verified on **two physically different adapters** from different manufacturers — MACs `40:AE:30:6D:00:34` and `00:50:B6:B6:1C:64`. Both boot, link, and move data. **They do NOT move 5 MB byte-exact reliably**, which this row used to claim: about one 5 MB download in nine comes back the right length with a corrupt region, and every error counter reads zero while it happens. See the README. The claim was true of the runs it was written from and was never a property of the adapter. |
 
 ## Before you plug a new one in
@@ -136,18 +138,39 @@ Every register access reports NAK in that case and the MAC read "fails",
 which looks like a dead device and is an artifact of re-initialising one
 that is already configured. Power cycle first, or believe the boot banner.
 
-### The opportunity in it
+### The opportunity in it -- taken, and it worked
 
 This part offers **CDC-ECM as configuration 3 and CDC-NCM as configuration
-2**. `NEXT.md` already ranks CDC-ECM as the most valuable driver to write,
-because it is a *class* driver -- one bring-up covering many adapters from
-many vendors rather than one vendor bring-up each. Here is a device that
-speaks it, already on the bench, whose vendor path does not work.
+2**. CDC-ECM is a *class*: one bring-up covering many adapters from many
+vendors rather than one vendor bring-up each. So rather than chase the
+179A's vendor quirks, `ecm.pas` was written to the spec and `ECMLINK` was
+pointed at this adapter.
 
-That makes ECM the obvious next piece of work rather than chasing the 179A's
-vendor quirks: standard, documented, and it would take this adapter from
-"enumerates but cannot transmit" to working while also covering parts nobody
-here has bought yet.
+**It transmits.** Verified on hardware 2026-09-10, and reproduced on four
+consecutive runs:
+
+```
+ECM found, and every one of these was READ, not assumed:
+  configuration  : 3
+  control iface  : 0
+  data iface     : 1  alt 1
+  bulk in / out  : 2 / 3
+  interrupt in   : 1
+  max segment    : 1514
+MAC      : A0:CE:C8:BC:0A:91
+ARP      : who has 192.168.50.46?  tell 192.168.50.222
+           REPLY from 192.168.50.46  is at EC:8E:B5:7A:2C:F5
+link     : UP, now that the PHY has settled
+```
+
+So the adapter is not broken and the silicon is not at fault -- what does
+not work is this project's **vendor** bring-up for a part that shares the
+179's USB ID and evidently not all of its behaviour. Through the class
+driver it does the one thing it could never do before.
+
+The vendor path is left as it is. Making it transmit would benefit exactly
+one adapter; `ecm.pas` already covers this one and every other ECM device
+nobody here has bought yet.
 
 ## Should work
 
@@ -172,7 +195,7 @@ below.
 | Realtek RTL8153 | `0BDA:8153` | Gigabit sibling of the 8152, falls back to USB 2.0. |
 | Microchip/SMSC LAN9500 | `0424:9500`, `0424:EC00` | 100 Mbit, used in older Raspberry Pi boards among others. |
 | Davicom DM9601 | `0A46:9601` | 100 Mbit, cheap and old, seen in very inexpensive dongles. |
-| CDC-ECM / CDC-NCM (class) | any | A *standard* rather than a chip: several adapters expose it, and a class driver would cover all of them at once. Arguably better value than any single chip. NCM is the harder of the two. |
+| CDC-NCM (class) | any | The harder of the two class protocols: frames are batched into NTBs with a header and an index, so it needs a parser where ECM needs none. Worth having only if something turns up that offers NCM and not ECM -- most devices offering one offer both. |
 
 ## Unlikely
 
