@@ -280,9 +280,9 @@ tool here accepts `-K` as well; `cmd` and PowerShell pass either form.
    tracking dirty rows would make it a usable terminal.
 2. **Derive timings from the EDID** rather than a built-in table, so any
    monitor's preferred mode is used when it fits inside both caps.
-3. **`DLTEST` still carries its own timings table** from before `dl.pas`
-   existed, so it has four modes where everything else has five, and it
-   misses the inlined packet writer's 4×. It should use the unit.
+3. **A second DisplayLink adapter.** Everything here is measured on one
+   `17E9:0058`. The capability descriptor is read rather than assumed, so
+   another should work, but that is a prediction and not a result.
 4. **A 486 would change which half is the bottleneck.** The cube is
    CPU-bound here and everything else is transfer-bound; on a faster CPU
    the cube would join the others, and only then would `REP OUTSB` or a
