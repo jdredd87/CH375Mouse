@@ -1,5 +1,5 @@
 program dlfract;
-{ DLFRACT -- compute a Mandelbrot set on the V30 and display it over USB.
+{ DLFRACT -- compute a Mandelbrot set in fixed point and show it over USB.
   CH375Video, StevenC.  Public domain (the Unlicense).
 
     DLFRACT [/P=260] [/M=n] [/W=n] [/I=n] [/S=secs] [/R]
@@ -15,7 +15,7 @@ program dlfract;
 
   WHY THIS IS HERE, AND WHAT IT MEASURES
 
-  Every other tool in CH375Video is transfer-bound: the V30 has nothing
+  Every other tool in CH375Video is transfer-bound: the CPU has nothing
   much to do and the USB path is the whole cost. This one inverts that
   deliberately, and then TIMES BOTH HALVES SEPARATELY so the claim is
   measured rather than asserted.
@@ -216,7 +216,7 @@ var
   B0:          LongInt;
 
 begin
-  Banner('DLFRACT', VER, 'a Mandelbrot computed on an 8086, shown over USB');
+  Banner('DLFRACT', VER, 'a Mandelbrot in fixed point, shown over USB');
 
   for I := 1 to ParamCount do
   begin

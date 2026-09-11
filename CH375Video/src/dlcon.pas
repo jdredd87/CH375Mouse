@@ -1,5 +1,5 @@
 program dlcon;
-{ DLCON -- a text console on a DisplayLink adapter, from an 8086.
+{ DLCON -- a text console on a DisplayLink adapter, from real-mode DOS.
   CH375Video, StevenC.  Public domain (the Unlicense).
 
     DLCON [/P=260] [/M=n] [/F=file] [/T=text] [/S=secs] [/C=hex] [/B=hex]
@@ -217,7 +217,7 @@ begin
   AddLine('   ==================================================');
   AddLine('');
   AddLine('   A text console on a USB-to-VGA adapter, driven by');
-  AddLine('   an NEC V30 running MS-DOS 6.22 through a CH375.');
+  AddLine('   a real-mode DOS machine through a CH375 host card.');
   AddLine('');
   AddLine('   There is no display class in USB, so none of this');
   AddLine('   is generic: the adapter is a DisplayLink part and');
@@ -269,7 +269,7 @@ var
   B0:     LongInt;
 
 begin
-  Banner('DLCON', VER, 'a text console over USB from an 8086');
+  Banner('DLCON', VER, 'a text console over USB');
   FileArg := '';
 
   for I := 1 to ParamCount do

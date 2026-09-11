@@ -80,7 +80,7 @@ const
     800x600 quite happily, so those stay the dependable choices; 848x480
     is the one worth trying for a native-aspect picture. DLPROBE's
     intersection will say whether a given monitor lists it. }
-  NDLMODES = 7;
+  NDLMODES = 9;
   DlModes: array[0..NDLMODES - 1] of TDlTiming = (
     (Name: '640x480@60';  XRes: 640; YRes: 480;
      LeftM: 48;  RightM: 16; HSync: 96;
@@ -121,9 +121,32 @@ const
       and not ours. Try it and look.
 
       The prize if it syncs is 64,000 pixels against 307,200. }
-    (Name: '320x200@70 (low res)'; XRes: 320; YRes: 200;
+    (Name: '320x200@70 padded'; XRes: 320; YRes: 200;
      LeftM: 24;  RightM: 8;   HSync: 48;
-     UpperM: 137; LowerM: 110; VSync: 2;  PixClk: 79542));
+     UpperM: 137; LowerM: 110; VSync: 2;  PixClk: 79542),
+
+    { 320x240@60 -- VGA's 640x480 timings halved in BOTH axes, which is
+      the principled way to do this and the one that actually looks right.
+
+      The padded mode above carries 200 picture lines in a 449-line frame,
+      so 55% of every frame is blanking and the display letterboxes the
+      result into a band. Here the frame is 262 lines for 240 of picture:
+      92% of it is the image, the aspect is 4:3, and it fills the screen.
+
+      The cost is hsync. 400 x 262 x 60 is 15.7 kHz, which is CGA/TV
+      territory -- fine for a capture card (this one says 14-76 kHz) or a
+      multisync CRT, and REFUSED by most LCD panels, which want 30 kHz and
+      up. That is the whole trade: the padded mode syncs anywhere and
+      looks poor, this one looks right and syncs in fewer places. }
+    (Name: '320x240@60 (half VGA)'; XRes: 320; YRes: 240;
+     LeftM: 24;  RightM: 8;  HSync: 48;
+     UpperM: 17; LowerM: 3;  VSync: 2;  PixClk: 159033),
+
+    { 400x300@60 -- 800x600 halved, same idea, a little more detail.
+      528 x 314 x 60 is 18.9 kHz of hsync. }
+    (Name: '400x300@60 (half SVGA)'; XRes: 400; YRes: 300;
+     LeftM: 44;  RightM: 20; HSync: 64;
+     UpperM: 11; LowerM: 1;  VSync: 2;  PixClk: 100502));
 
 var
   DlEpBulk:  Byte = 0;
@@ -222,9 +245,9 @@ end;
   procedure call on this machine at 46,501 a second. 64 x 3 of them is
   about 4 ms spent before a single byte reaches a port.
 
-  Deliberately NOT using REP OUTSB. That is an 80186 instruction which
-  this V30 has and a plain 8086 does not, so it would need a run-time gate
-  and an 8086 fallback kept working beside it -- and the portable loop
+  Deliberately NOT using REP OUTSB. That is an 80186 instruction which a
+  plain 8086 does not have, so it would need a run-time CPU gate and an
+  8086 fallback kept working beside it -- and the portable loop
   below already collapses the per-byte cost from three calls to three
   instructions. CLAUDE.md's rule applies: do not write a gated fast path
   when the gate costs more to maintain than the win buys. One path, runs

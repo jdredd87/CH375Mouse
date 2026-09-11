@@ -24,7 +24,7 @@ program dltest;
 
   A job's stdout is redirected into C:\WORK\OUT.TXT and reaches nobody
   until the job has finished, so a prompt written there would be read some
-  minutes after the moment it was asking about.  DOS 6.22 cannot redirect
+  minutes after the moment it was asking about.  DOS cannot redirect
   handle 2 at all -- normally a nuisance in this project -- so stderr lands
   on the machine's real screen, which is exactly where somebody watching it
   is looking.  The prompt and the verdict go there; the narration goes to
@@ -83,8 +83,8 @@ begin
 end;
 
 { Everything that waits is measured against the BIOS tick counter at
-  18.2 Hz, never a spin count -- a spin loop calibrated on this V30 means
-  nothing on any other machine, and a wait that cannot expire is how a job
+  18.2 Hz, never a spin count -- a spin loop calibrated on one machine means
+  nothing on any other, and a wait that cannot expire is how a job
   turns into a hang that needs hands on the keyboard. }
 procedure WaitTicks(N: LongInt);
 var T0: LongInt;

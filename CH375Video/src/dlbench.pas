@@ -1,5 +1,5 @@
 program dlbench;
-{ DLBENCH -- how fast can an 8086 push pixels at a DisplayLink adapter?
+{ DLBENCH -- how fast can a DOS machine push pixels at a DisplayLink adapter?
   CH375Video, StevenC.  Public domain (the Unlicense).
 
     DLBENCH [/P=260] [/M=n] [/R=reps] [/O]
@@ -21,7 +21,7 @@ program dlbench;
   interrupt. If that round trip dominates, throughput is set by the
   transaction RATE and nothing else, and the only useful optimisation is
   to send fewer bytes. If instead the payload copy dominates, then a
-  faster byte move -- REP OUTSB on this V30 -- is worth having.
+  faster byte move -- REP OUTSB, where the CPU has it -- is worth having.
 
   CH375Net already measured the same shape on the Ethernet path and found
   it round-trip bound: inlining REP INSB there "moved 1 MB by 2 seconds in

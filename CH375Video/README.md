@@ -1,6 +1,7 @@
 # CH375Video — USB display adapters over a CH375
 
-An 8086 with a CH375 USB host card, driving a USB-to-VGA adapter.
+A real-mode DOS machine with a CH375 USB host card, driving a
+USB-to-VGA adapter.
 
 **It works, and it moves.** A DisplayLink adapter is identified from its
 own descriptors, a video mode is set, and pixels appear — a text console,
@@ -19,9 +20,10 @@ output, taken through a capture card.
 | `DLBENCH` | measure throughput, so optimisation is aimed rather than guessed |
 | `DLDEMO` | moving graphics: `balls`, `stars`, `cube`, `bars`, `raster` |
 | `DLCON` | a text console, which is what this hardware is actually good at |
-| `DLFRACT` | a Mandelbrot computed on the V30 — the one COMPUTE-bound tool |
+| `DLFRACT` | a Mandelbrot in fixed point — the one COMPUTE-bound tool |
+| `DLIMG` | load a BMP from disk and scale it to fit any mode |
 
-`build.cmd` builds all six. `build.cmd probe` runs `DLPROBE` on the DOS
+`build.cmd` builds all seven. `build.cmd probe` runs `DLPROBE` on the DOS
 box; `build.cmd read` runs it with `/K` so nothing is written at all.
 
 ## Why this is a different problem from CH375Net
@@ -179,9 +181,8 @@ Inlining the packet write into one assembler block:
 
 ### What was deliberately *not* done
 
-**`REP OUTSB`.** It is an 80186 instruction this V30 has and a plain 8086
-does not, so it needs a run-time gate with an 8086 fallback kept working
-beside it. At 3.4 ms/packet the byte loop is now ~0.3 ms, so it is worth
+**`REP OUTSB`.** It is an 80186 instruction that a plain 8086 lacks, so it
+needs a run-time CPU gate with an 8086 fallback kept working beside it. At 3.4 ms/packet the byte loop is now ~0.3 ms, so it is worth
 about 6%. `CLAUDE.md`'s rule applies: do not write a gated fast path when
 the gate costs more than the win buys. One path, runs everywhere, and it
 will still be right on a 486.
@@ -328,10 +329,22 @@ into a 400-line frame. There is no line doubler here, so the frame is
 padded instead: 200 active lines inside a 449-line total, keeping hsync at
 31.5 kHz. The monitor centres the result and letterboxes it.
 
-![320x200 raster bars](doc/lowres320.png)
+![Low-resolution raster bars](doc/lowres320.png)
 
-*Full-screen raster bars at 320×200 — **4.5 fps**, letterboxed because the
-frame is padded to 449 lines to keep hsync in range.*
+*Full-screen raster bars in a low-res mode — fast, and visibly not right.*
+
+**Be warned: low-res modes here work but do not look good**, and that is
+a real limitation rather than a glitch. The padded 320×200 carries 200
+picture lines in a 449-line frame, so 55% of every frame is blanking and
+the display letterboxes it into a band. A properly proportioned
+`320x240@60` (VGA's timings halved, 92% picture) needs **15.7 kHz** of
+hsync — fine on paper, and this capture card mis-locks on it and squeezes
+the image into the top half.
+
+So both low-res options are display-dependent and neither renders cleanly
+on the hardware here. They are kept because the speed is real and some
+displays will take them; `640x400@70` is the standard, un-padded
+alternative that always looks right.
 
 The controlled comparison is the useful part, because only one row moves:
 
@@ -425,6 +438,69 @@ wall clock, and only one of those two costs is visible in a byte counter.
 
 This is the same effect behind the text console's 11.7 s and the 43 s for
 a screen of literal pixels. `DLBENCH` test 6 measures it.
+
+## Loading an image, and scaling it to fit
+
+`DLIMG` reads a `.BMP` — 4, 8, 24 or 32 bpp, uncompressed — and scales it
+to whatever mode is selected.
+
+![SMPTE bars scaled to fit](doc/scale.png)
+
+*A 320×180 (16:9) source in a 640×480 mode: drawn 640×**360**, aspect
+kept, letterboxed. A 1366×768 source is the same ratio and behaves
+identically.*
+
+| `/F=` | 16:9 source into 640×480 | |
+|---|---|---|
+| `fit` | 640×360 | aspect kept, letterboxed (default) |
+| `fill` | 853×480 | aspect kept, cropped 106 px each side |
+| `one` | 320×180 | no scaling, centred |
+
+![A photo-like image](doc/image.png)
+
+*A 400×300 24-bit BMP scaled up to 640×480.*
+
+Cost depends entirely on content, which is the encoder's character
+showing through again: the SMPTE bars above are flat vertical columns and
+cost **19,840 bytes**; the Mandelbrot is 400×300 of detail and costs
+**135,744**.
+
+**The image is never held in memory.** A 640×480 24-bit BMP is 921,600
+bytes against ~514 KB of heap, and the framebuffer it is going to is
+614,400 — neither fits. So the file is read one source row at a time, in
+the order the destination needs it: seek, read, scale across, send.
+Memory is one source row plus one destination row whatever the picture's
+size. That is also why the scaler is nearest-neighbour — with only the
+current row in hand there is nothing to interpolate vertically against.
+
+**BMP rows run bottom-up**, which is the trap in the format: a positive
+`biHeight` means the first row in the file is the *bottom* of the picture.
+An upside-down photograph is a very visible bug that no counter reports.
+Both orders are handled.
+
+### The 32-bit arithmetic trap, again
+
+The first version took **207 seconds** for a full screen, of which only 7
+were transfer. The scaling loop computed `(X * SrcW) div DW` per pixel —
+a 32-bit multiply *and* divide, 307,200 times, at `BENCH`'s 10,920/s and
+7,280/s. That is about 70 seconds of arithmetic on its own.
+
+Precomputing the column map once per picture took it to **58.7 s with the
+bytes unchanged**, which is the same signature as the cube and Life: when
+a change moves the clock and not the byte count, it was never the wire.
+`CLAUDE.md` records 32-bit arithmetic costing 5–8× its 16-bit equivalent
+on this toolchain; this is the third time that has been the answer.
+
+### Why not PNG or JPEG
+
+**PNG is feasible and not yet done.** It needs a Deflate decoder —
+Huffman plus a 32 KB sliding window — which is a few hundred lines and
+decodes top-down sequentially, suiting this design. Worth doing.
+
+**JPEG is not worth it.** Huffman, dequantise, an IDCT per 8×8 block,
+chroma upsampling and a colour-space conversion, with no coprocessor on
+the machine. A single photo would take minutes. PCX would be the cheap
+next format: its RLE is a dozen lines.
 
 ## Traps, all of them paid for here
 

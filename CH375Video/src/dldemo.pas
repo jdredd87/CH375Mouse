@@ -1,5 +1,5 @@
 program dldemo;
-{ DLDEMO -- moving graphics on a DisplayLink adapter, from an 8086.
+{ DLDEMO -- moving graphics on a DisplayLink adapter, from real-mode DOS.
   CH375Video, StevenC.  Public domain (the Unlicense).
 
     DLDEMO [/P=260] [/M=n] [/D=name] [/S=secs] [/C]
@@ -39,11 +39,11 @@ program dldemo;
   holds on the 486 this is eventually meant for -- it would raise the
   frame rate not at all until the adapter got faster.
 
-  NOR ANY V30 TRICK, for the same measured reason. REP OUTSB is an 80186
-  instruction this CPU has, and DLBENCH says the byte loop is now about
-  0.3 ms of a 3.4 ms packet -- so it is worth ~6% and costs a run-time CPU
-  gate with an 8086 fallback beside it. The inlined portable loop in dl.pas
-  already took the 4x.
+  NOR ANY 186-CLASS TRICK, for the same measured reason. REP OUTSB is an
+  80186 instruction that a plain 8086 lacks, and DLBENCH says the byte loop
+  is now about 0.3 ms of a 3.4 ms packet -- so it is worth ~6% and costs a
+  run-time CPU gate with an 8086 fallback beside it. The inlined portable
+  loop in dl.pas already took the 4x.
 
   Exit codes: 0 ok, otherwise the DlOpen reason (all <= 20) }
 
@@ -626,7 +626,7 @@ var
   Deadline: LongInt;
 
 begin
-  Banner('DLDEMO', VER, 'moving graphics over USB from an 8086');
+  Banner('DLDEMO', VER, 'moving graphics over USB');
   Which := 'balls';
 
   for I := 1 to ParamCount do

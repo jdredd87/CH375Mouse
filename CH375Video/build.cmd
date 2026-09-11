@@ -16,7 +16,8 @@ REM    build.cmd lowres     ...then the same at 320x200, which is the only
 REM                         demo low resolution actually speeds up
 REM    build.cmd con        ...then the text console demonstration page
 REM    build.cmd life       ...then Conway's Life, which sends a delta
-REM    build.cmd fract      ...then a Mandelbrot computed on the V30
+REM    build.cmd fract      ...then a Mandelbrot in fixed point
+REM    build.cmd img        ...then C:\WORK\TEST.BMP scaled to fit
 REM    build.cmd trace      ...then probe it narrating every control stage
 REM
 REM  NEEDS
@@ -41,7 +42,7 @@ if "%DOSBRIDGE%"=="" set DOSBRIDGE=C:\dosbridge
 set TOOLS=%~dp0..\CH375USBTOOLS\src
 if not exist bin mkdir bin
 
-for %%T in (dlprobe dltest dlbench dldemo dlcon dlfract) do (
+for %%T in (dlprobe dltest dlbench dldemo dlcon dlfract dlimg) do (
   echo --- %%T
   fpc -Tmsdos -Pi8086 -WmLarge -Fu"%TOOLS%" -FEbin -FUbin src\%%T.pas >nul
   if errorlevel 1 goto failed
@@ -66,6 +67,7 @@ if /I "%1"=="raster" goto runraster
 if /I "%1"=="lowres" goto runlowres
 if /I "%1"=="con"   goto runcon
 if /I "%1"=="fract" goto runfract
+if /I "%1"=="img"   goto runimg
 if /I "%1"=="life"  goto runlife
 echo Built.  "build.cmd probe" identifies whatever is plugged in.
 exit /b 0
@@ -128,6 +130,13 @@ REM  The only demo that sends a DELTA rather than a picture, so its cost
 REM  is the CHANGE and not the screen.
 :runlife
 python "%DOSBRIDGE%\dosctl.py" run --timeout 250 bin\DLDEMO.EXE -D=life -S=25
+exit /b %ERRORLEVEL%
+
+REM  Needs a BMP on the DOS box first:
+REM     dosdeploy PICTURE.BMP C:\WORK
+REM  Keep it small -- a 3 MB file wedged the transport.
+:runimg
+python "%DOSBRIDGE%\dosctl.py" run --timeout 400 bin\DLIMG.EXE C:\WORK\TEST.BMP -S=8
 exit /b %ERRORLEVEL%
 
 :runfract
