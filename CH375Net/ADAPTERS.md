@@ -87,7 +87,15 @@ control is the mistake this project has made most often.
 ## Tried, and it is NOT what its ID says
 
 **ASIX AX88179A** -- `0B95:1790`, the *same USB ID as the AX88179*, and the
-only thing in the descriptors that distinguishes them is the product string:
+only thing in the descriptors that distinguishes them is the product string.
+
+Marked **`UTC-GE-AL-AX01`** on the case: a USB-C gigabit adapter, used here
+through a USB-C-to-A adapter. Worth recording because the marking is the
+only warning you get before plugging it in -- the USB ID does not
+distinguish it, and a listing saying "AX88179 chipset" would be telling the
+truth as far as the ID goes.
+
+The descriptors:
 
 ```
 idVendor   0B95  ASIX
