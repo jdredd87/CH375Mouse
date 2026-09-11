@@ -180,8 +180,22 @@ period has no blind spot the way a 256-byte ramp does.
 ### 1b. DONE: mTCP runs over CDC-ECM
 
 Verified on hardware. `AUTOEXEC.BAT`'s own `USBPKT` came up on the class
-path unattended after a power cycle, `PING` got 4 of 4, and a 1 MB `HTGET`
-came back byte-exact (CRC-32 `04D0E435`). CHANGELOG has the detail.
+path unattended after a power cycle, survived a warm reboot still on ECM,
+`PING` got 4 of 4, and 1 MB, 5 MB and 10 MB `HTGET`s all came back with
+**zero** mismatches at 23-24 KB/s. CHANGELOG has the detail.
+
+**Two things left open on it, both written up in CHANGELOG:**
+
+* **16 MB clean is a 70% outcome, not an exclusion.** If the class path
+  shared the vendor path's 1-event-per-44-MB fault, 16 MB clean is exactly
+  what you would expect to see anyway. About **130 MB** is needed before a
+  clean sweep means anything -- roughly 90 minutes unattended, and the
+  obvious thing to leave running.
+* **`longest poll` reads 54.7 ms**, a whole tick at `/R=1`, where the
+  vendor path was tuned down to 22. An ECM frame is 24 separate 64-byte
+  transactions and a mid-frame pause is waited out on a budget sized for a
+  burst protocol. Nothing has broken because of it, but bound that wait
+  before anyone raises the timer rate.
 
 **How to re-test it, because the order matters:**
 

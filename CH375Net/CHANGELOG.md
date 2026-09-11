@@ -102,23 +102,70 @@ from endpoint numbers read out of the descriptors.
 | `PING 192.168.50.46` | **4 of 4 replies**, average 51.4 ms |
 | `HTGET .../download/1mb` | **1,048,576 bytes, CRC-32 `04D0E435`** -- exactly the expected value |
 | `HTGET .../download/5mb` | **5,242,880 bytes in 214.3 s, 0 mismatches** -- `RAMPCHK`: "exactly the ramp" |
+| `HTGET .../download/10mb` | **10,485,760 bytes in 450.3 s, 0 mismatches** |
 
-The last two rows are what matter: full TCP downloads, byte-perfect, over a
-driver that gets its entire configuration from the device.
+The last three rows are what matter: full TCP downloads, byte-perfect, over
+a driver that gets its entire configuration from the device.
 
-**24.5 KB/s**, against 11.4 KB/s recorded for the vendor path. Do not read
+**23-24 KB/s**, against 11.4 KB/s recorded for the vendor path. Do not read
 that as "the class path is twice as fast" -- the two numbers come from
 different adapters on different days, and this one has had no tuning at all.
 It is worth knowing only because it rules out the obvious worry, that
 carrying one frame per USB transfer instead of a batched burst would be
 ruinous. It is not.
 
-**And the clean 5 MB says nothing about the corruption fault.** The vendor
-path loses about one download in nine at this size; a single clean run is
-therefore an ~89% outcome even if the class path shared the fault exactly.
-This is the trap NEXT.md already warns about, and one run is not a result.
-Whether ECM is free of it is open and would need the same tens of megabytes
-the vendor path needed.
+Also worth knowing: the 5 MB and 10 MB runs came out at 24.5 and 23.3 KB/s,
+so the rate does not decay with transfer length -- which is the shape a
+leak, a growing buffer or a degrading toggle would have.
+
+### 16 MB clean is NOT an exclusion, and here is the arithmetic
+
+Sixteen megabytes have now crossed this path with zero corrupted bytes. That
+sounds like a lot and is not enough to conclude anything.
+
+The vendor path's fault rate is **1 event per 44 MB**. If the class path
+shared it exactly, the chance of 16 MB coming back clean is
+
+```
+P(0 events) = e^-(16/44) = 0.70
+```
+
+**Seventy percent.** So this outcome is what you would most likely see
+either way, and it distinguishes nothing. Reaching a 5% outcome -- the point
+at which a clean sweep would be real evidence -- needs about **130 MB**,
+which at 24 KB/s is around 90 minutes of unattended downloading.
+
+This is the trap NEXT.md warns about twice, and it has already caught this
+project once: 15 MB of clean NE2000 was written up as exonerating mTCP when
+it was a 71% outcome. Work the number out before believing a null.
+
+### The interrupt got long, and that was the one thing being tuned away
+
+`USBPKT /S` after the 10 MB run:
+
+```
+longest poll=65354 counts, 54.7 ms
+```
+
+At `/R=1` a tick is 55 ms, so a single poll consumed essentially a whole
+one. That is the opposite direction from the work that shortened this
+interrupt by a third, and it is the cost the class path pays: an ECM frame
+is one USB transfer per frame, so a 1514-byte frame is 24 separate 64-byte
+transactions, and a device that pauses part way through is waited out --
+`RX_NAKWAIT` is 200 mid-burst NAKs, and a bulk transfer only ends on a
+short packet.
+
+**Treat the number itself with suspicion.** 65354 is close enough to the
+16-bit counter's 65536 that it may be saturated rather than measured, in
+which case the true figure is that value *or more*. Either way it is long,
+and either way the fix is the same shape: bound the mid-frame wait for ECM
+the way `ecm.pas` bounds it, rather than inheriting a budget sized for a
+burst protocol.
+
+Nothing observed has actually broken because of it -- 10 MB came back
+byte-exact and the box stayed responsive throughout -- but the existing
+notes record `EDIT` being wedged by a long poll at `/R=8`, so anyone raising
+the timer rate on the class path should measure this first.
 
 **The link reading is what made the rest diagnosable**, and it was added
 because an earlier attempt read `bursts collected=0` with no way to tell a
