@@ -6,7 +6,8 @@ program dldemo;
 
       /P=hex   I/O base, default 260
       /M=dec   video mode index, default 0 (640x480@60)
-      /D=name  which demo: balls, stars, cube, bars.  Default balls
+      /D=name  which demo: balls, stars, cube, bars, raster.
+               Default balls
       /S=dec   seconds to run, default 20
       /C       clear to the background and stop, nothing animated
 
@@ -320,6 +321,103 @@ begin
   DemoBars := DlSend;
 end;
 
+{ FULL-SCREEN animation that is actually affordable, which on this path
+  means one where every scanline is a single colour.
+
+  A row of identical pixels is one RLE run whatever its width -- about ten
+  bytes for 256 pixels -- so a whole 480-line screen of horizontal bands
+  costs roughly 480 runs, not 307,200 pixels. That is the difference
+  between a full-screen effect at a usable rate and the 43 seconds a
+  screen of literal pixels takes.
+
+  This is the classic raster-bar effect for exactly that reason: it was
+  cheap on hardware that could change one colour per scanline, and it is
+  cheap here for the same shape of reason. Each bar is a vertical gradient
+  moved by a sine, and rows not covered by a bar are background. }
+function DemoRaster(Phase: Integer): Boolean;
+const
+  NBAR = 5;
+  BARW = 28;                       { half-height of a bar, in rows }
+var
+  Y, I, D, Lvl: Integer;
+  Amp, C:       LongInt;
+  Centre: array[0..NBAR - 1] of Integer;
+  Col: Word;
+  RunY: Integer;
+  RunCol: Word;
+begin
+  DemoRaster := False;
+  { LongInt on the product, and this is not defensive typing.  Sin4096
+    returns +/-4096 and the amplitude here is about 208, so the product
+    reaches 851,968 -- and Integer on this target is SIXTEEN BITS. Left as
+    Integer it wraps, Centre lands anywhere, and the run-builder below
+    then emits a different colour on nearly every row.
+
+    Clamped as well, because a bar centre outside the screen is a bug
+    whatever produced it, and a demo that quietly draws 480 separate runs
+    a frame is indistinguishable from one that is merely slow. }
+  Amp := LongInt(T.YRes div 2) - BARW - 4;
+  if Amp < 0 then Amp := 0;
+  for I := 0 to NBAR - 1 do
+  begin
+    C := LongInt(T.YRes div 2)
+         + (LongInt(Sin4096(Phase * 2 + I * 40)) * Amp) div 4096;
+    if C < 0 then C := 0;
+    if C > LongInt(T.YRes) - 1 then C := LongInt(T.YRes) - 1;
+    Centre[I] := Integer(C);
+  end;
+
+  { Walk the screen once, emitting a run only where the colour changes --
+    so a screen with five bars on it costs about eleven runs, not 480. }
+  RunY := 0;
+  RunCol := Bg;
+  for Y := 0 to T.YRes - 1 do
+  begin
+    Col := Bg;
+    for I := 0 to NBAR - 1 do
+    begin
+      D := Y - Centre[I];
+      if D < 0 then D := -D;
+      if D < BARW then
+      begin
+        { QUANTISED, and this is the whole point of the demo.
+
+          The first version made each bar a smooth gradient, so the colour
+          changed on nearly every row -- 280 rows of unique colour, one RLE
+          run each, 13,741 bytes a frame and 1.1 fps. A gradient is exactly
+          what defeats a run-length encoder, and "full-screen effect" did
+          not save it.
+
+          Stepping the level to 6 shades turns each bar back into a
+          handful of flat bands, which is what makes a whole 640x480 screen
+          cost tens of runs instead of hundreds. The picture barely
+          changes; the cost changes by an order of magnitude. }
+        Lvl := ((255 - (D * 255) div BARW) div 48) * 48;
+        case I mod 5 of
+          0: Col := DlRgb(Lvl, Lvl div 5, Lvl div 5);
+          1: Col := DlRgb(Lvl div 5, Lvl, Lvl div 5);
+          2: Col := DlRgb(Lvl div 5, Lvl div 4, Lvl);
+          3: Col := DlRgb(Lvl, Lvl, Lvl div 6);
+        else
+          Col := DlRgb(Lvl, Lvl div 3, Lvl);
+        end;
+      end;
+    end;
+    if Col <> RunCol then
+    begin
+      if Y > RunY then
+        if not DlFillRun(DlAddr(T, 0, Word(RunY)), RunCol,
+                         LongInt(Y - RunY) * T.XRes) then Exit;
+      RunY := Y;
+      RunCol := Col;
+    end;
+  end;
+  if T.YRes > RunY then
+    if not DlFillRun(DlAddr(T, 0, Word(RunY)), RunCol,
+                     LongInt(T.YRes - RunY) * T.XRes) then Exit;
+  DemoRaster := DlSend;
+end;
+
 { ------------------------------------------------------------------ main }
 
 procedure Usage;
@@ -331,6 +429,8 @@ begin
   WriteLn('    /D=stars   a scrolling starfield, one pixel each');
   WriteLn('    /D=cube    a rotating wireframe cube, integer maths');
   WriteLn('    /D=bars    sliding colour bars');
+  WriteLn('    /D=raster  FULL-SCREEN raster bars -- one run per band,');
+  WriteLn('               which is the effect this encoder is built for');
   WriteLn('    /C         clear the screen and stop');
   WriteLn('    /M=dec     mode, default 0:');
   for I := 0 to NDLMODES - 1 do
@@ -490,6 +590,11 @@ begin
     begin
       if not DemoBars(Ang) then begin Rc := 1; Break; end;
       Ang := (Ang + 7) mod (T.YRes - (T.YRes div 8));
+    end
+    else if Which = 'raster' then
+    begin
+      if not DemoRaster(Ang) then begin Rc := 1; Break; end;
+      Ang := (Ang + 3) and 255;
     end
     else
     begin

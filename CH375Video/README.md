@@ -201,6 +201,54 @@ problem. Three fixes took it to 1.7 —
 
 ![Sliding bars](doc/bars.png)
 
+## Low resolution, and the one thing it actually buys
+
+**A full-screen repaint costs about 12 KB at 640×480 no matter what is on
+it.** Each RLE command covers at most 256 pixels, so a screen is ~1,200
+commands whether it is one flat colour or a hundred bands. That caps *any*
+full-screen effect at roughly 1.5 fps, and no amount of making the content
+simpler will move it.
+
+So the lever is pixel count, and that is what low resolution is for.
+
+**320×200 syncs, and it is not obvious that it should.** Hsync is vtotal ×
+refresh, and a monitor wants at least 30 kHz; a genuine 320×200 frame has
+about 225 total lines, which at 70 Hz is 15.7 kHz — half the minimum. That
+is exactly why real VGA never sends 320×200 at all, but line-doubles it
+into a 400-line frame. There is no line doubler here, so the frame is
+padded instead: 200 active lines inside a 449-line total, keeping hsync at
+31.5 kHz. The monitor centres the result and letterboxes it.
+
+![320x200 raster bars](doc/lowres320.png)
+
+*Full-screen raster bars at 320×200 — **4.5 fps**, letterboxed because the
+frame is padded to 449 lines to keep hsync in range.*
+
+The controlled comparison is the useful part, because only one row moves:
+
+| demo | 640×480 | 320×200 | bound by |
+|---|---|---|---|
+| raster (full screen) | 1.3 fps | **4.5 fps** | pixel count |
+| balls (dirty rectangles) | 5.0 | 5.0 | sprite area — unchanged |
+| cube (render tile) | 1.7 | 1.7 | CPU — unchanged |
+
+**Low resolution helps full-screen effects and nothing else.** The sprite
+demo touches the same number of pixels whatever the mode, and the cube
+renders into a fixed 112² tile, so neither changes — which is what makes
+the raster row's 3.5× credible rather than just a number that got bigger.
+
+`640x400@70` is also there as a standard, un-padded alternative: a real
+VESA timing, a fifth fewer pixels than 640×480, and no letterboxing.
+
+### And a gradient defeats all of it
+
+The first raster demo drew each bar as a smooth gradient, so the colour
+changed on nearly every row — 280 unique rows, one run each, **13,741
+bytes a frame at 1.1 fps**. Quantising to six shades per bar barely
+changes the picture. It did not help much either (12,695 bytes), and that
+is what exposed the 256-pixel command cap as the real floor: the cost was
+never the number of colour changes, it was the number of pixels.
+
 ## Text, which is the case this hardware is good at
 
 A row of 8×16 glyphs is mostly paper, and the RLE command collapses a run

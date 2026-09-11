@@ -80,7 +80,7 @@ const
     800x600 quite happily, so those stay the dependable choices; 848x480
     is the one worth trying for a native-aspect picture. DLPROBE's
     intersection will say whether a given monitor lists it. }
-  NDLMODES = 5;
+  NDLMODES = 7;
   DlModes: array[0..NDLMODES - 1] of TDlTiming = (
     (Name: '640x480@60';  XRes: 640; YRes: 480;
      LeftM: 48;  RightM: 16; HSync: 96;
@@ -97,7 +97,33 @@ const
     { 16:9 at 33.75 MHz -- total 1088x517, which is 60.0 Hz exactly. }
     (Name: '848x480@60 (16:9)'; XRes: 848; YRes: 480;
      LeftM: 112; RightM: 16; HSync: 112;
-     UpperM: 23; LowerM: 6;  VSync: 8;  PixClk: 29630));
+     UpperM: 23; LowerM: 6;  VSync: 8;  PixClk: 29630),
+
+    { 640x400@70 -- the VGA text-mode frame, and a real VESA timing.
+      449 total lines at 70 Hz is 31.5 kHz of hsync, comfortably inside
+      every monitor's range.  A fifth fewer pixels than 640x480. }
+    (Name: '640x400@70'; XRes: 640; YRes: 400;
+     LeftM: 48;  RightM: 16;  HSync: 96;
+     UpperM: 35; LowerM: 12;  VSync: 2;  PixClk: 39721),
+
+    { 320x200@70 -- LOW RES, and the reason it looks odd on paper.
+
+      Hsync is vtotal x refresh, and a monitor wants at least 30 kHz. A
+      genuine 320x200 frame is about 225 total lines, which at 70 Hz is
+      15.7 kHz -- half the minimum. That is exactly why real VGA does not
+      send 320x200 at all: it line-doubles it into a 400-line frame.
+
+      There is no line doubler here, so the frame is padded instead: 200
+      active lines inside a 449-line total, which keeps hsync at 31.5 kHz
+      where the monitor wants it. The active picture is then less than
+      half the height of the frame, and what a display does with that --
+      centre it, stretch it, or letterbox it -- is the monitor's decision
+      and not ours. Try it and look.
+
+      The prize if it syncs is 64,000 pixels against 307,200. }
+    (Name: '320x200@70 (low res)'; XRes: 320; YRes: 200;
+     LeftM: 24;  RightM: 8;   HSync: 48;
+     UpperM: 137; LowerM: 110; VSync: 2;  PixClk: 79542));
 
 var
   DlEpBulk:  Byte = 0;
