@@ -89,8 +89,18 @@ C:\CH375> ECMLINK
 
 It brings the adapter up entirely from its own descriptors, then ARPs a host
 and requires that host's reply, so a successful run is proof of transmit and
-not merely of enumeration. `ECMLINK [@260] [our-ip] [target-ip]` overrides
-the I/O address and the two addresses it uses.
+not merely of enumeration.
+
+```
+ECMLINK [@260] [/M=our-ip] [/T=target-ip]
+```
+
+**Neither address is built in.** `our-ip` comes from `IPADDR` in whatever
+config `%MTCPCFG%` names -- the same place every mTCP tool looks -- and it
+says which file it used. `/M=` overrides that. The target has to be named
+with `/T=`; with no target it brings the adapter up, reports what it read,
+and says outright that transmit was **not** tested, rather than assuming an
+address and reporting a failure that means nothing.
 
 **`USBPKT` handles this by itself** -- it asks the device what it is before
 choosing a path, so an ECM adapter needs no special command. The banner says

@@ -4,7 +4,19 @@ program EcmLink;
 
   CH375Net, StevenC.  Public domain (the Unlicense).
 
-      ECMLINK [@260] [our-ip] [target-ip]
+      ECMLINK [@260] [/M=our-ip] [/T=target-ip]
+
+  NEITHER ADDRESS IS BUILT IN, and the first version of this got that
+  wrong: it carried this bench's own 192.168.50.222 and .46 as defaults,
+  so a copy built anywhere else would quietly ARP a stranger's network
+  and report a failure that meant nothing. `our-ip` now comes from
+  IPADDR in the config %MTCPCFG% names -- the same place every mTCP tool
+  looks, and the same thing arp.pas does -- and the target has to be
+  named. /M= and /T= override and supply them.
+
+  With no /T= it brings the adapter up, reports what it read, and says
+  outright that transmit was NOT tested. A tool that claims less than it
+  proved is worth more than one that assumes an address.
 
   The AX88179A on this bench enumerates, reads its MAC, reports link up and
   receives frames through the ASIX vendor path -- and nothing it transmits
@@ -19,13 +31,16 @@ program EcmLink;
 
 {$MODE OBJFPC}{$H-}
 
-uses Ch375, Ecm;
+uses Ch375, Ecm, Dos;             { Dos for GetEnv }
 
 const
   VER = '1.0.0';
 
 var
   E        : TEcm;
+  HaveOur  : Boolean;
+  HaveTgt  : Boolean;
+  CfgFrom  : ShortString;
   Frame    : array[0..1535] of Byte;
   OurIp    : array[0..3] of Byte;
   TgtIp    : array[0..3] of Byte;
@@ -94,6 +109,54 @@ begin
   ToUs := True;
 end;
 
+{ IPADDR out of an mTCP-style config: KEY value, one per line, '#' for a
+  comment. Only IPADDR is wanted here -- there is no routing to do, because
+  ARP is a layer-2 question and the target is on the segment or it is not. }
+function ReadOurIp(const Path: ShortString): Boolean;
+var
+  F: Text;
+  L: ShortString;
+  I, J: Integer;
+  Key: ShortString;
+begin
+  ReadOurIp := False;
+  if Path = '' then Exit;
+  Assign(F, Path);
+  {$I-} Reset(F); {$I+}
+  if IOResult <> 0 then Exit;
+  while not Eof(F) do
+  begin
+    {$I-} ReadLn(F, L); {$I+}
+    if IOResult <> 0 then Break;
+    I := 1;
+    while (I <= Length(L)) and (L[I] = ' ') do Inc(I);
+    if (I > Length(L)) or (L[I] = '#') then Continue;
+    J := I;
+    while (J <= Length(L)) and (L[J] <> ' ') do Inc(J);
+    Key := '';
+    while I < J do
+    begin
+      Key := Key + UpCase(L[I]);
+      Inc(I);
+    end;
+    if Key <> 'IPADDR' then Continue;
+    while (I <= Length(L)) and (L[I] = ' ') do Inc(I);
+    L := Copy(L, I, Length(L) - I + 1);
+    { trim anything trailing -- a comment, or the CR of a CRLF file }
+    I := 1;
+    while (I <= Length(L)) and (((L[I] >= '0') and (L[I] <= '9'))
+                                or (L[I] = '.')) do Inc(I);
+    L := Copy(L, 1, I - 1);
+    if ParseIp(L, OurIp) then
+    begin
+      ReadOurIp := True;
+      CfgFrom := Path;
+    end;
+    Break;
+  end;
+  Close(F);
+end;
+
 procedure BuildArp;
 var I: Integer;
 begin
@@ -130,9 +193,11 @@ begin
   WriteLn('ECMLINK ', VER, ' -- CDC-ECM bring-up over a CH375 -- StevenC');
 
   Base := $260;
-  ParseIp('192.168.50.222', OurIp);
-  ParseIp('192.168.50.46', TgtIp);
-  J := 0;
+  HaveOur := False;
+  HaveTgt := False;
+  CfgFrom := '';
+  for I := 0 to 3 do begin OurIp[I] := 0; TgtIp[I] := 0; end;
+
   for I := 1 to ParamCount do
   begin
     S := ParamStr(I);
@@ -144,14 +209,45 @@ begin
           '0'..'9': Base := Base * 16 + (Ord(S[J]) - 48);
           'A'..'F': Base := Base * 16 + (Ord(UpCase(S[J])) - 55);
         end;
-      J := 0;
     end
-    else if J = 0 then
+    else if (Length(S) > 3) and (UpCase(S[1]) = 'M') and (S[2] = '=') then
+      HaveOur := ParseIp(Copy(S, 3, Length(S) - 2), OurIp)
+    else if (Length(S) > 3) and (UpCase(S[1]) = 'T') and (S[2] = '=') then
+      HaveTgt := ParseIp(Copy(S, 3, Length(S) - 2), TgtIp)
+    else if (Length(S) > 4) and (UpCase(S[2]) = 'M') and (S[3] = '=') then
+      HaveOur := ParseIp(Copy(S, 4, Length(S) - 3), OurIp)
+    else if (Length(S) > 4) and (UpCase(S[2]) = 'T') and (S[3] = '=') then
+      HaveTgt := ParseIp(Copy(S, 4, Length(S) - 3), TgtIp);
+  end;
+
+  { Not given one? Read it from wherever mTCP is configured, which is where
+    this machine's own address actually lives. }
+  if not HaveOur then
+  begin
+    HaveOur := ReadOurIp(GetEnv('MTCPCFG'));
+    if not HaveOur then HaveOur := ReadOurIp('C:\CH375\MTCPAX.CFG');
+  end;
+
+  { Settled BEFORE the chip is touched.  A missing address is a mistake in
+    the command line, and reporting it only after a ten-second bring-up --
+    or worse, after disturbing a driver that already owns the chip -- makes
+    the user pay for USB work that was never going to be used. }
+  if not HaveOur then
+  begin
+    WriteLn('No address to speak as.  Set MTCPCFG to a config carrying an');
+    WriteLn('IPADDR line, or pass /M=a.b.c.d .  Nothing is assumed: a');
+    WriteLn('built-in address would ARP somebody else''s network.');
+    Halt(6);
+  end;
+  if CfgFrom <> '' then
+  begin
+    Write('address  : ');
+    for I := 0 to 3 do
     begin
-      if ParseIp(S, OurIp) then Inc(J);
-    end
-    else
-      ParseIp(S, TgtIp);
+      Write(OurIp[I]);
+      if I < 3 then Write('.');
+    end;
+    WriteLn('  from IPADDR in ', CfgFrom);
   end;
 
   { CHECK_EXIST is answered by a chip that is idle. One left mid-transaction
@@ -255,6 +351,16 @@ begin
     WriteLn('link     : not stated in ', Seen, ' notification(s).');
     WriteLn('           These are sent on CHANGE, so silence says nothing');
     WriteLn('           either way -- the ARP below is the real test.');
+  end;
+
+  if not HaveTgt then
+  begin
+    WriteLn;
+    WriteLn('  Brought up, and TRANSMIT WAS NOT TESTED -- no /T= given.');
+    WriteLn('  Everything above was read from the device, which proves the');
+    WriteLn('  bring-up and nothing about the wire.  Run it again with');
+    WriteLn('  /T=<a live host on this segment> for that.');
+    Halt(0);
   end;
 
   Write('ARP      : who has ');
