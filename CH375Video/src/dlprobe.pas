@@ -516,11 +516,18 @@ begin
     Why := '';
 
     { The cap comes back as 39,999,999 Hz -- one hertz under a round 40
-      MHz.  That is a fencepost in whoever programmed the descriptor, not
-      a real boundary, so a mode landing within a per cent of the cap is
-      called MARGINAL rather than refused.  Calling 800x600@60 impossible
-      over one hertz would be precisely, confidently wrong, and only the
-      hardware can settle it. }
+      MHz -- so a mode landing within a per cent of it is called MARGINAL
+      rather than refused.
+
+      THE HARDWARE HAS NOW SETTLED THIS. 800x600@60 needs exactly
+      40,000,000 Hz, one hertz over the advertised cap, and it drives this
+      adapter perfectly: clean picture, no artefacts, verified by capture.
+      So the cap really is a fencepost in whoever programmed the
+      descriptor, and refusing the mode over one hertz would have been
+      precisely, confidently wrong.
+
+      MARGINAL still stands as the verdict, because one adapter agreeing
+      is not every adapter agreeing and the honest report is "try it". }
     if ClkLimit > 0 then
     begin
       Need := Modes[I].Clk * 1000;

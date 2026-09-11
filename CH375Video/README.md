@@ -68,11 +68,23 @@ area sounds like it allows 1024×768; the 40 MHz clock refuses it at 65.
 That is the mistake a glance at the pixel count makes, and it makes it in
 the optimistic direction.
 
-The cap reads **39,999,999 Hz** — one hertz under a round 40 MHz. That is
-a fencepost, not a boundary, so 800×600@60 is reported MARGINAL rather
-than refused; calling it impossible over one hertz would be confidently
-wrong. (Truncating rather than rounding also printed it as "39.9 MHz",
-which invites the same error. It rounds now.)
+The cap reads **39,999,999 Hz** — one hertz under a round 40 MHz, so
+800×600@60 is reported MARGINAL rather than refused. (Truncating rather
+than rounding also printed it as "39.9 MHz", which invites the same
+error. It rounds now.)
+
+**The hardware has since settled it.** 800×600@60 needs exactly
+40,000,000 Hz — one hertz over the cap — and it drives this adapter
+perfectly:
+
+![800x600 at 60 Hz](doc/m800x600.png)
+
+*800×600@60 at 40.0 MHz, one hertz over the advertised limit. Clean.*
+
+So the cap really is a fencepost, and refusing the mode over one hertz
+would have been confidently wrong. MARGINAL still stands as the verdict,
+because one adapter agreeing is not every adapter agreeing and the honest
+report is "try it".
 
 ### Widescreen
 
@@ -101,7 +113,7 @@ mode          dot clock   adapter                  monitor
 640x480@75     31.5 MHz   ok                       yes   <--
 720x400@70     28.3 MHz   ok                       yes   <--
 848x480@60     33.8 MHz   ok                       (not listed)
-800x600@60     40.0 MHz   MARGINAL -- 1% over cap  yes
+800x600@60     40.0 MHz   MARGINAL -- but it WORKS  yes
 1024x768@60    65.0 MHz   no -- clock              yes
 1280x1024@60  108.0 MHz   no -- clock              yes
 ```
@@ -268,8 +280,10 @@ tool here accepts `-K` as well; `cmd` and PowerShell pass either form.
    tracking dirty rows would make it a usable terminal.
 2. **Derive timings from the EDID** rather than a built-in table, so any
    monitor's preferred mode is used when it fits inside both caps.
-3. **Try 800×600@60**, the MARGINAL row, and settle whether the
-   39,999,999 Hz cap is real. `DLTEST /M=3`.
-4. **`DLTEST` still carries its own timings table** from before `dl.pas`
-   existed, so it has four modes where everything else has five. It should
-   use the unit.
+3. **`DLTEST` still carries its own timings table** from before `dl.pas`
+   existed, so it has four modes where everything else has five, and it
+   misses the inlined packet writer's 4×. It should use the unit.
+4. **A 486 would change which half is the bottleneck.** The cube is
+   CPU-bound here and everything else is transfer-bound; on a faster CPU
+   the cube would join the others, and only then would `REP OUTSB` or a
+   coprocessor be worth re-measuring.
