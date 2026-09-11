@@ -6,7 +6,7 @@ program dldemo;
 
       /P=hex   I/O base, default 260
       /M=dec   video mode index, default 0 (640x480@60)
-      /D=name  which demo: balls, stars, cube, bars, raster.
+      /D=name  which demo: balls, stars, cube, bars, raster, life.
                Default balls
       /S=dec   seconds to run, default 20
       /C       clear to the background and stop, nothing animated
@@ -72,6 +72,13 @@ const
   NSTAR   = 120;
   BARH    = 6;
 
+  { Conway's Life on a chunky grid.  80x60 cells of 8x8 pixels fills a
+    640x480 screen exactly, and the two generation buffers are 4,800
+    bytes each -- small enough to stay in the data segment. }
+  LW      = 80;
+  LH      = 60;
+  LCELL   = 8;
+
   { The cube is rendered into a local tile and blitted, because a wireframe
     is mostly background and RLE collapses that -- whereas erasing the
     bounding box and then drawing over it would send the same area twice. }
@@ -107,6 +114,9 @@ var
   Row:     array[0..1023] of Word;
 
   BarY:    array[0..7] of Integer;
+  LifeA:   array[0..LW * LH - 1] of Byte;
+  LifeB:   array[0..LW * LH - 1] of Byte;
+  LifeInit: Boolean = False;
   Frames:  LongInt = 0;
   Seed:    Word = 12345;
 
@@ -418,6 +428,146 @@ begin
   DemoRaster := DlSend;
 end;
 
+{ Conway's Life, and the reason it is here: it is the only demo that
+  sends a DELTA.
+
+  Everything else either repaints the whole screen or knows exactly which
+  rectangle it moved. Life knows neither -- the cells that change are
+  scattered and different every generation -- so it has to compare the new
+  state against the old and send only the difference. That is the
+  technique a real terminal or windowing layer would need on this path,
+  and it is the one worth having demonstrated.
+
+  The cost is therefore the CHANGE, not the picture: a settled pattern
+  with a few blinkers costs almost nothing a frame, while a boiling random
+  soup costs nearly a full repaint. Both are the same code. }
+function DemoLife: Boolean;
+var
+  X, Y, I, N:     Integer;
+  Cx, Cy:         Integer;
+  Yu, Yd:         Integer;
+  Ru, Rc, Rd:     Integer;
+  Xl, Xr:         Integer;
+  Alive:          Byte;
+  Changed:        Integer;
+begin
+  DemoLife := False;
+
+  if not LifeInit then
+  begin
+    for I := 0 to LW * LH - 1 do
+    begin
+      LifeA[I] := 0;
+      { 0, not a sentinel: the screen is ALREADY background from the
+        startup clear, so only the live cells need drawing. Forcing all
+        4,800 cells to draw cost 398,528 bytes and ate a 25-second run in
+        a single frame. }
+      LifeB[I] := 0;
+    end;
+
+    { GLIDERS, not a random soup, and the reason is the whole point of
+      this demo. A random field changes about 1,400 of its 4,800 cells
+      every generation -- 88,597 bytes, which is most of a full repaint,
+      and the delta buys almost nothing. Gliders change roughly ten cells
+      each, so the same code costs a fraction of that.
+
+      Both numbers are real and both are worth knowing: a delta is only
+      as cheap as the change is small, and nothing about the technique
+      rescues content that genuinely churns. }
+    for N := 0 to 13 do
+    begin
+      Cx := 3 + Integer(Rnd(LW - 8));
+      Cy := 3 + Integer(Rnd(LH - 8));
+      LifeA[Cy * LW + Cx + 1] := 1;
+      LifeA[(Cy + 1) * LW + Cx + 2] := 1;
+      LifeA[(Cy + 2) * LW + Cx] := 1;
+      LifeA[(Cy + 2) * LW + Cx + 1] := 1;
+      LifeA[(Cy + 2) * LW + Cx + 2] := 1;
+    end;
+    LifeInit := True;
+  end;
+
+  { Draw the difference against what is already on the glass. }
+  { MERGED ALONG THE ROW, because a cell is 8 separate scanline runs and
+    two neighbours changing the same way are 16 runs done as 8. The
+    encoder is horizontal, so anything that wants to be cheap has to be
+    built horizontally -- DLBENCH test 6 measures what ignoring that
+    costs. }
+  Changed := 0;
+  for Y := 0 to LH - 1 do
+  begin
+    X := 0;
+    while X < LW do
+    begin
+      I := Y * LW + X;
+      if LifeA[I] = LifeB[I] then begin Inc(X); Continue; end;
+      Alive := LifeA[I];
+      N := X;
+      while (N < LW) and (LifeA[Y * LW + N] <> LifeB[Y * LW + N])
+            and (LifeA[Y * LW + N] = Alive) do Inc(N);
+      Inc(Changed, N - X);
+      if Alive <> 0 then
+      begin
+        if not DlFillRect(T, Word(X * LCELL), Word(Y * LCELL),
+                          Word((N - X) * LCELL), LCELL,
+                          DlRgb(120, 255, 160)) then Exit;
+      end
+      else
+        if not DlFillRect(T, Word(X * LCELL), Word(Y * LCELL),
+                          Word((N - X) * LCELL), LCELL, Bg) then Exit;
+      X := N;
+    end;
+  end;
+  if not DlSend then Exit;
+
+  { Step a generation into LifeB, edges wrapping -- and WITHOUT a single
+    division, which is the whole reason this runs at a useful rate.
+
+    The obvious way writes ((Y+dy+LH) mod LH) * LW + ((X+dx+LW) mod LW)
+    inside the neighbour loop: four divisions per neighbour, eight
+    neighbours, 4,800 cells -- over 150,000 divisions a generation. BENCH
+    measures a 16-bit divide on this machine at 52,561 a second, so that
+    alone is about 2.9 seconds, and it measured exactly that: 0.3 fps on
+    frames costing only 4,400 bytes.
+
+    Wrapping is a comparison, not a modulus. The row bases are computed
+    once per row and the column neighbours once per cell. }
+  for Y := 0 to LH - 1 do
+  begin
+    Yu := Y - 1; if Yu < 0 then Yu := LH - 1;
+    Yd := Y + 1; if Yd >= LH then Yd := 0;
+    Ru := Yu * LW;
+    Rc := Y * LW;
+    Rd := Yd * LW;
+    for X := 0 to LW - 1 do
+    begin
+      Xl := X - 1; if Xl < 0 then Xl := LW - 1;
+      Xr := X + 1; if Xr >= LW then Xr := 0;
+      N := LifeA[Ru + Xl] + LifeA[Ru + X] + LifeA[Ru + Xr]
+         + LifeA[Rc + Xl]                 + LifeA[Rc + Xr]
+         + LifeA[Rd + Xl] + LifeA[Rd + X] + LifeA[Rd + Xr];
+      I := Rc + X;
+      if LifeA[I] <> 0 then
+      begin
+        if (N = 2) or (N = 3) then LifeB[I] := 1 else LifeB[I] := 0;
+      end
+      else
+        if N = 3 then LifeB[I] := 1 else LifeB[I] := 0;
+    end;
+  end;
+
+  { LifeB is the next generation; LifeA becomes what is on the screen. }
+  for I := 0 to LW * LH - 1 do
+  begin
+    Alive := LifeA[I];
+    LifeA[I] := LifeB[I];
+    LifeB[I] := Alive;
+  end;
+
+  WriteLn('  gen: ', Changed, ' cells changed');
+  DemoLife := True;
+end;
+
 { ------------------------------------------------------------------ main }
 
 procedure Usage;
@@ -431,6 +581,8 @@ begin
   WriteLn('    /D=bars    sliding colour bars');
   WriteLn('    /D=raster  FULL-SCREEN raster bars -- one run per band,');
   WriteLn('               which is the effect this encoder is built for');
+  WriteLn('    /D=life    Conway''s Life, 80x60 cells -- the only demo');
+  WriteLn('               that sends a DELTA rather than a picture');
   WriteLn('    /C         clear the screen and stop');
   WriteLn('    /M=dec     mode, default 0:');
   for I := 0 to NDLMODES - 1 do
@@ -595,6 +747,10 @@ begin
     begin
       if not DemoRaster(Ang) then begin Rc := 1; Break; end;
       Ang := (Ang + 3) and 255;
+    end
+    else if Which = 'life' then
+    begin
+      if not DemoLife then begin Rc := 1; Break; end;
     end
     else
     begin

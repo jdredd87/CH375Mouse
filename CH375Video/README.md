@@ -212,6 +212,7 @@ has a target for each: `demo`, `stars`, `bars`, `raster`, `cube`, `lowres`.
 | `cube` | rotating 3D wireframe | 1.7 | 3,636 | **CPU** |
 | `raster` | **full-screen** raster bars | 1.3 | 12,695 | **pixel count** |
 | `raster` | the same at 320×200 | **4.5** | 2,873 | pixel count |
+| `life` | Conway's Life, 80×60 cells | 0.9 | 4,611 | **CPU** |
 
 ### `stars` — the cheapest thing that can move
 
@@ -255,6 +256,47 @@ signature that the transfer was never the problem. Three fixes took it to
 * blitting straight out of the tile instead of copying each row into a
   staging buffer first — 61,952 needless far-pointer accesses a frame
 * shrinking the tile from 176² to 112², which the cube never needed
+
+### `life` — the only demo that sends a *delta*
+
+![Conway's Life](doc/life.png)
+
+*Gliders on an 80×60 grid of 8×8 cells, two of them already collided into
+something larger. **0.9 fps**, 4,611 bytes a frame.*
+
+Every other demo either repaints everything or knows exactly which
+rectangle it moved. Life knows neither — the cells that change are
+scattered and different every generation — so it compares the new state
+against the old and sends only the difference. That is the technique a
+real terminal or windowing layer would need on this path.
+
+**A delta is only as cheap as the change is small**, and that is worth
+stating because it is easy to assume otherwise:
+
+| seed | cells changed / generation | bytes/frame |
+|---|---|---|
+| random soup | ~1,400 of 4,800 | 88,597 |
+| **gliders** | **~55** | **4,611** |
+
+Same code, 20× apart. Nothing about the technique rescues content that
+genuinely churns — a random field is most of a full repaint however
+cleverly you diff it.
+
+Two fixes got it from 0.1 fps to 0.9, and both were diagnosed the same
+way — *the bytes per frame barely moved*:
+
+* the first version forced all 4,800 cells to draw once, at 398,528 bytes.
+  The screen is already background from the startup clear, so only the
+  **live** cells need drawing.
+* the generation step wrapped its edges with `mod`: four divisions per
+  neighbour, eight neighbours, 4,800 cells — over 150,000 divisions a
+  generation, and `BENCH` rates a 16-bit divide at 52,561/s, so about 2.9
+  seconds. Wrapping is a **comparison**, not a modulus.
+
+Changed cells are also merged along the row before drawing, because a cell
+is 8 separate scanline runs and two neighbours changing alike are 16 runs
+done as 8 — see the orientation measurement below for what ignoring the
+horizontal grain costs.
 
 ### `raster` — full screen, and the slowest for that reason
 

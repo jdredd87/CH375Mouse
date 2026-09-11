@@ -15,6 +15,7 @@ REM    build.cmd raster     ...then FULL-SCREEN raster bars
 REM    build.cmd lowres     ...then the same at 320x200, which is the only
 REM                         demo low resolution actually speeds up
 REM    build.cmd con        ...then the text console demonstration page
+REM    build.cmd life       ...then Conway's Life, which sends a delta
 REM    build.cmd fract      ...then a Mandelbrot computed on the V30
 REM    build.cmd trace      ...then probe it narrating every control stage
 REM
@@ -65,6 +66,7 @@ if /I "%1"=="raster" goto runraster
 if /I "%1"=="lowres" goto runlowres
 if /I "%1"=="con"   goto runcon
 if /I "%1"=="fract" goto runfract
+if /I "%1"=="life"  goto runlife
 echo Built.  "build.cmd probe" identifies whatever is plugged in.
 exit /b 0
 
@@ -122,6 +124,12 @@ exit /b %ERRORLEVEL%
 
 REM  The one tool here that is COMPUTE-bound rather than transfer-bound,
 REM  and it times the two halves apart to prove it.
+REM  The only demo that sends a DELTA rather than a picture, so its cost
+REM  is the CHANGE and not the screen.
+:runlife
+python "%DOSBRIDGE%\dosctl.py" run --timeout 250 bin\DLDEMO.EXE -D=life -S=25
+exit /b %ERRORLEVEL%
+
 :runfract
 python "%DOSBRIDGE%\dosctl.py" run --timeout 400 bin\DLFRACT.EXE -W=160 -I=16 -S=5
 exit /b %ERRORLEVEL%
