@@ -118,26 +118,70 @@ Also worth knowing: the 5 MB and 10 MB runs came out at 24.5 and 23.3 KB/s,
 so the rate does not decay with transfer length -- which is the shape a
 leak, a growing buffer or a degrading toggle would have.
 
-### 16 MB clean is NOT an exclusion, and here is the arithmetic
+### 130 MB clean, and this time the number means something
 
-Sixteen megabytes have now crossed this path with zero corrupted bytes. That
-sounds like a lot and is not enough to conclude anything.
-
-The vendor path's fault rate is **1 event per 44 MB**. If the class path
-shared it exactly, the chance of 16 MB coming back clean is
+The 16 MB above was a 70% outcome and proved nothing, so the sweep it asked
+for was run: **thirteen consecutive 10 MB downloads, every one verified byte
+by byte by `RAMPCHK`.**
 
 ```
-P(0 events) = e^-(16/44) = 0.70
+round  1/13  CLEAN  445.1s  23.0 KB/s      round  8/13  CLEAN  476.6s  21.5 KB/s
+round  2/13  CLEAN  441.9s  23.2 KB/s      round  9/13  CLEAN  469.5s  21.8 KB/s
+round  3/13  CLEAN  446.2s  22.9 KB/s      round 10/13  CLEAN  470.8s  21.8 KB/s
+round  4/13  CLEAN  447.6s  22.9 KB/s      round 11/13  CLEAN  464.7s  22.0 KB/s
+round  5/13  CLEAN  449.6s  22.8 KB/s      round 12/13  CLEAN  472.6s  21.7 KB/s
+round  6/13  CLEAN  446.5s  22.9 KB/s      round 13/13  CLEAN  452.7s  22.6 KB/s
+round  7/13  CLEAN  461.3s  22.2 KB/s
 ```
 
-**Seventy percent.** So this outcome is what you would most likely see
-either way, and it distinguishes nothing. Reaching a 5% outcome -- the point
-at which a clean sweep would be real evidence -- needs about **130 MB**,
-which at 24 KB/s is around 90 minutes of unattended downloading.
+**130 MB, zero mismatches, zero bad rounds**, in 109 minutes. And every
+error counter in the driver still reads zero afterwards, across **52,739
+bursts, 50,263 frames delivered and 35,684 sent**:
 
-This is the trap NEXT.md warns about twice, and it has already caught this
-project once: 15 MB of clean NE2000 was written up as exonerating mTCP when
-it was a 71% outcome. Work the number out before believing a null.
+```
+bursts that made no sense=0      reads with an impossible length=0
+bursts too big for the buffer=0  bursts whose frames did not tile=0
+frames past the frame region=0   reads rescued by flipping the toggle=0
+frames nobody wanted=0
+```
+
+The arithmetic, which is the whole reason for choosing 130:
+
+| clean | P if the fault rate matched the vendor path |
+|---|---|
+| 16 MB | 0.70 -- says nothing |
+| **130 MB** | **0.052** |
+| 146 MB, counting the earlier runs | 0.036 |
+
+So this is evidence at roughly the **95% level, and it is not proof.** It
+says the class path does not corrupt data at anything like the vendor path's
+1-event-per-44-MB rate. It does not say the rate is zero.
+
+**Throughput dipped and recovered**: 23.0 KB/s early, 21.5 at round 8, 22.6
+at round 13. About 7%, non-monotonic, so it is the LAN or the server rather
+than anything accumulating in the driver -- a leak, a growing buffer or a
+degrading toggle would not come back up.
+
+### What this does NOT establish, because the adapter is different
+
+The obvious next thought is that the class path shares `bulk_in`, `ch_read`,
+the `REP INSB` fast path, `rx_go`'s accumulate loop and the `chip_busy`
+TX/RX interlock with the vendor path -- so 130 MB clean through all of that
+ought to exclude the shared CH375 read path as the home of the open
+corruption fault, and point at the burst parsing instead.
+
+**It does not, and the reason is a confound worth naming.** The corruption
+was measured on the **AX88179** (MAC `00:50:B6:B6:1C:64`). This sweep ran on
+the **AX88179A** (`A0:CE:C8:BC:0A:91`) -- a different physical adapter, on a
+different cable, through a USB-C-to-A adapter. Two variables moved at once,
+so a clean result here cannot be attributed to the protocol rather than to
+the hardware.
+
+Doing it properly means running the class path on an adapter whose vendor
+path has shown the fault, which needs an ECM-capable adapter that also
+corrupts -- or the 179 back in the machine long enough to re-measure. Until
+then this is a promising lead and not an exclusion. That distinction is
+exactly what four dead hypotheses in this file were each killed by.
 
 ### The interrupt got long, and that was the one thing being tuned away
 

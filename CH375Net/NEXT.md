@@ -184,18 +184,30 @@ path unattended after a power cycle, survived a warm reboot still on ECM,
 `PING` got 4 of 4, and 1 MB, 5 MB and 10 MB `HTGET`s all came back with
 **zero** mismatches at 23-24 KB/s. CHANGELOG has the detail.
 
-**Two things left open on it, both written up in CHANGELOG:**
+**And the 130 MB sweep came back clean** -- thirteen consecutive 10 MB
+downloads, every one verified byte by byte, zero mismatches, and every
+driver error counter still at zero over 52,739 bursts. That is a 5%
+outcome if the class path shared the vendor path's fault rate, so it is
+evidence at roughly the 95% level. CHANGELOG has the table.
 
-* **16 MB clean is a 70% outcome, not an exclusion.** If the class path
-  shared the vendor path's 1-event-per-44-MB fault, 16 MB clean is exactly
-  what you would expect to see anyway. About **130 MB** is needed before a
-  clean sweep means anything -- roughly 90 minutes unattended, and the
-  obvious thing to leave running.
+**One thing left open on it:**
+
 * **`longest poll` reads 54.7 ms**, a whole tick at `/R=1`, where the
   vendor path was tuned down to 22. An ECM frame is 24 separate 64-byte
-  transactions and a mid-frame pause is waited out on a budget sized for a
-  burst protocol. Nothing has broken because of it, but bound that wait
-  before anyone raises the timer rate.
+  transactions and a mid-frame pause is waited out on `RX_NAKWAIT`, a
+  budget sized for a burst protocol. It did not move over the whole 130 MB
+  sweep, which also suggests the counter is saturated rather than measured.
+  Nothing has broken because of it -- but bound that wait, the way
+  `ecm.pas` bounds its own, before anyone raises the timer rate on this
+  path.
+
+**And one tempting conclusion to resist.** The class path shares
+`bulk_in`, `ch_read`, the `REP INSB` fast path and the `chip_busy` TX/RX
+interlock with the vendor path, so 130 MB clean looks like it excludes the
+CH375 read path and points the open corruption fault at the burst parser.
+It does not: the corruption was measured on the **AX88179** and this sweep
+ran on the **AX88179A**, a different adapter on a different cable. Two
+variables moved together. Promising lead, not an exclusion.
 
 **How to re-test it, because the order matters:**
 
@@ -257,6 +269,7 @@ engineered, and its proof was a round trip rather than a byte count.
 | `USBLINK /V` | bring-up narrated, chip status at every register access |
 | `ECMLINK` | CDC-ECM: discover, bring up, print what was READ, then ARP a host and require **that host's** reply. `ECMLINK [@260] [our-ip] [target-ip]` |
 | `build.cmd ecm` | unload `USBPKT`, then run `ECMLINK` on the DOS machine |
+| `ecmsweep.py` | the 130 MB soak: 13 x 10 MB, each verified byte by byte, stopping on the first bad round so the box is left in the state that produced it. Reads the driver's error counters every round, because a counter moving is evidence even in a round that verifies clean |
 | `TICKCHK` | INT 08h and 1Ch rates -- tells you if the PIT is disturbed |
 
 **`mkblast.py --corrupt-every N`** plants the real fault's signature -- 4
