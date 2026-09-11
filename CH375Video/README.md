@@ -2,313 +2,274 @@
 
 An 8086 with a CH375 USB host card, driving a USB-to-VGA adapter.
 
-**It works.** A DisplayLink adapter is identified from its own descriptors,
-a video mode is set, and pixels appear on the monitor — verified by
-somebody looking at the screen, four patterns out of four.
+**It works, and it moves.** A DisplayLink adapter is identified from its
+own descriptors, a video mode is set, and pixels appear — a text console,
+bouncing sprites, a rotating 3D wireframe cube, and 640×480 or 848×480
+widescreen. Every picture below is a real photograph of the adapter's
+output, taken through a capture card.
+
+![A text console](doc/console.png)
+
+*80×30 characters at 640×480, drawn from the machine's own ROM 8×16 font.*
 
 | tool | |
 |---|---|
-| `DLPROBE` | identify the adapter, decode its capability limits, read the monitor's EDID |
-| `DLTEST` | set a mode, draw test patterns, and ask the person watching whether each appeared |
+| `DLPROBE` | identify the adapter, decode its limits, read the monitor's EDID |
+| `DLTEST` | draw test patterns and ask a human whether each appeared |
+| `DLBENCH` | measure throughput, so optimisation is aimed rather than guessed |
+| `DLDEMO` | moving graphics: balls, stars, a 3D cube, bars |
+| `DLCON` | a text console, which is what this hardware is actually good at |
 
-```
-DLPROBE [/P=260] [/E=n] [/K] [/I=n] [/V] [/T]
-DLTEST  [/P=260] [/M=n] [/W=secs] [/A=secs] [/N] [/Q] [/B] [/X=n] [/Y=n]
-```
-
-`build.cmd` builds both. `build.cmd probe` runs `DLPROBE` on the DOS box;
-`build.cmd read` runs it with `/K` so nothing is written at all.
+`build.cmd` builds all five. `build.cmd probe` runs `DLPROBE` on the DOS
+box; `build.cmd read` runs it with `/K` so nothing is written at all.
 
 ## Why this is a different problem from CH375Net
 
 CDC-ECM worked out because Ethernet **has a class**. The device describes
 itself, so one bring-up covers adapters from vendors nobody here has
-bought, and `USBPKT` picks the class path from the descriptors.
+bought.
 
 There is no USB display class. The Video class is for cameras. Every USB
 display adapter is a private protocol, so there is nothing to generalise
 over and no descriptor that says how to drive it. The only useful first
 question is *which* private protocol, and that is what `DLPROBE` answers.
 
-## The adapter on the bench
+## The adapter
 
 An **IOGEAR GUC2015V**, "USB 2.0 to VGA". Read off the device rather than
 the box it came in:
 
 ```
-17E9:0058   bcdDevice 1.02
-iManufacturer  "DisplayLink"
-iProduct       "IOGEAR External VGA"
-iSerialNumber  "009091"
-
+17E9:0058   DisplayLink / "IOGEAR External VGA" / serial 009091
 one configuration, one interface, class FF vendor-specific
   EP 01  OUT  bulk       max 64      <- commands and pixels
-  EP 82  IN   interrupt  max 8, interval 4
+  EP 82  IN   interrupt  max 8
   descriptor type 5F, 30 bytes       <- the capability list
 ```
 
-`17E9` is DisplayLink, and that is the whole identification. The product
-ID varies per OEM and the strings are whatever the reseller asked for, so
-neither is evidence of anything.
+`17E9` is DisplayLink, and that is the whole identification — the product
+ID varies per OEM and the strings are whatever the reseller asked for.
 
-## What the 5Fh descriptor says, and why it is trustworthy
+### Its two limits, and why the clock is the one that bites
 
-DisplayLink's capability list: a five-byte header, then key/length/value
-triples. Both checks pass on this device — the header self-describes twice
-(`bLength` whole, and again as `bLength-2`), and the triples **tile the
-descriptor exactly**, ending on byte 30 of 30 with nothing left over.
-
-That second check is the one that matters. A wrong guess at the layout
-still produces plausible-looking keys and values; the only thing that
-catches it is insisting the walk land on the final byte. `DLPROBE` says so
-out loud when it does not tile, and distrusts its own output in that case.
+The `5Fh` descriptor is a five-byte header then key/length/value triples.
+It parses, and the triples **tile it exactly** — 30 bytes of 30, nothing
+over. That check is the one that matters: a wrong guess at the layout
+still yields plausible keys and values, and only insisting the walk land
+on the final byte catches it.
 
 ```
-key 0005  len 1  03           = 3
-key 0204  len 4  FF 59 62 02  = 39999999   pixel-clock limit, Hz
-key 0200  len 4  60 E3 16 00  = 1500000    pixel-area limit
-key 0400  len 4  01 00 03 60  = 1610809345
+key 0204  = 39999999   pixel-clock limit, Hz
+key 0200  =  1500000   pixel-area limit
 ```
 
-**Both caps bind, and the clock is the tighter one.** That is the part a
-glance at the pixel count gets wrong, in the optimistic direction: 1.5
-million pixels of area sounds like it should allow 1024x768, and the 40
-MHz clock refuses it outright at 65 MHz.
+**Both bind, and the clock is the tighter one.** 1.5 million pixels of
+area sounds like it allows 1024×768; the 40 MHz clock refuses it at 65.
+That is the mistake a glance at the pixel count makes, and it makes it in
+the optimistic direction.
 
-The cap is advertised as **39,999,999 Hz** — one hertz under a round 40
-MHz. That is a fencepost in whoever programmed the descriptor, not a real
-boundary, so 800x600@60 is reported as MARGINAL rather than refused.
-Calling it impossible over one hertz would be precisely, confidently
-wrong, and only the hardware can settle it. Truncating rather than
-rounding also printed the cap as "39.9 MHz", which reads as a limit below
-40 and invites the same mistake; it rounds now.
+The cap reads **39,999,999 Hz** — one hertz under a round 40 MHz. That is
+a fencepost, not a boundary, so 800×600@60 is reported MARGINAL rather
+than refused; calling it impossible over one hertz would be confidently
+wrong. (Truncating rather than rounding also printed it as "39.9 MHz",
+which invites the same error. It rounds now.)
+
+### Widescreen
+
+**720p is not reachable at any blanking** — 1280×720@60 needs 74.25 MHz
+and even CVT reduced blanking wants 64. The clock cap decides it, not the
+pixel count. **848×480@60 at 33.75 MHz is the 16:9 mode that fits**, and
+it works:
+
+![848x480 widescreen](doc/wide848.png)
+
+*106×30 characters at 848×480 — the same console, native 16:9.*
+
+A modern panel will usually letterbox or stretch 640×480 and 800×600
+happily, so those stay the dependable choices; 848×480 is the one worth
+trying for a native-aspect picture.
 
 ## The monitor, and why the intersection is the answer
 
-`DLPROBE` reads the attached monitor's EDID **through** the adapter — 128
-control transfers, two bytes each, of which only the second is data.
-
-```
-DELL 1708FP     manufacturer DEL, product 4023, EDID 1.3
-                made week 41 of 2007, 34 x 27 cm
-                preferred mode 1280x1024 @ 108.0 MHz
-                range V 56-76 Hz, H 30-81 kHz, clock up to 140 MHz
-```
-
-Neither end's list is the answer on its own, and this pair shows exactly
-why — the monitor advertises 1024x768 and 1280x1024, and the adapter
-refuses every one of them on clock:
+`DLPROBE` reads the attached monitor's EDID **through** the adapter and
+intersects it with the adapter's caps, because neither list is the answer
+alone:
 
 ```
 mode          dot clock   adapter                  monitor
 640x480@60     25.2 MHz   ok                       yes   <--
 640x480@75     31.5 MHz   ok                       yes   <--
 720x400@70     28.3 MHz   ok                       yes   <--
-800x600@56     36.0 MHz   ok                       no
+848x480@60     33.8 MHz   ok                       (not listed)
 800x600@60     40.0 MHz   MARGINAL -- 1% over cap  yes
 1024x768@60    65.0 MHz   no -- clock              yes
 1280x1024@60  108.0 MHz   no -- clock              yes
 ```
 
-Three modes survive both ends, and `DLPROBE` names the largest rather
-than leaving it to be worked out by eye. The monitor side is checked in
-all three places EDID can state a mode — the established bitmap, the four
-detailed blocks and the eight standard entries — because a display need
-not use the same one.
+The bench monitor is a DELL 1708FP whose preferred mode is 1280×1024 at
+108 MHz — nearly three times what this adapter will clock. Reading either
+side alone gets the answer wrong.
 
-## What has actually been proven on hardware
+## Speed: what was measured, and what it changed
 
-| | |
-|---|---|
-| device identified | from its own descriptors |
-| capability list decoded | tiles exactly, so the limits are believable |
-| `GET_DESCRIPTOR 5F` standalone | works — the way udlfb asks |
-| vendor control path with a data stage | 128 of 128 EDID transfers succeeded |
-| monitor EDID | read and decoded — a DELL 1708FP |
-| channel unlock | accepted |
-| interrupt endpoint | answers NAK: alive, nothing to report |
-| **video mode set** | **640x480@60, monitor acquires sync** |
-| **pixels** | **solid fills and colour bands, confirmed by eye** |
-| **5-6-5 byte order** | **blue comes out blue, not red** |
+`DLBENCH` exists because CH375Net has four dead optimisation hypotheses
+written up, each of which measured as nothing. It reports **bytes/s
+alongside the packet rate**, because a payload-bound path and a
+transaction-bound path can report the same KB/s and want opposite fixes.
 
-That last row is its own test for a reason. A byte-swapped 5-6-5 pixel
-still produces a colourful, plausible-looking band pattern — so the bands
-alone could have passed while being wrong. Asking specifically for *blue*
-is what settles it.
+The first run said **72 packets/s in every test** — 13.9 ms for a 64-byte
+packet, when a USB bulk transaction takes microseconds. So the time was
+never on the wire. It was 64 iterations of `ch375`'s `WrDat`, each of
+which is three nested procedure calls in a Large-model binary; `BENCH`
+measures a procedure call on this machine at 46,501/s, so 64×3 is ~4 ms
+before a byte reaches a port.
 
-## Asking a human, because nothing else can answer
+Inlining the packet write into one assembler block:
 
-`DLTEST` is the first thing here that cannot be verified by reading a
-status byte. The capture card watches the DOS box's own VGA output, not
-the adapter's, so the only instrument that can confirm a pixel is a person
-looking at the screen.
+| | before | after |
+|---|---|---|
+| solid fill | 5,660 B/s, 72 pkt/s | **19,055 B/s, 291 pkt/s** |
+| literal pixels | 5,350 B/s | **14,960 B/s** |
+| text-like | 5,132 B/s | **13,267 B/s** |
 
-So each pattern **beeps**, then asks on **stderr**, then waits a bounded
-ten seconds:
+**3–4× faster**, and USBPKT's hand-written assembly Ethernet path runs
+2.9 ms/packet — so this is within 15% of it from portable Pascal.
 
-```
->> 8 colour bands, red at the top -- SEEN IT?  Y/N  (10s) yes
-```
+### What was deliberately *not* done
 
-Three parts, each load-bearing:
+**`REP OUTSB`.** It is an 80186 instruction this V30 has and a plain 8086
+does not, so it needs a run-time gate with an 8086 fallback kept working
+beside it. At 3.4 ms/packet the byte loop is now ~0.3 ms, so it is worth
+about 6%. `CLAUDE.md`'s rule applies: do not write a gated fast path when
+the gate costs more than the win buys. One path, runs everywhere, and it
+will still be right on a 486.
 
-* **stderr, not stdout.** A job's stdout is redirected into
-  `C:\WORK\OUT.TXT` and reaches nobody until the job has finished, so a
-  prompt written there would arrive minutes after the moment it was asking
-  about. DOS 6.22 cannot redirect handle 2 at all — normally a nuisance in
-  this project — so stderr lands on the real screen, where somebody
-  watching the machine is already looking.
-* **A beep first.** The prompt is useless if nobody's eyes are on the
-  screen when the pattern is up, so the noise comes *before* the question
-  rather than after it.
-* **No answer is recorded as "no answer".** The two cases it cannot
-  distinguish — the pattern did not appear, and nobody was watching — are
-  both non-answers, and collapsing them into "fail" would put a guess in
-  the log. A run with any non-answer exits **8**, deliberately distinct
-  from a clean **0**.
+**Coprocessor maths.** This machine has no x87 fitted, and it would not
+help if it did: at 19 KB/s the geometry is free and the transfer is
+everything. Everything here is integer fixed point with a 64-entry
+quarter sine table.
 
-Every wait is bounded by the BIOS tick counter, so an unattended run
-finishes on its own instead of turning a job into a hang that needs hands
-on the keyboard. `/N` skips the asking entirely.
+## Moving graphics
 
-## The part nobody would guess: the LFSR
+A 640×480 16bpp framebuffer is 614,400 bytes and this machine has ~514 KB
+of free heap, so **there is no back buffer**. The screen is write-only and
+remote, and the only affordable way to animate is to touch what changed.
 
-Commands are a byte stream on the bulk OUT endpoint, each starting `AF`.
-A register write is `AF 20 <reg> <val>`, the video registers are bracketed
-by a lock (`FF`=00) and an unlock (`FF`=FF), and blanking is register `1F`.
+That is the whole design, and the numbers say why: a full solid screen is
+0.66 s, a full screen of literal pixels is 43 s, and a 64×64 rectangle is
+44 ms.
 
-**Most of the timing registers do not take the number you want.**
-Registers `01` through `15` take that number pushed through a 16-bit LFSR
-seeded `0xFFFF` and stepped once per unit of value, while `0F` and `17`
-take a plain big-endian word and `1B` takes a byte-swapped one.
+![Bouncing sprites](doc/balls.png)
 
-```
-lv = 0xFFFF
-repeat value times:
-    lv = ((lv << 1) | (((lv>>15) ^ (lv>>4) ^ (lv>>2) ^ (lv>>1)) & 1)) & 0xFFFF
-```
+*Five sprites at **5.0 fps**, 2,944 bytes a frame — erase where it was,
+draw where it is, touch nothing else.*
 
-Writing the raw values produces a dead screen and nothing whatsoever to
-diagnose. This is not something to be derived from first principles or
-guessed at from a datasheet — it was taken from the Linux `udlfb` driver,
-which is the readable record of this protocol. Reaching for that source
-rather than trying register values was the single decision that made this
-work at all.
+![A rotating wireframe cube](doc/cube.png)
 
-## Why a full screen is affordable, and where the ceiling is
+*A 3D wireframe cube at **1.7 fps**, 3,636 bytes a frame.*
 
-The CH375 moved Ethernet frames at a measured **22–23 KB/s** on this
-machine, and a display adapter's bulk endpoint is the same chip, the same
-ISA bus and the same byte-at-a-time port I/O. Raw, a 640x480 16bpp frame
-is 614,400 bytes — about **27 seconds**.
+The cube is the interesting one because it is the **only demo here that is
+CPU-bound rather than transfer-bound**. It started at 0.4 fps with the
+same bytes per frame, which is the signature: the transfer was not the
+problem. Three fixes took it to 1.7 —
 
-The RLE command is what rescues it. A run of 256 identical pixels — 512
-bytes of framebuffer — encodes in **ten bytes**:
+* clearing the render tile with `FillWord` (`REP STOSW`) instead of a
+  Pascal loop: `CLAUDE.md` measures 439,821 words/s against 68,322 for a
+  per-element store
+* blitting straight out of the tile instead of copying each row into a
+  staging buffer first — 61,952 needless far-pointer accesses a frame
+* shrinking the tile from 176² to 112², which the cube never needed
 
-```
-AF 6B <addr24> <pixels in command> <raw count> <pixel> <repeat-1>
-```
+| demo | fps | bytes/frame |
+|---|---|---|
+| stars (120 single pixels) | 5.8 | 2,240 |
+| bars | 5.8 | 2,990 |
+| balls (5 × 28² sprites) | 5.0 | 2,944 |
+| cube (wireframe, CPU-bound) | 1.7 | 3,636 |
 
-So a full-screen solid fill is 1,200 commands and about 12 KB, well under
-a second. A run of exactly one carries **no** repeat byte at all, which is
-a genuine shape difference rather than a count of zero.
+![Sliding bars](doc/bars.png)
 
-That sets the honest shape of this: **static images, test patterns and a
-text console are practical; anything that animates is not.** Content that
-suits this machine — solid areas, text, line art — is exactly what the RLE
-compresses well, and photographs are exactly what it does not.
+## Text, which is the case this hardware is good at
+
+A row of 8×16 glyphs is mostly paper, and the RLE command collapses a run
+of identical pixels into three bytes however long it is — so **a line
+costs what its ink costs, not what its area costs**. A full 80×30 page is
+85,376 bytes against 614,400 for the same area raw, and draws in 11.7 s.
+
+The font is the machine's own ROM 8×16 set, found through `INT 10h
+AX=1130h`. Nothing is embedded in the binary, so nothing can drift from
+the ROM.
+
+A whole page in 11.7 s is a page, not a terminal. The realistic use is
+incremental: one changed line is about a twentieth of that.
 
 ## Traps, all of them paid for here
 
-**Every transfer must be padded with `AF`, and it is not tidiness.** The
-command parser does not act on the final command until more bytes follow
-it, so an unpadded transfer silently drops its last command. One command
-is 256 pixels, and the symptom was the last ~256 pixels of a fill keeping
-their *previous* colour — visible as a strip of the old picture surviving
-in the bottom-right corner.
+**Every transfer must be padded with `AF`.** The parser does not act on
+the final command until more bytes follow it, so an unpadded transfer
+silently drops its last command — 256 pixels, seen as a strip of the
+*previous* picture surviving in the bottom-right corner. That reads as a
+drawing bug or an address off-by-one and is neither: the addresses were
+right and the fault was framing. `udlfb` does this with a `memset` that is
+easy to read as housekeeping and skip. `DLTEST`'s **test 5** exists for
+this failure alone — white over blue, asking only about that corner —
+because folding it into "did you see white" hid it.
 
-That reads as a drawing bug, or an off-by-one in the address arithmetic,
-and is neither: the addresses were right all along and the problem is
-framing. `udlfb` does this with a `memset(cmd, 0xAF, ...)` that is easy to
-read as housekeeping and skip — skipping it cost a round here. `AF` is the
-byte every command starts with, so a run of them is filler the parser can
-resynchronise on.
+**Most timing registers take their value through a 16-bit LFSR.**
+Registers `01`–`15` are `lfsr16(value)`; `0F` and `17` are plain
+big-endian; `1B` is byte-swapped. Raw values give a dead screen and
+nothing to diagnose. Taken from `udlfb`; going to that source instead of
+trying register values is the decision that made any of this work.
 
-`DLTEST`'s **test 5** exists for this specific failure: it fills white
-over blue and asks only about the bottom-right corner. Folding it into
-"did you see white" would have hidden it, because the other 99% of the
-screen was correct and the pattern looked fine.
+**A picture landing off-centre is usually the monitor.** The first working
+pattern sat ~100 px right of centre; the fix was the monitor's own
+auto-adjust. `/X` and `/Y` can move the active region within the line
+without changing either total or the dot clock, but they have **no
+default** — compensating in software for one monitor's un-adjusted
+position would have baked this bench into the tool.
 
-**A picture landing off-centre is usually the monitor, not the timings.**
-The first working pattern sat about 100 px right of centre. The fix was
-the monitor's own auto-adjust button — the timings were correct. `/X` and
-`/Y` can move the active region within the line and frame without changing
-either total or the dot clock, but they have **no default** and exist to
-prove where the fault is: compensating in software for one monitor's
-un-adjusted position would have baked this bench into the tool and been
-wrong on every other display.
+**An animation that never erases is not fast, it is wrong.** The first
+bars demo drew without erasing, and 203 frames piled into a striped mess
+that looked deliberate enough in a screenshot to pass unnoticed. The
+capture caught it.
 
 **Polling an endpoint that never answers wedges the chip.** `WaitInt`
-gives up after its timeout; the chip does not. A program that exits at
-that moment strands the token, and the next tool asks `CHECK_EXIST`, gets
-nothing, and reports **"no CH375 at 0260" on a card that is plainly
-fitted** — which reads as a hardware fault and is entirely
-self-inflicted. It cost a power cycle here. Both tools now retire the
-token with `ABORT_NAK` on the way out, and reset-and-re-ask before
-believing the slot is empty, because `BusUp` gives up on a failed
-`CHECK_EXIST` before it reaches its own `ChipReset`.
+gives up; the chip does not. A program exiting then strands the token, and
+the next tool reports **"no CH375 at 0260" on a card that is plainly
+fitted**. It cost a power cycle. Everything here retires the token with
+`ABORT_NAK` on exit and resets-and-re-asks before believing the slot is
+empty, because `BusUp` gives up on a failed `CHECK_EXIST` before reaching
+its own `ChipReset`.
 
-**The retry policy is opposite for the two transfer types**, and this
-project has now learned it twice. `BusUp` leaves the chip on `8F` — retry
-NAKs in hardware — which is right while enumerating, because a control
-transfer's data stage must be retried inside the transfer. On a **data**
-endpoint it is exactly wrong: a NAK there means "nothing for you yet",
-which is an *answer*, and absorbing it turns every quiet poll into a
-60 ms timeout reported as "no interrupt" — indistinguishable from a dead
-endpoint. Setting `00` around the interrupt poll changed the output from
-six timeouts to six honest NAKs.
+**Bring-up resets the USB bus, which blanks the adapter.** So every tool
+run starts with a dark screen until it sets a mode — which is why a
+capture taken *during* a run's startup shows black, and one taken after a
+run completes shows the last frame. The adapter holds its output between
+runs.
 
-**EDID is read two bytes at a time**, and only the second byte is data.
-128 transfers for 128 bytes is not a misunderstanding of the protocol; it
-is the protocol. A reply shorter than two bytes means the byte was not
-delivered, so the read stops rather than storing a zero — a short EDID is
-honest, an EDID padded with invented zeroes would pass its own header
-check and lie.
+**The retry policy is opposite for the two transfer types.** `8F` (retry
+NAKs in hardware) is right for a control data stage and wrong for a data
+endpoint, where a NAK is an *answer*. Absorbing it turned six honest NAKs
+into six timeouts reported as "no interrupt".
 
-**All 128 bytes coming back zero is two findings, not one failure.** It
-happened before the monitor was attached: every transfer succeeded and
-every byte was zero, which says the control path works *and* the adapter
-had nothing to describe. Nothing is decoded from a zero block — 128 zeroes
-sum to zero, so it passes the EDID checksum test trivially, and printing
-"checksum ok" beside a failed header would be worse than printing nothing.
-
-**EDID is asked for before the unlock, and that ordering survived a
-test.** The unlock is the step most likely to be refused by a chip
-revision nobody here has seen, so a refusal should not cost the monitor
-report too. When the first read came back empty that left an obvious
-hypothesis — that this chip will not read the monitor's DDC until its
-channel is open — so `DLPROBE` now asks a *second* time after the unlock
-whenever the first came back empty. It has never needed to: the empty read
-was a monitor that was not attached. 128 control transfers is a cheap way
-to settle that rather than reason about it.
+**EDID is read two bytes at a time**, only the second byte being data, and
+**all 128 bytes coming back zero is two findings** — the control path
+works, and the adapter has nothing to describe. Nothing is decoded from a
+zero block: 128 zeroes sum to zero, so it passes the EDID checksum
+trivially.
 
 **Git Bash mangles `/K` into a Windows path** before Python sees it, so
-program flags passed through `dosctl run` from a bash shell silently
-vanish. Both tools accept `-K`, which survives; `cmd` and PowerShell pass
-either form intact. This looked exactly like a bridge bug and was not one
-— `dosd`'s own dispatch line showed the arguments already missing.
+program flags passed through `dosctl run` from bash silently vanish. Every
+tool here accepts `-K` as well; `cmd` and PowerShell pass either form.
 
 ## Next
 
-1. **A text console.** 80x30 at 8x16 in a 640x480 framebuffer, RLE'd per
-   line. Text is mostly background, so this is the case the compression
-   was made for, and it is the first thing that would make the adapter
-   *useful* rather than proven.
-2. **Only redraw what changed.** `udlfb` keeps a back buffer and skips
-   unchanged pixels; at 22 KB/s that is the difference between a usable
-   console and a slideshow.
-3. **Derive timings from the EDID** rather than a built-in table, so any
-   monitor's own preferred mode is used when it fits inside both caps.
-4. **Try 800x600@60**, the MARGINAL row, and settle whether the
-   39,999,999 Hz cap is a real boundary or a fencepost. `DLTEST /M=3`
-   does exactly this.
+1. **Only redraw what changed in text.** The console redraws a whole page;
+   tracking dirty rows would make it a usable terminal.
+2. **Derive timings from the EDID** rather than a built-in table, so any
+   monitor's preferred mode is used when it fits inside both caps.
+3. **Try 800×600@60**, the MARGINAL row, and settle whether the
+   39,999,999 Hz cap is real. `DLTEST /M=3`.
+4. **`DLTEST` still carries its own timings table** from before `dl.pas`
+   existed, so it has four modes where everything else has five. It should
+   use the unit.

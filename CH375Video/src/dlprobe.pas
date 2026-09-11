@@ -103,7 +103,7 @@ const
     timings bitmap where it has one -- that is what lets the two ends be
     intersected rather than compared by eye.  Not an exhaustive list, and
     it does not pretend to be. }
-  NMODES = 14;
+  NMODES = 15;
   Modes: array[0..NMODES - 1] of TMode = (
     (W: 640;  H: 400;  Hz: 70; Clk: 25175;  EstB: 0;  EstBit: 0),
     (W: 720;  H: 400;  Hz: 70; Clk: 28322;  EstB: 35; EstBit: 7),
@@ -118,7 +118,12 @@ const
     (W: 1024; H: 768;  Hz: 70; Clk: 75000;  EstB: 36; EstBit: 2),
     (W: 1024; H: 768;  Hz: 75; Clk: 78750;  EstB: 36; EstBit: 1),
     (W: 1280; H: 1024; Hz: 60; Clk: 108000; EstB: 0;  EstBit: 0),
-    (W: 1280; H: 1024; Hz: 75; Clk: 135000; EstB: 36; EstBit: 0));
+    (W: 1280; H: 1024; Hz: 75; Clk: 135000; EstB: 36; EstBit: 0),
+    { 16:9, for a modern panel. Not an established-timings bit, so it is
+      only reported as accepted if the monitor lists it in a detailed or
+      standard entry -- which most widescreens do not, even though they
+      will happily sync it. }
+    (W: 848;  H: 480;  Hz: 60; Clk: 33750;  EstB: 0;  EstBit: 0));
 
 var
   Cfg:      array[0..1023] of Byte;   { the configuration, in full }

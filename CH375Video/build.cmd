@@ -6,6 +6,10 @@ REM
 REM    build.cmd            build only
 REM    build.cmd probe      ...then identify the adapter on the DOS machine
 REM    build.cmd read       ...then probe it WITHOUT writing anything to it
+REM    build.cmd bench      ...then measure throughput
+REM    build.cmd demo       ...then run the bouncing-sprite demo
+REM    build.cmd cube       ...then the rotating 3D wireframe cube
+REM    build.cmd con        ...then the text console demonstration page
 REM    build.cmd trace      ...then probe it narrating every control stage
 REM
 REM  NEEDS
@@ -30,7 +34,7 @@ if "%DOSBRIDGE%"=="" set DOSBRIDGE=C:\dosbridge
 set TOOLS=%~dp0..\CH375USBTOOLS\src
 if not exist bin mkdir bin
 
-for %%T in (dlprobe dltest) do (
+for %%T in (dlprobe dltest dlbench dldemo dlcon) do (
   echo --- %%T
   fpc -Tmsdos -Pi8086 -WmLarge -Fu"%TOOLS%" -FEbin -FUbin src\%%T.pas >nul
   if errorlevel 1 goto failed
@@ -46,21 +50,41 @@ echo.
 if /I "%1"=="probe" goto runprobe
 if /I "%1"=="read"  goto runread
 if /I "%1"=="trace" goto runtrace
+if /I "%1"=="bench" goto runbench
+if /I "%1"=="demo"  goto rundemo
+if /I "%1"=="cube"  goto runcube
+if /I "%1"=="con"   goto runcon
 echo Built.  "build.cmd probe" identifies whatever is plugged in.
 exit /b 0
 
 :runprobe
-python "%DOSBRIDGE%\dosctl.py" run bin\DLPROBE.EXE --timeout 300
+python "%DOSBRIDGE%\dosctl.py" run --timeout 300 bin\DLPROBE.EXE
 exit /b %ERRORLEVEL%
 
 REM  /K holds back the channel unlock, which is the only write DLPROBE
 REM  makes.  Use this one when the adapter's state must not be disturbed.
 :runread
-python "%DOSBRIDGE%\dosctl.py" run bin\DLPROBE.EXE /K --timeout 300
+python "%DOSBRIDGE%\dosctl.py" run --timeout 300 bin\DLPROBE.EXE -K
 exit /b %ERRORLEVEL%
 
 :runtrace
-python "%DOSBRIDGE%\dosctl.py" run bin\DLPROBE.EXE /V /T /E=4 --timeout 300
+python "%DOSBRIDGE%\dosctl.py" run --timeout 300 bin\DLPROBE.EXE -V -T -E=4
+exit /b %ERRORLEVEL%
+
+:runbench
+python "%DOSBRIDGE%\dosctl.py" run --timeout 500 bin\DLBENCH.EXE
+exit /b %ERRORLEVEL%
+
+:rundemo
+python "%DOSBRIDGE%\dosctl.py" run --timeout 200 bin\DLDEMO.EXE -D=balls -S=20
+exit /b %ERRORLEVEL%
+
+:runcube
+python "%DOSBRIDGE%\dosctl.py" run --timeout 200 bin\DLDEMO.EXE -D=cube -S=20
+exit /b %ERRORLEVEL%
+
+:runcon
+python "%DOSBRIDGE%\dosctl.py" run --timeout 250 bin\DLCON.EXE -D -S=5
 exit /b %ERRORLEVEL%
 
 :failed
