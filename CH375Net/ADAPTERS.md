@@ -46,7 +46,7 @@ SUPPORTED.
 | | |
 |---|---|
 | **Works** | driven, on hardware, by this project |
-| **Works (class)** | driven by `ecm.pas`, which reads the device's own descriptors rather than knowing the chip. Any adapter offering CDC-ECM should land here |
+| **Works (class)** | driven by `ecm.pas` and `USBPKT`'s class path, which read the device's own descriptors rather than knowing the chip. Any adapter offering CDC-ECM should land here |
 | **Should work** | same register map as something that works, not yet tried |
 | **Needs a driver** | understood part, no bring-up written for it yet |
 | **Unlikely** | needs more than the CH375 can give it |
@@ -57,7 +57,7 @@ SUPPORTED.
 
 | Chip | USB ID | Notes |
 |---|---|---|
-| ASIX AX88179A **over CDC-ECM** | `0B95:1790`, `iProduct` "AX88179A" | Works through the class path. Verified on hardware 2026-09-10: `ECMLINK` discovered configuration 3, control interface 0, data interface 1 alt 1, bulk endpoints 2 IN / 3 OUT, read MAC `A0:CE:C8:BC:0A:91` out of the string descriptor, sent an ARP request and was answered by the host it asked about. `USBPKT` discovers the identical geometry. **But read the vendor-mode latch below before testing it** -- the adapter stops offering the ECM configuration at all once its vendor path has run. Sold as a **USB-C** adapter, model `UTC-GE-AL-AX01`, used here through a USB-C-to-A adapter. |
+| ASIX AX88179A **over CDC-ECM** | `0B95:1790`, `iProduct` "AX88179A" | **Works fully.** `USBPKT` brings it up as a class device from `AUTOEXEC.BAT` and mTCP runs over it: verified 2026-09-10/11 with **130 MB** of downloads byte-exact (zero mismatches, 13 rounds of 10 MB) and, at the keyboard, **telnet, FTP, HTTP GETs and pings**. Discovered geometry: configuration 3, control interface 0, data interface 1 alt 1, bulk endpoints 2 IN / 3 OUT, MAC `A0:CE:C8:BC:0A:91` from the string descriptor -- `ECMLINK` and `USBPKT` agree independently. 22-23 KB/s. **Read the vendor-mode latch below before testing it.** Sold as a **USB-C** adapter, model `UTC-GE-AL-AX01`, used here through a USB-C-to-A adapter. |
 | ASIX AX88179 | `0B95:1790` | The reference part. Verified on **two physically different adapters** from different manufacturers — MACs `40:AE:30:6D:00:34` and `00:50:B6:B6:1C:64`. Both boot, link, and move data. **They do NOT move 5 MB byte-exact reliably**, which this row used to claim: about one 5 MB download in nine comes back the right length with a corrupt region, and every error counter reads zero while it happens. See the README. The claim was true of the runs it was written from and was never a property of the adapter. |
 
 ## Before you plug a new one in

@@ -190,6 +190,14 @@ driver error counter still at zero over 52,739 bursts. That is a 5%
 outcome if the class path shared the vendor path's fault rate, so it is
 evidence at roughly the 95% level. CHANGELOG has the table.
 
+**Then it was used at the keyboard: telnet, FTP, HTTP GETs and pings, all
+working.** Worth treating as separate evidence rather than more of the
+same. FTP opens two simultaneous TCP connections, which nothing here had
+tested; telnet is a long-lived stream of tiny packets where latency is felt
+instead of averaged away; and a person notices "sluggish", which no counter
+in this driver can report -- they all read zero through the broken runs
+earlier that day as well as the good ones.
+
 **One thing left open on it:**
 
 * **`longest poll` reads 54.7 ms**, a whole tick at `/R=1`, where the

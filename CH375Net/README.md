@@ -105,11 +105,22 @@ through the chip. The reply is checked against both the address asked about
 and our own hardware address — the first version accepted any ARP reply and
 promptly reported one from a host nobody had asked about.
 
-**And `USBPKT` speaks it too, so mTCP runs over it.** Verified on hardware:
-the driver came up on the class path unattended from `AUTOEXEC.BAT`, `PING`
-got 4 of 4 replies, and a 1 MB `HTGET` came back byte-exact. The whole
+**And `USBPKT` speaks it too, so mTCP runs over it.** The whole
 configuration -- which configuration, which interfaces, which alt setting,
 which endpoints, the MAC -- is read from the device.
+
+Verified on hardware, in two different ways that are worth keeping apart:
+
+| | |
+|---|---|
+| by harness | came up on the class path unattended from `AUTOEXEC.BAT`; `PING` 4 of 4; **130 MB** of downloads verified byte by byte, **zero mismatches**, every driver error counter still zero across 52,739 bursts |
+| **at the keyboard** | **telnet, FTP, HTTP GETs and pings** -- used as an ordinary network card by a person, not a script |
+
+The second row is not a lesser version of the first. FTP opens two
+simultaneous TCP connections, which no test here had done; telnet is a
+long-lived stream of tiny packets where latency is felt rather than
+averaged away; and a person notices "sluggish", which no counter in this
+driver reports.
 
 **One thing will waste your afternoon if you do not know it.** This adapter
 stops offering its ECM configuration once its vendor bring-up has run, and

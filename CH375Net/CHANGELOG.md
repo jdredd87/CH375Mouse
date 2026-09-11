@@ -4,6 +4,32 @@ CH375Net -- StevenC -- https://github.com/jdredd87/CH375USBTools
 
 Versions live in the `VER` constant of each program.
 
+## Used in anger: telnet, FTP, HTTP and ping over CDC-ECM
+
+Driven at the keyboard rather than by a harness, and that is the point of
+recording it separately. Everything above was verified by automated
+one-shot bulk downloads; this was a person sitting at the machine using the
+adapter as a network card.
+
+**telnet, FTP, HTTP GETs and pings all worked.**
+
+Three of those exercise things no test here had touched:
+
+* **telnet** is a long-lived interactive connection of tiny packets, where
+  every round trip is felt. A bulk download hides latency and hides a
+  driver that delivers frames late; an interactive session does not.
+* **FTP opens TWO connections** -- a control channel plus a data channel
+  per transfer, with a listening socket for the latter. That is the first
+  time this driver has carried more than one simultaneous TCP flow, and it
+  is more pressure on the receive upcall than any download produced.
+* **A human decides when something feels wrong.** No counter here reports
+  "sluggish", and the driver's own error counters cannot: they all read
+  zero through both the good runs and the broken ones earlier in the day.
+
+This is the evidence the whole exercise was for. The adapter that
+enumerated and could not transmit is now a network card somebody can just
+use.
+
 ## USBPKT speaks CDC-ECM, and the adapter latches itself out of it
 
 `ecm.pas` proved the protocol; this puts it in the packet driver, so mTCP
