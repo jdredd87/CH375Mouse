@@ -84,6 +84,63 @@ Either way, budget the volume: at 1 event per 44 MB a single clean 5 MB
 download means almost nothing, and treating a small clean result as a
 control is the mistake this project has made most often.
 
+## Tried, and it is NOT what its ID says
+
+**ASIX AX88179A** -- `0B95:1790`, the *same USB ID as the AX88179*, and the
+only thing in the descriptors that distinguishes them is the product string:
+
+```
+idVendor   0B95  ASIX
+idProduct  1790
+iProduct   "AX88179A"
+bNumConfigurations 3
+
+CONFIG 1  INTERFACE 0  FF/FF/00 vendor specific, 4 endpoints
+            EP 81 IN interrupt   EP 82 IN bulk
+            EP 03 OUT bulk       EP 05 OUT bulk
+CONFIG 2  02/0D  CDC-NCM
+CONFIG 3  02/06  CDC-ECM
+```
+
+So `NETID` reporting `0B95:1790` is **not** enough to conclude you have the
+reference part. Read `iProduct`.
+
+**How far it gets, which is most of the way and not all:** it enumerates,
+falls back to full speed correctly, accepts `set configuration`, takes every
+register write, reads its MAC (`A0:CE:C8:BC:0A:91`), reports **link up**, and
+receives frames. `USBPKT` loads it from `AUTOEXEC.BAT` with no changes and
+announces "USB Ethernet ready".
+
+**And nothing it transmits is answered.** Pings all time out, the sending
+host never learns its address, and the frame counters show receive working
+while transmit goes nowhere. Tried at both link settings -- the default
+10BASE-T and `/G` for gigabit -- with no difference, so it is not speed
+negotiation.
+
+The endpoints are **not** the problem either, which was the first guess:
+the driver issues tokens to endpoint 2 IN and 3 OUT, and this part's vendor
+configuration is exactly `EP 82` IN and `EP 03` OUT. It has a second bulk
+OUT at `EP 05` that the 179 does not, which is worth a look -- the 179A may
+expect transmit on a different queue, or need a register the 179 does not.
+
+**Do not read the `/V` bring-up trace after `USBPKT` has already loaded it.**
+Every register access reports NAK in that case and the MAC read "fails",
+which looks like a dead device and is an artifact of re-initialising one
+that is already configured. Power cycle first, or believe the boot banner.
+
+### The opportunity in it
+
+This part offers **CDC-ECM as configuration 3 and CDC-NCM as configuration
+2**. `NEXT.md` already ranks CDC-ECM as the most valuable driver to write,
+because it is a *class* driver -- one bring-up covering many adapters from
+many vendors rather than one vendor bring-up each. Here is a device that
+speaks it, already on the bench, whose vendor path does not work.
+
+That makes ECM the obvious next piece of work rather than chasing the 179A's
+vendor quirks: standard, documented, and it would take this adapter from
+"enumerates but cannot transmit" to working while also covering parts nobody
+here has bought yet.
+
 ## Should work
 
 | Chip | USB ID | Notes |
