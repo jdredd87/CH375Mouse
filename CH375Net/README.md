@@ -105,9 +105,18 @@ through the chip. The reply is checked against both the address asked about
 and our own hardware address — the first version accepted any ARP reply and
 promptly reported one from a host nobody had asked about.
 
-**It is not a packet driver yet.** `USBPKT.COM` still speaks only the vendor
-path, so mTCP cannot run over an ECM adapter today. `NEXT.md` has what that
-involves.
+**And `USBPKT` speaks it too, so mTCP runs over it.** Verified on hardware:
+the driver came up on the class path unattended from `AUTOEXEC.BAT`, `PING`
+got 4 of 4 replies, and a 1 MB `HTGET` came back byte-exact. The whole
+configuration -- which configuration, which interfaces, which alt setting,
+which endpoints, the MAC -- is read from the device.
+
+**One thing will waste your afternoon if you do not know it.** This adapter
+stops offering its ECM configuration once its vendor bring-up has run, and
+nothing in software undoes that -- not a USB bus reset, and *not a warm
+reboot*, because the CH375 feeds the adapter off the ISA bus. Power-cycle
+the machine or re-plug the adapter before testing anything about ECM.
+`ADAPTERS.md` has the measurement.
 
 ---
 

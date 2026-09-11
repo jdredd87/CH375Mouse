@@ -177,36 +177,28 @@ outright.
 hiding the fault: a planted displacement reads back exactly, and a 4 GB
 period has no blind spot the way a 256-byte ramp does.
 
-### 1b. FIRST: prove the ECM data path in USBPKT, which needs a RE-PLUG
+### 1b. DONE: mTCP runs over CDC-ECM
 
-Everything up to carrying a frame is verified: the probe finds the function,
-reports the geometry it read (`cfg 03 ctl if 00 data if 01 alt 01 ep in 02
-out 03`, matching ECMLINK independently), reads the MAC out of the string
-descriptor, and the packet filter is accepted.
+Verified on hardware. `AUTOEXEC.BAT`'s own `USBPKT` came up on the class
+path unattended after a power cycle, `PING` got 4 of 4, and a 1 MB `HTGET`
+came back byte-exact (CRC-32 `04D0E435`). CHANGELOG has the detail.
 
-**The data path has never carried a frame, and the reason is the latch.**
-The AX88179A stops offering its ECM configuration once its vendor bring-up
-has run -- `bNumConfigurations` goes from 3 to 1 -- and nothing in software
-clears that, not a USB bus reset and not a warm reboot, because the CH375
-feeds the adapter off the ISA bus and a warm boot never drops that rail.
-Every attempt to test ECM in a session where the vendor path had already run
-therefore ran on the vendor path, correctly and uselessly. `ADAPTERS.md` has
-the measurement.
+**How to re-test it, because the order matters:**
 
-So the test is:
+1. **Power-cycle the machine** (`dospower cycle`) or unplug and re-plug the
+   adapter. Nothing weaker works -- see the latch in `ADAPTERS.md`. A warm
+   reboot does NOT, because the CH375 feeds the adapter off the ISA bus.
+2. `USBPKT /S` -- it must say `protocol=CDC-ECM` and `link=UP`. If it says
+   `AX88179 vendor`, the device was still latched and nothing after this
+   point means anything.
+3. `PKTTEST /M=<ours> /I=65 /T=<a live host> /S=8` -- an ARP that is
+   answered proves the whole loop in both directions.
+4. `SET MTCPCFG=C:\CH375\MTCPAX.CFG` then `PING`, then `HTGET` and check
+   the CRC against the table below.
 
-1. **Unplug the USB adapter and plug it back in**, or power-cycle the
-   machine. Nothing else works.
-2. `USBPKT /I=65` -- the banner must say `CDC-ECM adapter - using the class
-   driver.` and print the `ECM: cfg ...` line. If it says `link up`, the
-   device was still latched and the run proves nothing.
-3. `USBPKT /S` -- confirm `protocol=CDC-ECM`.
-4. `PKTTEST /M=<ours> /I=65 /T=<a live host> /S=8` -- an ARP that is
-   answered proves the whole loop.
-5. `SET MTCPCFG=C:\CH375\MTCPAX.CFG` then `PING <that host>`.
-
-Step 4 is the one that matters. Steps 1-3 only establish that the right path
-came up.
+Step 2 is not a formality. Most of the time lost getting here went into
+runs that were measuring the vendor path while appearing to measure the
+class one.
 
 ### 3. Or: the other half of the class work
 

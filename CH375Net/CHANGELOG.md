@@ -81,19 +81,63 @@ that adapter is not on the bench, and a latent bug nobody is hitting is a
 poor reason to change untestable code. The one-line fix is recorded in
 NEXT.md.
 
-### What is verified, and what is not
+### Verified on hardware: mTCP runs over CDC-ECM
 
-Verified on hardware: the probe finds the ECM function and reports the
-geometry it read -- `ECM: cfg 03 ctl if 00 data if 01 alt 01 ep in 02 out
-03`, identical to what ECMLINK discovers independently; the MAC comes out of
-the string descriptor; the packet filter is accepted; and the vendor path is
-unchanged when ECM is absent or `/X` is given.
+After a power cycle -- which is what it takes, see the latch above --
+`AUTOEXEC.BAT`'s own `USBPKT` came up on the class path unattended, and
+everything above it worked:
 
-**NOT yet verified: the ECM data path inside USBPKT.** Every attempt to
-test it in this session ran on a device already latched into vendor mode by
-an earlier run, so the driver correctly took the vendor path and the class
-path never carried a frame. It needs the adapter re-plugged. Do not read
-this entry as "mTCP works over ECM" -- that has not been shown.
+```
+  protocol=CDC-ECM (class, from the descriptors)
+  link=UP  notifications=4
+  tokens in=29 out=31
+```
+
+`29` is `(2 << 4) | PID_IN` and `31` is `(3 << 4) | PID_OUT`, both built
+from endpoint numbers read out of the descriptors.
+
+| | |
+|---|---|
+| `PKTTEST /T=192.168.50.46` | ARP answered -- a frame reached the wire and the reply came back |
+| `PING 192.168.50.46` | **4 of 4 replies**, average 51.4 ms |
+| `HTGET .../download/1mb` | **1,048,576 bytes, CRC-32 `04D0E435`** -- exactly the expected value |
+| `HTGET .../download/5mb` | **5,242,880 bytes in 214.3 s, 0 mismatches** -- `RAMPCHK`: "exactly the ramp" |
+
+The last two rows are what matter: full TCP downloads, byte-perfect, over a
+driver that gets its entire configuration from the device.
+
+**24.5 KB/s**, against 11.4 KB/s recorded for the vendor path. Do not read
+that as "the class path is twice as fast" -- the two numbers come from
+different adapters on different days, and this one has had no tuning at all.
+It is worth knowing only because it rules out the obvious worry, that
+carrying one frame per USB transfer instead of a batched burst would be
+ruinous. It is not.
+
+**And the clean 5 MB says nothing about the corruption fault.** The vendor
+path loses about one download in nine at this size; a single clean run is
+therefore an ~89% outcome even if the class path shared the fault exactly.
+This is the trap NEXT.md already warns about, and one run is not a result.
+Whether ECM is free of it is open and would need the same tens of megabytes
+the vendor path needed.
+
+**The link reading is what made the rest diagnosable**, and it was added
+because an earlier attempt read `bursts collected=0` with no way to tell a
+broken receive path from a cable that was not connected. `USBPKT` now polls
+the ECM interrupt endpoint every sixteenth tick and `/S` reports `link=`.
+It says `not stated` rather than `DOWN` when the device has not spoken --
+notifications are sent on CHANGE, and an unknown is not a negative.
+
+### One wart, recorded rather than fixed
+
+**`USBPKT /U` after an ECM bring-up leaves the adapter unable to
+re-enumerate.** Observed directly: unload, then `ECMLINK`, and the bus
+reports `a device is attached but nothing answers`. A power cycle clears
+it. The vendor path does not do this -- after it, `ECMLINK` still
+enumerates (and then finds only one configuration, per the latch above).
+
+Nothing is lost by it in normal use, because the driver loads once at boot
+and stays. It matters when iterating, and it is why the test procedure in
+NEXT.md starts with a power cycle rather than an unload.
 
 ## CDC-ECM: a class driver, and an adapter that could not transmit now does
 

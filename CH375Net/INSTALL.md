@@ -92,10 +92,25 @@ and requires that host's reply, so a successful run is proof of transmit and
 not merely of enumeration. `ECMLINK [@260] [our-ip] [target-ip]` overrides
 the I/O address and the two addresses it uses.
 
-The catch is worth stating plainly: **ECM is not wired into `USBPKT` yet**,
-so an adapter that only works this way has no packet driver and mTCP cannot
-run over it. `ECMLINK` tells you the adapter is good; making it useful is
-the job described in `NEXT.md`.
+**`USBPKT` handles this by itself** -- it asks the device what it is before
+choosing a path, so an ECM adapter needs no special command. The banner says
+which one it took:
+
+```
+C:\CH375> USBPKT
+Bringing the adapter up...ECM: cfg 03 ctl if 00 data if 01 alt 01 ep in 02 out 03
+CDC-ECM adapter - using the class driver.
+MAC address: A0:CE:C8:BC:0A:91
+```
+
+`USBPKT /S` then reports `protocol=CDC-ECM` and `link=UP`. `/X` forces the
+vendor path if you ever need to compare the two.
+
+**One trap.** An adapter that offers both may stop offering the class
+configuration once its vendor path has run, and a warm reboot does not undo
+that -- the CH375 feeds the adapter off the ISA bus, so it is never
+re-powered. If `USBPKT` says `link up` where you expected `CDC-ECM`,
+power-cycle the machine or re-plug the adapter and try again.
 
 ## Step 2: pick an interrupt vector
 

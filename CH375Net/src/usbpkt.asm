@@ -278,6 +278,20 @@ tok_out:    db  (EP_BULK_OUT << 4) | PID_OUT
 ep_in_n:    db  EP_BULK_IN                ; bare number, for CLEAR_FEATURE
 ep_out_n:   db  EP_BULK_OUT
 
+; The interrupt endpoint, where an ECM device reports its link.  This is
+; not decoration: a down link and a broken receive path produce exactly the
+; same symptom -- an endpoint that NAKs for ever -- and nothing else here
+; can tell them apart.  ECMLINK has the same read for the same reason.
+;
+; Notifications are sent on CHANGE, so link_st stays FF until the device
+; says something, and FF means "it has not told us", never "down".
+ep_int_n:   db  0                    ; 0 = no interrupt endpoint
+tok_int:    db  0
+int_tog:    db  0x80
+int_ctr:    db  1
+link_st:    db  0xFF                 ; FF unknown, 0 down, 1 up
+n_notify:   dw  0
+
 ; Bytes of vendor header in front of a transmitted frame: 8 for the
 ; AX88179, 0 for ECM.  A length rather than a flag because three separate
 ; places need the number, and a flag tested three times is how the two
@@ -1176,6 +1190,19 @@ rx_poll:
         je      short rx_free
         ret
 rx_free:
+        ; The ECM link notification, rarely -- it is an event, not data, and
+        ; a transaction per tick for something that changes twice an hour
+        ; would be pure cost inside a timer interrupt.
+        cmp     byte [ecm_mode], 0
+        je      short rx_nonote
+        cmp     byte [ep_int_n], 0
+        je      short rx_nonote
+        dec     byte [int_ctr]
+        jnz     short rx_nonote
+        mov     byte [int_ctr], 16
+        call    ecm_note
+rx_nonote:
+
         ; Poll even when nobody is listening, and throw the result away.
         ;
         ; This used to return here without touching the chip, on the
@@ -1287,6 +1314,52 @@ rx_have:
 rx_have_burst:
         call    rx_deliver
 rx_done:
+        ret
+
+; --------------------------------------------------------------------------
+; One read of the ECM interrupt endpoint.  A NAK is the normal answer and
+; costs a few microseconds; anything else is a notification.
+;
+; The only one acted on is NETWORK_CONNECTION (bNotification 00), whose
+; wValue is 1 for up and 0 for down.  Everything else is counted and
+; dropped -- CONNECTION_SPEED_CHANGE is the other common one and this
+; driver has nothing to do with the answer.
+; --------------------------------------------------------------------------
+ecm_note:
+        mov     al, CMD_SET_ENDP6
+        call    ch_cmd
+        mov     al, [cs:int_tog]
+        call    ch_wr
+        mov     al, CMD_ISSUE_TOKEN
+        call    ch_cmd
+        mov     al, [cs:tok_int]
+        call    ch_wr
+        push    cx
+        mov     cx, 0x1000
+        call    ch_wait
+        pop     cx
+        jc      short ecn_out
+        cmp     al, INT_SUCCESS
+        jne     short ecn_out
+        push    es
+        push    di
+        push    cs
+        pop     es
+        mov     di, rx_scratch
+        mov     cl, 16
+        call    ch_read
+        pop     di
+        pop     es
+        jc      short ecn_out
+        xor     byte [cs:int_tog], 0x40
+        inc     word [cs:n_notify]
+        cmp     al, 8
+        jb      short ecn_out
+        cmp     byte [cs:rx_scratch + 1], 0      ; NETWORK_CONNECTION
+        jne     short ecn_out
+        mov     al, [cs:rx_scratch + 2]          ; wValue low
+        mov     [cs:link_st], al
+ecn_out:
         ret
 
 ; --------------------------------------------------------------------------

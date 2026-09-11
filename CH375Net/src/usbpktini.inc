@@ -1219,6 +1219,7 @@ ecm_alt:    db  0                ; its alt setting that HAS endpoints
 ecm_epi:    db  0                ; bulk IN endpoint number
 ecm_epo:    db  0                ; bulk OUT
 ecm_maci:   db  0                ; iMACAddress string index
+ecm_epint:  db  0                ; interrupt IN endpoint, 0 = none
 ecm_ncfg:   db  0
 ecw_len:    db  0                ; bLength of the descriptor being walked
 ecm_glen:   db  0                ; wLength of the descriptor being fetched
@@ -1397,6 +1398,19 @@ ecwc_out:
 ecw_ep:
         cmp     byte [ecw_len], 7
         jb      short ecwe_out
+        ; The notification endpoint belongs to the CONTROL interface, not
+        ; the data one, so it is taken on a different test entirely.
+        mov     al, [si + rxbuf + 3]
+        and     al, 3
+        cmp     al, 3                    ; interrupt
+        jne     short ecw_epbulk
+        cmp     bl, [ecm_ctlif]
+        jne     short ecwe_out
+        mov     al, [si + rxbuf + 2]
+        and     al, 0x0F
+        mov     [ecm_epint], al
+        jmp     short ecwe_out
+ecw_epbulk:
         test    dl, 2
         je      short ecwe_out           ; no data alt chosen yet
         ; An endpoint descriptor belongs to whichever interface descriptor
@@ -1443,6 +1457,7 @@ ecm_one:
         mov     byte [cs:ecm_epi], 0     ; per configuration, not per device:
         mov     byte [cs:ecm_epo], 0     ; a half-filled match from the one
         mov     byte [cs:ecm_maci], 0    ; before must not vote in this one
+        mov     byte [cs:ecm_epint], 0
 
         ; Nine bytes first, for wTotalLength.  A configuration descriptor is
         ; only meaningful ENTIRE -- the interface, functional and endpoint
@@ -1769,6 +1784,10 @@ ecb_k3:
         call    puts
         mov     al, [ecm_epo]
         call    puthex
+        mov     dx, msg_e_epi
+        call    puts
+        mov     al, [ecm_epint]
+        call    puthex
         popf
         jnc     short ecb_filtok
         mov     dx, msg_e_filt
@@ -1792,6 +1811,15 @@ ecb_filtok:
         shl     al, cl
         or      al, PID_OUT
         mov     [tok_out], al
+        mov     al, [ecm_epint]
+        mov     [ep_int_n], al
+        or      al, al
+        je      short ecb_noint
+        mov     cl, 4
+        shl     al, cl
+        or      al, PID_IN
+        mov     [tok_int], al
+ecb_noint:
         mov     byte [dev_live], 1
         mov     byte [bu_step], 0
         xor     al, al
@@ -2885,6 +2913,37 @@ stat_path:
         call    puts
         call    crlf
 
+        cmp     byte [es:ecm_mode], 0
+        je      short stat_nolink
+        mov     dx, msg_s_link
+        call    puts
+        mov     dx, msg_l_unk
+        mov     al, [es:link_st]
+        cmp     al, 0xFF
+        je      short stat_lsay
+        mov     dx, msg_l_down
+        or      al, al
+        je      short stat_lsay
+        mov     dx, msg_l_up
+stat_lsay:
+        call    puts
+        mov     dx, msg_l_note
+        call    puts
+        mov     ax, [es:n_notify]
+        call    putdecw
+        call    crlf
+
+        mov     dx, msg_s_tok
+        call    puts
+        mov     al, [es:tok_in]
+        call    puthex
+        mov     dx, msg_s_tok2
+        call    puts
+        mov     al, [es:tok_out]
+        call    puthex
+        call    crlf
+stat_nolink:
+
         mov     dx, msg_s_bmov
         call    puts
         mov     dx, msg_bmov_slow
@@ -3360,7 +3419,15 @@ msg_e_dat:     db ' data if $'
 msg_e_alt:     db ' alt $'
 msg_e_eps:     db ' ep in $'
 msg_e_epo:     db ' out $'
+msg_e_epi:     db ' int $'
 msg_e_filt:    db ' filter REFUSED$'
+msg_s_link:    db '  link=$'
+msg_l_up:      db 'UP$'
+msg_l_down:    db 'DOWN$'
+msg_l_unk:     db 'not stated (sent on CHANGE, so this is not "down")$'
+msg_l_note:    db '  notifications=$'
+msg_s_tok:     db '  tokens in=$'
+msg_s_tok2:    db ' out=$'
 msg_s_path:    db '  protocol=$'
 msg_p_ecm:     db 'CDC-ECM (class, from the descriptors)$'
 msg_p_ax:      db 'AX88179 vendor$'
