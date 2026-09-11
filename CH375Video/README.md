@@ -19,8 +19,9 @@ output, taken through a capture card.
 | `DLBENCH` | measure throughput, so optimisation is aimed rather than guessed |
 | `DLDEMO` | moving graphics: `balls`, `stars`, `cube`, `bars`, `raster` |
 | `DLCON` | a text console, which is what this hardware is actually good at |
+| `DLFRACT` | a Mandelbrot computed on the V30 — the one COMPUTE-bound tool |
 
-`build.cmd` builds all five. `build.cmd probe` runs `DLPROBE` on the DOS
+`build.cmd` builds all six. `build.cmd probe` runs `DLPROBE` on the DOS
 box; `build.cmd read` runs it with `/K` so nothing is written at all.
 
 ## Why this is a different problem from CH375Net
@@ -328,6 +329,60 @@ the ROM.
 
 A whole page in 11.7 s is a page, not a terminal. The realistic use is
 incremental: one changed line is about a twentieth of that.
+
+## The one thing here that is not transfer-bound
+
+Everything above is limited by the USB path. `DLFRACT` is the exception,
+deliberately: a Mandelbrot's escape-time loop has no encoding trick that
+can make it cheaper, and the tool **times the two halves apart** so that
+claim is measured rather than asserted.
+
+![Mandelbrot](doc/mandel.png)
+
+*160×120 computed, 16 iterations, shown as 4×4 blocks at 640×480.*
+
+```
+compute   20.3 s
+transfer  12.8 s
+total     33.2 s      compute is 61% of it
+bytes     56,576      against 614,400 for the same area raw
+```
+
+**The arithmetic is Q8 and 16-bit, and that is the whole performance
+story.** `BENCH` measures a 16-bit multiply on this machine at 58,640/s
+against 10,920 for a 32-bit one, because FPC calls a software routine for
+`LongInt`. The inner loop needs three multiplies per iteration, so in
+`LongInt` this picture would spend about 70 seconds in the multiplier
+alone. `MulQ8` is a single 16×16→32 `IMUL` and a shift across `DX:AX`.
+`CLAUDE.md` records the same lesson from the dosbridge Mandelbrot: moving
+it to Q8 with one `IMUL` was worth more than everything else combined.
+
+(The thin black line on the left spike is the set's own needle along the
+real axis between −2 and −1.4, not an artifact.)
+
+## Orientation costs more than it looks like it should
+
+The same eight colour bands, drawn horizontally and then vertically.
+Identical ink, identical area, and the encoder is a **horizontal**
+run-length coder:
+
+| | bytes | time | throughput |
+|---|---|---|---|
+| 8 bands horizontal | 12,480 | 0.60 s | 20,638 B/s |
+| 8 bars **vertical** | 29,120 | **8.2 s** | **3,530 B/s** |
+
+2.3× the bytes — and **13.6× the time**. The byte ratio does not explain
+the time ratio, and that gap is the finding: throughput itself collapsed,
+so the cost is not on the wire.
+
+It is the encoder. A solid fill is *arithmetic* — `DlFillRun` computes
+where each run ends and never looks at a pixel. Arbitrary content forces
+`DlRleRun` to **scan all 307,200 pixels** to find the runs. So laying a
+picture out across the grain costs twice in bytes and thirteen times in
+wall clock, and only one of those two costs is visible in a byte counter.
+
+This is the same effect behind the text console's 11.7 s and the 43 s for
+a screen of literal pixels. `DLBENCH` test 6 measures it.
 
 ## Traps, all of them paid for here
 

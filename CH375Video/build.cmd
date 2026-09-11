@@ -15,6 +15,7 @@ REM    build.cmd raster     ...then FULL-SCREEN raster bars
 REM    build.cmd lowres     ...then the same at 320x200, which is the only
 REM                         demo low resolution actually speeds up
 REM    build.cmd con        ...then the text console demonstration page
+REM    build.cmd fract      ...then a Mandelbrot computed on the V30
 REM    build.cmd trace      ...then probe it narrating every control stage
 REM
 REM  NEEDS
@@ -39,7 +40,7 @@ if "%DOSBRIDGE%"=="" set DOSBRIDGE=C:\dosbridge
 set TOOLS=%~dp0..\CH375USBTOOLS\src
 if not exist bin mkdir bin
 
-for %%T in (dlprobe dltest dlbench dldemo dlcon) do (
+for %%T in (dlprobe dltest dlbench dldemo dlcon dlfract) do (
   echo --- %%T
   fpc -Tmsdos -Pi8086 -WmLarge -Fu"%TOOLS%" -FEbin -FUbin src\%%T.pas >nul
   if errorlevel 1 goto failed
@@ -63,6 +64,7 @@ if /I "%1"=="bars"  goto runbars
 if /I "%1"=="raster" goto runraster
 if /I "%1"=="lowres" goto runlowres
 if /I "%1"=="con"   goto runcon
+if /I "%1"=="fract" goto runfract
 echo Built.  "build.cmd probe" identifies whatever is plugged in.
 exit /b 0
 
@@ -116,6 +118,12 @@ exit /b %ERRORLEVEL%
 
 :runcon
 python "%DOSBRIDGE%\dosctl.py" run --timeout 250 bin\DLCON.EXE -D -S=5
+exit /b %ERRORLEVEL%
+
+REM  The one tool here that is COMPUTE-bound rather than transfer-bound,
+REM  and it times the two halves apart to prove it.
+:runfract
+python "%DOSBRIDGE%\dosctl.py" run --timeout 400 bin\DLFRACT.EXE -W=160 -I=16 -S=5
 exit /b %ERRORLEVEL%
 
 :failed

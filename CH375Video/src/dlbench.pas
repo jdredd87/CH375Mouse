@@ -38,6 +38,8 @@ program dlbench;
     rle       a full screen as solid runs, best case
     rect      a small rectangle, which is what animation actually costs
     text      a band of mixed detail, the realistic middle
+    turn      the same eight bands horizontal, then vertical --
+              the cost of laying a picture out across the grain
 
   Exit codes: 0 ok, otherwise the DlOpen reason (all <= 20) }
 
@@ -227,6 +229,31 @@ begin
     if not DlRleRun(DlAddr(T, 0, I), @Line[0], T.XRes) then Break;
   if not DlSend then WriteLn('      send failed');
   Report('full screen, text-like', T0, B0, P0);
+  WriteLn;
+
+  WriteLn('---- 6. the same picture, turned ninety degrees ----');
+  WriteLn('  Eight colour bands horizontally, then the same eight');
+  WriteLn('  vertically.  Identical ink, identical area, and the encoder');
+  WriteLn('  is a HORIZONTAL run-length coder -- so this is the cost of');
+  WriteLn('  laying a picture out the way the wire does not want it.');
+  WriteLn;
+
+  T0 := Ticks; B0 := DlBytes; P0 := DlPackets;
+  for I := 0 to 7 do
+    if not DlFillRun(LongInt(I) * (T.YRes div 8) * T.XRes * 2,
+                     DlRgb(255 - I * 30, I * 30, 128),
+                     LongInt(T.YRes div 8) * T.XRes) then Break;
+  if not DlSend then WriteLn('      send failed');
+  Report('8 bands HORIZONTAL', T0, B0, P0);
+
+  for I := 0 to T.XRes - 1 do
+    Line[I] := DlRgb(255 - (I div (T.XRes div 8)) * 30,
+                     (I div (T.XRes div 8)) * 30, 128);
+  T0 := Ticks; B0 := DlBytes; P0 := DlPackets;
+  for I := 0 to T.YRes - 1 do
+    if not DlRleRun(DlAddr(T, 0, I), @Line[0], T.XRes) then Break;
+  if not DlSend then WriteLn('      send failed');
+  Report('8 bars VERTICAL', T0, B0, P0);
   WriteLn;
 
   WriteLn('---- totals ----');
