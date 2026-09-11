@@ -83,6 +83,10 @@ const
 var
   Sender  : TIP;
   Buf     : array[0..MAXDG - 1] of Byte;
+  { What this datagram's payload MUST contain, built once per datagram and
+    compared in one go.  See the note above the loop. }
+  Exp     : array[0..MAXDG - 1] of Byte;
+  ExpL    : array[0..(MAXDG div 4) - 1] of LongInt absolute Exp;
   Port    : Word;
   Vec     : Byte;
   Cfg     : ShortString;
@@ -102,6 +106,8 @@ var
   Want    : Byte;
   FirstBad: Integer;
   SrcW    : LongInt;
+  Base    : LongInt;
+  W0      : LongInt;
   Al      : Integer;
   Foreign : LongInt;
   BadHdr  : LongInt;
@@ -314,17 +320,44 @@ begin
     if (AckEvy > 0) and (Datas mod AckEvy = 0) then
       if NetUdpSend(Port, Port, AckBuf, 16) then Inc(Acks);
 
+    { Build the expected payload and compare it in ONE operation.
+
+      The first version computed `Seq * PAYLOAD + i` inside the per-byte
+      loop -- a 32-bit MULTIPLY for every byte, which BENCH prices at 91 us.
+      1392 of those is 127 ms per datagram, so the tool topped out near 8
+      datagrams a second and measured 4.9 KB/s while the wire was offering
+      16.8.  It was three times slower than an HTTP download, which is
+      absurd for a test whose whole purpose is to find a rare event faster,
+      and it would have turned a 2.5 hour experiment into 9 hours.
+
+      PAYLOAD is 1392 -- 1400 less the 8-byte header -- which is exactly
+      348 longwords, and the payload always begins on a word boundary
+      because Seq * 1392 is a multiple of 4.  So the expected contents are 349 consecutive longwords: build
+      them with an increment and let CompareByte do the rest.  No multiply
+      anywhere, and the per-byte walk is paid only by datagrams that
+      actually differ -- which on a healthy run is none of them.
+
+      This is the hoisting lesson from the raycaster notes, arrived at the
+      hard way for a second time: moving work out of the inner loop beat
+      every micro-optimisation, and the constant to check is the one being
+      recomputed. }
+    Base := Seq * (MAXDG - HDR);
+    W0 := Base shr 2;
+    for I := 0 to ((Got - HDR) div 4) do
+      if I <= (MAXDG div 4) - 1 then ExpL[I] := W0 + I;
+
     FirstBad := -1;
-    for I := HDR to Got - 1 do
-    begin
-      G := Seq * (MAXDG - HDR) + (I - HDR);
-      Want := WantAt(G);
-      if Buf[I] <> Want then
+    if CompareByte(Buf[HDR], Exp, Got - HDR) <> 0 then
+      for I := HDR to Got - 1 do
       begin
-        Inc(BadB);
-        if FirstBad < 0 then FirstBad := I;
+        G := Base + (I - HDR);
+        Want := WantAt(G);
+        if Buf[I] <> Want then
+        begin
+          Inc(BadB);
+          if FirstBad < 0 then FirstBad := I;
+        end;
       end;
-    end;
 
     if FirstBad >= 0 then
     begin

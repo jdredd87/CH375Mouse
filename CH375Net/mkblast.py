@@ -71,6 +71,10 @@ def main():
     ap.add_argument("--secs", type=float, default=120)
     ap.add_argument("--rate", type=float, default=40,
                     help="datagrams per second (default 40, ~56 KB/s)")
+    ap.add_argument("--corrupt-every", type=int, default=0, metavar="N",
+                    help="deliberately damage 1 datagram in N, by planting "
+                         "the real fault's signature: 4 bytes from -64 then "
+                         "158 from +76. Proves the receiver can FAIL.")
     a = ap.parse_args()
 
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -96,12 +100,24 @@ def main():
     end = time.time() + a.secs
     seq = 0
     sent = 0
+    planted = 0
     nxt = time.time()
     print("blasting %s:%d for %.0fs at ~%.0f/s (%.1f KB/s)"
           % (a.host, a.port, a.secs, a.rate, a.rate * 1400 / 1024))
     try:
         while time.time() < end:
             pkt = MAGIC + struct.pack("<I", seq) + cache[seq % WINDOW]
+            if a.corrupt_every and sent and sent % a.corrupt_every == 0:
+                # Plant the signature the driver actually produces, so the
+                # receiver has to detect and decode a KNOWN displacement.
+                # An instrument that has not been shown able to fail is not
+                # evidence, and this one was rewritten for speed.
+                b = bytearray(pkt)
+                o = 8 + 400
+                b[o:o + 4] = bytes(pkt[o - 64:o - 60])
+                b[o + 4:o + 162] = bytes(pkt[o + 80:o + 238])
+                pkt = bytes(b)
+                planted += 1
             try:
                 s.sendto(pkt, (a.host, a.port))
                 sent += 1
@@ -117,7 +133,8 @@ def main():
                 nxt = time.time()
     except KeyboardInterrupt:
         pass
-    print("sent %d datagrams (%.1f MB)" % (sent, sent * 1400 / 1048576.0))
+    print("sent %d datagrams (%.1f MB), %d deliberately corrupted"
+          % (sent, sent * 1400 / 1048576.0, planted))
 
 
 if __name__ == "__main__":
