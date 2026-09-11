@@ -98,6 +98,27 @@ and receive on it.
 
 ## What to do next
 
+### 0. Where this was left
+
+**The driver is in its best known state and the corruption is NOT solved.**
+Both register fixes are in the default build, `/8` still reaches the
+portable loops, and the boot copy in `C:\CH375` was updated so the machine
+actually starts with them.
+
+Verified totals at hand-off, all with the fixes in:
+
+| | volume | events |
+|---|---|---|
+| USBVFY, receive path only | 44 MB | 0 |
+| HTTP over USBPKT | ~220 MB | 5 |
+| NE2000 control | 165 MB | 0 |
+
+The USBVFY figure is **not** an exclusion: at 1 event per 44 MB it expects
+1.0 and is a 37% outcome. Getting it to ~180 MB, where a clean sweep means
+something, is about three hours of unattended running with the loop in
+`vfyloop.py`, or well under one with a static ARP entry allowing unicast at
+full rate.
+
 ### 1. Read the paired A/B result in `vfylog.txt`
 
 `USBVFY` verifies the receive path with **nothing above it** -- our own
@@ -152,6 +173,13 @@ top of an unexplained receive fault makes both harder to diagnose.
 | `mkblast.py` | the Windows sender for `USBVFY` |
 | `USBLINK /V` | bring-up narrated, chip status at every register access |
 | `TICKCHK` | INT 08h and 1Ch rates -- tells you if the PIT is disturbed |
+
+**`mkblast.py --corrupt-every N`** plants the real fault's signature -- 4
+bytes from -64 then 158 from +76 -- into one datagram in N. `USBVFY` has to
+catch and decode them. Use it whenever the receiver is touched; it caught 42
+of 42 after the last rewrite and decoded both displacements exactly, which
+is also the only end-to-end proof that the decode works, since no real event
+has yet landed on the counter pattern.
 
 **Validate an instrument before believing it, and again after editing it.**
 `RAMPCHK` has been re-validated three times against `RAMPOK`/`RAMPSH`/
@@ -256,6 +284,28 @@ failing blocks pay for the per-byte walk. It was 340 s before that.
 ```
 python mkramp.py --stage C:\dosbridgeDEV\files\local
 ```
+
+## Two things worth knowing about the harness itself
+
+**Two `dosd` daemons were running for most of 2026-09-10**, started thirty
+minutes apart, both bound to UDP 8069, both appending to the same `dosd.log`
+so it read as continuous. `SO_REUSEADDR` on the UDP socket allowed it and is
+now removed, so a second instance fails to bind and says so.
+
+It matters because it does not look like a Windows problem: two sockets on
+one UDP port means each datagram goes to one arbitrarily, so a multi-datagram
+TFTP transfer is split between two daemons holding separate state, which
+presents as stalled transfers, deploys failing their CRC, and results that
+never return. **TCP was unaffected**, so the HTTP corruption measurements
+stand -- but the TFTP-based ones (`USBGET`'s runs, its 55 flow restarts, and
+one deploy that "arrived corrupt") now have a second candidate explanation
+with nothing to do with the driver.
+
+**`USBVFY` was three times slower than an ordinary HTTP download** until a
+32-bit multiply was hoisted out of its per-byte loop -- 4.9 KB/s against
+12.8 after. If a test here feels slow, price the inner loop against `BENCH`
+before blaming the machine. It is an 8 MHz box, but it was not the
+bottleneck.
 
 ## Two things that want hands at the keyboard
 
