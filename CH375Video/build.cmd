@@ -9,6 +9,11 @@ REM    build.cmd read       ...then probe it WITHOUT writing anything to it
 REM    build.cmd bench      ...then measure throughput
 REM    build.cmd demo       ...then run the bouncing-sprite demo
 REM    build.cmd cube       ...then the rotating 3D wireframe cube
+REM    build.cmd stars      ...then the starfield
+REM    build.cmd bars       ...then the sliding colour bars
+REM    build.cmd raster     ...then FULL-SCREEN raster bars
+REM    build.cmd lowres     ...then the same at 320x200, which is the only
+REM                         demo low resolution actually speeds up
 REM    build.cmd con        ...then the text console demonstration page
 REM    build.cmd trace      ...then probe it narrating every control stage
 REM
@@ -53,6 +58,10 @@ if /I "%1"=="trace" goto runtrace
 if /I "%1"=="bench" goto runbench
 if /I "%1"=="demo"  goto rundemo
 if /I "%1"=="cube"  goto runcube
+if /I "%1"=="stars" goto runstars
+if /I "%1"=="bars"  goto runbars
+if /I "%1"=="raster" goto runraster
+if /I "%1"=="lowres" goto runlowres
 if /I "%1"=="con"   goto runcon
 echo Built.  "build.cmd probe" identifies whatever is plugged in.
 exit /b 0
@@ -81,6 +90,28 @@ exit /b %ERRORLEVEL%
 
 :runcube
 python "%DOSBRIDGE%\dosctl.py" run --timeout 200 bin\DLDEMO.EXE -D=cube -S=20
+exit /b %ERRORLEVEL%
+
+:runstars
+python "%DOSBRIDGE%\dosctl.py" run --timeout 200 bin\DLDEMO.EXE -D=stars -S=20
+exit /b %ERRORLEVEL%
+
+:runbars
+python "%DOSBRIDGE%\dosctl.py" run --timeout 200 bin\DLDEMO.EXE -D=bars -S=20
+exit /b %ERRORLEVEL%
+
+REM  The only demo that repaints the WHOLE screen, so the only one whose
+REM  frame rate is set by the mode's pixel count rather than by how much
+REM  of the picture moved.
+:runraster
+python "%DOSBRIDGE%\dosctl.py" run --timeout 200 bin\DLDEMO.EXE -D=raster -S=20
+exit /b %ERRORLEVEL%
+
+REM  The same effect at 320x200, which is 4.8x fewer pixels and about 3.5x
+REM  the frame rate.  Letterboxed: the frame is padded to 449 lines to keep
+REM  hsync above the 30 kHz a monitor wants.
+:runlowres
+python "%DOSBRIDGE%\dosctl.py" run --timeout 200 bin\DLDEMO.EXE -M=6 -D=raster -S=20
 exit /b %ERRORLEVEL%
 
 :runcon

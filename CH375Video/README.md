@@ -17,7 +17,7 @@ output, taken through a capture card.
 | `DLPROBE` | identify the adapter, decode its limits, read the monitor's EDID |
 | `DLTEST` | draw test patterns and ask a human whether each appeared |
 | `DLBENCH` | measure throughput, so optimisation is aimed rather than guessed |
-| `DLDEMO` | moving graphics: balls, stars, a 3D cube, bars |
+| `DLDEMO` | moving graphics: `balls`, `stars`, `cube`, `bars`, `raster` |
 | `DLCON` | a text console, which is what this hardware is actually good at |
 
 `build.cmd` builds all five. `build.cmd probe` runs `DLPROBE` on the DOS
@@ -221,12 +221,21 @@ problem. Three fixes took it to 1.7 —
   staging buffer first — 61,952 needless far-pointer accesses a frame
 * shrinking the tile from 176² to 112², which the cube never needed
 
-| demo | fps | bytes/frame |
-|---|---|---|
-| stars (120 single pixels) | 5.8 | 2,240 |
-| bars | 5.8 | 2,990 |
-| balls (5 × 28² sprites) | 5.0 | 2,944 |
-| cube (wireframe, CPU-bound) | 1.7 | 3,636 |
+All five, measured at 640×480 unless noted. `build.cmd` has a target for
+each: `demo`, `stars`, `bars`, `raster`, `cube`, `lowres`.
+
+| `/D=` | what it is | fps | bytes/frame |
+|---|---|---|---|
+| `stars` | 120 single-pixel stars scrolling | 5.8 | 2,240 |
+| `bars` | sliding colour bars, erase-and-draw | 5.8 | 2,990 |
+| `balls` | 5 × 28² sprites bouncing | 5.0 | 2,944 |
+| `cube` | rotating 3D wireframe, CPU-bound | 1.7 | 3,636 |
+| `raster` | **full-screen** raster bars | 1.3 | 12,695 |
+| `raster` | the same at 320×200 | **4.5** | 2,873 |
+
+`raster` is the odd one out and deliberately so: it is the only demo that
+repaints the whole screen, which is why it is the slowest here and the
+only one low resolution rescues. Everything else touches just what moved.
 
 ![Sliding bars](doc/bars.png)
 
