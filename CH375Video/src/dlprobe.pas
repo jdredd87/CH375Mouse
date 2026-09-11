@@ -94,25 +94,31 @@ type
   TMode = record
     W, H, Hz: Word;
     Clk:      LongInt;         { dot clock in kHz }
+    EstB:     Byte;            { EDID established-timings byte, 0 = none }
+    EstBit:   Byte;
   end;
 
 const
-  { VESA DMT dot clocks -- enough to answer "what can this thing be asked
-    for?" without pretending the list is exhaustive. }
-  NMODES = 12;
+  { VESA DMT dot clocks, each tied to its bit in the EDID established-
+    timings bitmap where it has one -- that is what lets the two ends be
+    intersected rather than compared by eye.  Not an exhaustive list, and
+    it does not pretend to be. }
+  NMODES = 14;
   Modes: array[0..NMODES - 1] of TMode = (
-    (W: 640;  H: 400;  Hz: 70; Clk: 25175),
-    (W: 640;  H: 480;  Hz: 60; Clk: 25175),
-    (W: 640;  H: 480;  Hz: 72; Clk: 31500),
-    (W: 640;  H: 480;  Hz: 75; Clk: 31500),
-    (W: 800;  H: 600;  Hz: 56; Clk: 36000),
-    (W: 800;  H: 600;  Hz: 60; Clk: 40000),
-    (W: 800;  H: 600;  Hz: 72; Clk: 50000),
-    (W: 800;  H: 600;  Hz: 75; Clk: 49500),
-    (W: 1024; H: 768;  Hz: 60; Clk: 65000),
-    (W: 1024; H: 768;  Hz: 75; Clk: 78750),
-    (W: 1152; H: 864;  Hz: 75; Clk: 108000),
-    (W: 1280; H: 1024; Hz: 60; Clk: 108000));
+    (W: 640;  H: 400;  Hz: 70; Clk: 25175;  EstB: 0;  EstBit: 0),
+    (W: 720;  H: 400;  Hz: 70; Clk: 28322;  EstB: 35; EstBit: 7),
+    (W: 640;  H: 480;  Hz: 60; Clk: 25175;  EstB: 35; EstBit: 5),
+    (W: 640;  H: 480;  Hz: 72; Clk: 31500;  EstB: 35; EstBit: 3),
+    (W: 640;  H: 480;  Hz: 75; Clk: 31500;  EstB: 35; EstBit: 2),
+    (W: 800;  H: 600;  Hz: 56; Clk: 36000;  EstB: 35; EstBit: 1),
+    (W: 800;  H: 600;  Hz: 60; Clk: 40000;  EstB: 35; EstBit: 0),
+    (W: 800;  H: 600;  Hz: 72; Clk: 50000;  EstB: 36; EstBit: 7),
+    (W: 800;  H: 600;  Hz: 75; Clk: 49500;  EstB: 36; EstBit: 6),
+    (W: 1024; H: 768;  Hz: 60; Clk: 65000;  EstB: 36; EstBit: 3),
+    (W: 1024; H: 768;  Hz: 70; Clk: 75000;  EstB: 36; EstBit: 2),
+    (W: 1024; H: 768;  Hz: 75; Clk: 78750;  EstB: 36; EstBit: 1),
+    (W: 1280; H: 1024; Hz: 60; Clk: 108000; EstB: 0;  EstBit: 0),
+    (W: 1280; H: 1024; Hz: 75; Clk: 135000; EstB: 36; EstBit: 0));
 
 var
   Cfg:      array[0..1023] of Byte;   { the configuration, in full }
@@ -130,6 +136,7 @@ var
   ClkLimit: LongInt = 0;              { key 0204, in Hz }
   EpInt:    Byte = 0;
   EpBulk:   Byte = 0;
+  EdidValid: Boolean = False;         { a real EDID was read and decoded }
 
 { ---------------------------------------------------------------- output }
 
@@ -429,23 +436,75 @@ end;
 
 { ------------------------------------------------------------ what fits }
 
+{ Does the MONITOR accept this mode?  Three places say so, and all three
+  are consulted because a display need not use the same one: the
+  established-timings bitmap, the four detailed timing blocks, and the
+  eight standard timing entries.  Resolution is matched on the detailed
+  blocks without the refresh rate, because a detailed block states its own
+  timing and a monitor that lists a resolution there will sync it. }
+function MonitorOk(const M: TMode): Boolean;
+var
+  I, O:  Integer;
+  HA, VA: Word;
+begin
+  MonitorOk := True;
+  if M.EstB <> 0 then
+    if (Edid[M.EstB] and (Byte(1) shl M.EstBit)) <> 0 then Exit;
+
+  for I := 0 to 3 do
+  begin
+    O := 54 + I * 18;
+    if (Edid[O] = 0) and (Edid[O + 1] = 0) then Continue;
+    HA := Edid[O + 2] or ((Word(Edid[O + 4] and $F0)) shl 4);
+    VA := Edid[O + 5] or ((Word(Edid[O + 7] and $F0)) shl 4);
+    if (HA = M.W) and (VA = M.H) then Exit;
+  end;
+
+  for I := 0 to 7 do
+  begin
+    O := 38 + I * 2;
+    if (Edid[O] = $01) and (Edid[O + 1] = $01) then Continue;
+    if Edid[O] = 0 then Continue;
+    if ((Word(Edid[O]) + 31) * 8 = M.W)
+       and ((Edid[O + 1] and $3F) + 60 = M.Hz) then Exit;
+  end;
+
+  MonitorOk := False;
+end;
+
 procedure ShowReachable;
 var
-  I, NOk, NMarg: Integer;
-  Px, Need:      LongInt;
-  Why:           ShortString;
+  I, NOk, NMarg, NBoth: Integer;
+  Px, Need:             LongInt;
+  Why, MonSay:          ShortString;
+  Best:                 Integer;
+  MOk:                  Boolean;
 begin
   if (PixLimit = 0) and (ClkLimit = 0) then
   begin
     WriteLn('  No limits were read, so nothing can be said about modes.');
     Exit;
   end;
-  WriteLn('  Both caps bind: a mode has to pass the AREA and the CLOCK.');
-  WriteLn('  The clock is the tighter one here, and that is exactly the');
-  WriteLn('  part a glance at the pixel count alone gets wrong.');
+  WriteLn('  Both of the adapter''s caps bind: a mode has to pass the AREA');
+  WriteLn('  and the CLOCK.  The clock is the tighter one here, and that is');
+  WriteLn('  exactly the part a glance at the pixel count alone gets wrong.');
+  if EdidValid then
+  begin
+    WriteLn;
+    WriteLn('  The monitor column is the intersection that matters -- a mode');
+    WriteLn('  needs BOTH ends to accept it, and neither end''s own list is');
+    WriteLn('  the answer on its own.');
+  end;
   WriteLn;
+  WriteLn('    ', Pad('mode', 16), Pad('dot clock', 12), Pad('pixels', 12),
+          Pad('adapter', 30), 'monitor');
+  WriteLn('    ', Pad('----', 16), Pad('---------', 12), Pad('------', 12),
+          Pad('-------', 30), '-------');
+
   NOk := 0;
   NMarg := 0;
+  NBoth := 0;
+  Best := -1;
   for I := 0 to NMODES - 1 do
   begin
     Px := LongInt(Modes[I].W) * Modes[I].H;
@@ -460,28 +519,166 @@ begin
     if ClkLimit > 0 then
     begin
       Need := Modes[I].Clk * 1000;
-      if Need > ClkLimit + (ClkLimit div 100) then Why := 'clock'
-      else if Need > ClkLimit then Why := 'MARGINAL -- 1% over the cap';
+      if Need > ClkLimit + (ClkLimit div 100) then Why := 'no -- clock'
+      else if Need > ClkLimit then Why := 'MARGINAL -- 1% over cap';
     end;
     if (PixLimit > 0) and (Px > PixLimit) then
-      if Why = '' then Why := 'area'
+      if Why = '' then Why := 'no -- area'
                   else Why := Why + ' + area';
+    if Why = '' then begin Why := 'ok'; Inc(NOk); end
+    else if Why[1] = 'M' then Inc(NMarg);
+
+    MOk := False;
+    MonSay := '?';
+    if EdidValid then
+    begin
+      MOk := MonitorOk(Modes[I]);
+      if MOk then MonSay := 'yes' else MonSay := 'no';
+    end;
 
     Write('    ',
           Pad(Dec1(Modes[I].W) + 'x' + Dec1(Modes[I].H)
               + '@' + Dec1(Modes[I].Hz), 16),
           Pad(Mhz(Modes[I].Clk), 12),
-          Pad(Dec1(Px) + ' px', 12));
-    if Why = '' then begin WriteLn('ok'); Inc(NOk); end
-    else if Why[1] = 'M' then begin WriteLn(Why); Inc(NMarg); end
-    else WriteLn('no -- ', Why);
+          Pad(Dec1(Px) + ' px', 12),
+          Pad(Why, 30), MonSay);
+
+    { Both ends happy, and not relying on the fencepost.  Track the
+      largest such mode by area -- that is the one worth trying first. }
+    if (Why = 'ok') and MOk then
+    begin
+      Inc(NBoth);
+      if (Best < 0)
+         or (Px > LongInt(Modes[Best].W) * Modes[Best].H) then Best := I;
+      Write('   <--');
+    end;
+    WriteLn;
   end;
+
   WriteLn;
   WriteLn('  ', NOk, ' of ', NMODES,
-          ' listed modes are comfortably within both caps.');
+          ' modes are comfortably within the adapter''s caps.');
   if NMarg > 0 then
-    WriteLn('  ', NMarg, ' more sit within 1% of the clock cap -- try them,',
+    WriteLn('  ', NMarg, ' more sit within 1% of the clock cap -- try those,',
             ' do not assume them.');
+
+  if not EdidValid then
+  begin
+    WriteLn;
+    WriteLn('  No EDID was read, so the monitor column is unknown and the');
+    WriteLn('  adapter''s caps are only half the answer.');
+    Exit;
+  end;
+
+  WriteLn('  ', NBoth, ' are accepted by BOTH the adapter and this monitor.');
+  if Best >= 0 then
+  begin
+    WriteLn;
+    WriteLn('  >> START WITH ', Dec1(Modes[Best].W), 'x', Dec1(Modes[Best].H),
+            '@', Dec1(Modes[Best].Hz), ' -- the largest mode both ends');
+    WriteLn('  >> accept without leaning on the 1% fencepost.');
+    WriteLn('  >> That is ', Dec1(LongInt(Modes[Best].W) * Modes[Best].H * 2),
+            ' bytes a frame at 16bpp.');
+  end
+  else
+  begin
+    WriteLn;
+    WriteLn('  >> NOTHING in the list is accepted by both ends.  That is a');
+    WriteLn('  >> real finding, not a gap in the table: check the MARGINAL');
+    WriteLn('  >> rows before concluding the pair cannot work at all.');
+  end;
+end;
+
+{ ------------------------------------------------------------------- EDID }
+
+{ One pass at the monitor: read, report, and say whether anything usable
+  came back.  This is a function rather than inline code because the read
+  is worth doing TWICE -- see the second ask in the main body. }
+function EdidPass: Boolean;
+var
+  I:       Integer;
+  AllZero: Boolean;
+  HdrOk:   Boolean;
+begin
+  EdidPass := False;
+  EdidGot := ReadEdid(EdidWant);
+  Fld('bytes read', Dec1(EdidGot));
+
+  if EdidGot < 128 then
+  begin
+    WriteLn;
+    if EdidGot = 0 then
+    begin
+      WriteLn('  Zero bytes means the vendor request itself failed -- see');
+      WriteLn('  the status above.  That is a protocol fault, and a');
+      WriteLn('  different problem from an empty VGA socket.');
+    end
+    else
+    begin
+      WriteLn('  Short: the read stopped early.  The control path is proven');
+      WriteLn('  regardless, by that count being more than zero.');
+    end;
+    Exit;
+  end;
+
+  AllZero := True;
+  for I := 0 to 127 do
+    if Edid[I] <> 0 then AllZero := False;
+  HdrOk := (Edid[0] = $00) and (Edid[1] = $FF) and (Edid[2] = $FF)
+           and (Edid[3] = $FF) and (Edid[4] = $FF) and (Edid[5] = $FF)
+           and (Edid[6] = $FF) and (Edid[7] = $00);
+
+  { Every transfer succeeding and every byte coming back zero is a real
+    outcome, and it is TWO findings rather than one failure: the vendor
+    control path works, and the adapter has no monitor data to hand over.
+    Keeping them apart matters, because the first is the milestone and the
+    second is a cable, a sleeping monitor, or an ordering mistake of ours.
+
+    Nothing is decoded from a zero block.  It would pass the EDID checksum
+    test trivially -- 128 zeroes sum to zero -- so printing "checksum ok"
+    next to a failed header is worse than printing nothing at all. }
+  if AllZero then
+  begin
+    WriteLn;
+    WriteLn('  All ', EdidGot, ' transfers SUCCEEDED and every byte came back');
+    WriteLn('  zero.  That is two facts, not one failure: the vendor');
+    WriteLn('  control path WORKS, and the adapter handed over no monitor');
+    WriteLn('  data.  Nothing below is decoded -- a zero block passes the');
+    WriteLn('  checksum test trivially and would answer every question');
+    WriteLn('  with a confident lie.');
+    Exit;
+  end;
+
+  WriteLn;
+  HexDump(Edid, 128, '  ');
+  WriteLn;
+  if not HdrOk then
+  begin
+    Fld('header', 'BAD -- this is not EDID');
+    WriteLn;
+    WriteLn('  The fields are not decoded.  A block that fails its own');
+    WriteLn('  header check still yields a manufacturer and a version');
+    WriteLn('  number, and they are meaningless -- which is harder to');
+    WriteLn('  notice than a blank.');
+    Exit;
+  end;
+
+  Fld('header', 'ok');
+  if EdidSum = 0 then Fld('checksum', 'ok')
+                 else Fld('checksum', 'BAD (sums to ' + Dec1(EdidSum) + ')');
+  Fld('manufacturer', EdidMaker);
+  Fld('product code', Hex4(Edid[10] or (Word(Edid[11]) shl 8)));
+  Fld('EDID version', Dec1(Edid[18]) + '.' + Dec1(Edid[19]));
+  if Edid[17] > 0 then
+    Fld('made', 'week ' + Dec1(Edid[16]) + ' of '
+        + Dec1(1990 + LongInt(Edid[17])));
+  if (Edid[21] > 0) and (Edid[22] > 0) then
+    Fld('screen size', Dec1(Edid[21]) + ' x ' + Dec1(Edid[22]) + ' cm');
+  ShowDescriptors;
+  ShowEstablished;
+  ShowStandard;
+  EdidValid := True;
+  EdidPass := True;
 end;
 
 { ------------------------------------------------------------------ main }
@@ -564,8 +761,8 @@ var
   GotB, Tog: Byte;
   J:         Byte;
   VID, PID:  Word;
-  AllZero:   Boolean;
-  HdrOk:     Boolean;
+  GotEdid:   Boolean;
+  Unlocked:  Boolean = False;
 
 begin
   Banner('DLPROBE', VER, 'DisplayLink USB display probe');
@@ -667,100 +864,12 @@ begin
   Fld('GET_DESCRIPTOR 5F', StatusStr(St) + ', ' + Dec1(Got)
       + ' bytes   (udlfb fetches it this way)');
 
-  { ---- the monitor ---- }
+  { ---- the monitor, first ask: before the unlock ---- }
+  GotEdid := False;
   if EdidWant > 0 then
   begin
-    Head('MONITOR  (EDID, two bytes per byte, ' + Dec1(EdidWant)
-         + ' asked for)');
-    EdidGot := ReadEdid(EdidWant);
-    Fld('bytes read', Dec1(EdidGot));
-    if EdidGot < 128 then
-    begin
-      WriteLn;
-      if EdidGot = 0 then
-      begin
-        WriteLn('  Zero bytes means the vendor request itself failed -- see');
-        WriteLn('  the status above.  That is a protocol fault, and a');
-        WriteLn('  different problem from an empty VGA socket.');
-      end
-      else
-      begin
-        WriteLn('  Short.  Either nothing is plugged into the adapter''s VGA');
-        WriteLn('  socket or the monitor on it has no EDID to give.  The');
-        WriteLn('  control path itself is proven regardless, by that count');
-        WriteLn('  being more than zero.');
-      end;
-    end
-    else
-    begin
-      AllZero := True;
-      for I := 0 to 127 do
-        if Edid[I] <> 0 then AllZero := False;
-      HdrOk := (Edid[0] = $00) and (Edid[1] = $FF) and (Edid[2] = $FF)
-               and (Edid[3] = $FF) and (Edid[4] = $FF) and (Edid[5] = $FF)
-               and (Edid[6] = $FF) and (Edid[7] = $00);
-
-      { Every transfer succeeding and every byte coming back zero is a
-        real outcome, and it is TWO findings rather than one failure:
-        the vendor control path works, and the adapter has no monitor to
-        describe.  Keeping them apart matters, because the first is the
-        milestone this tool exists to reach and the second is a cable.
-
-        Nothing is decoded from a zero block.  It would pass the EDID
-        checksum test trivially -- 128 zeroes sum to zero -- so printing
-        "checksum ok" next to a failed header is worse than printing
-        nothing at all. }
-      if AllZero then
-      begin
-        WriteLn;
-        WriteLn('  All ', EdidGot, ' transfers SUCCEEDED and every byte came');
-        WriteLn('  back zero.  Two separate facts, both worth having:');
-        WriteLn;
-        WriteLn('    * the vendor control path WORKS -- that is the');
-        WriteLn('      milestone, and it is now proven on real hardware');
-        WriteLn('    * the adapter is not reading a monitor on its VGA');
-        WriteLn('      socket, so it has nothing to report');
-        WriteLn;
-        WriteLn('  So: plug a monitor into the adapter and run this again.');
-        WriteLn('  Nothing below this is decoded, because a zero-filled');
-        WriteLn('  block passes the checksum test trivially and would');
-        WriteLn('  answer every question with a confident lie.');
-      end
-      else
-      begin
-        WriteLn;
-        HexDump(Edid, 128, '  ');
-        WriteLn;
-        if not HdrOk then
-        begin
-          Fld('header', 'BAD -- this is not EDID');
-          WriteLn;
-          WriteLn('  The fields are not decoded.  A block that fails its');
-          WriteLn('  own header check still yields a manufacturer and a');
-          WriteLn('  version number, and they are meaningless -- which is');
-          WriteLn('  harder to notice than a blank.');
-        end
-        else
-        begin
-          Fld('header', 'ok');
-          if EdidSum = 0 then Fld('checksum', 'ok')
-                         else Fld('checksum', 'BAD (sums to '
-                                              + Dec1(EdidSum) + ')');
-          Fld('manufacturer', EdidMaker);
-          Fld('product code', Hex4(Edid[10] or (Word(Edid[11]) shl 8)));
-          Fld('EDID version', Dec1(Edid[18]) + '.' + Dec1(Edid[19]));
-          if Edid[17] > 0 then
-            Fld('made', 'week ' + Dec1(Edid[16]) + ' of '
-                + Dec1(1990 + LongInt(Edid[17])));
-          if (Edid[21] > 0) and (Edid[22] > 0) then
-            Fld('screen size', Dec1(Edid[21]) + ' x ' + Dec1(Edid[22])
-                + ' cm');
-          ShowDescriptors;
-          ShowEstablished;
-          ShowStandard;
-        end;
-      end;
-    end;
+    Head('MONITOR, FIRST ASK  (before the channel unlock)');
+    GotEdid := EdidPass;
   end;
 
   { ---- the one write ---- }
@@ -776,12 +885,42 @@ begin
     begin
       WriteLn('  Accepted.  The chip will take rendering commands on bulk');
       WriteLn('  endpoint ', Hex2(EpBulk), ' from here.  Nothing sends any yet.');
+      Unlocked := True;
     end
     else
     begin
       WriteLn('  Refused.  Rendering cannot work until this does, so that');
       WriteLn('  is the next thing to understand -- ahead of the pixel');
       WriteLn('  format, which is useless without it.');
+    end;
+  end;
+
+  { ---- the monitor, second ask: after the unlock ----
+
+    The first ask deliberately comes before the unlock, so that a chip
+    revision which REFUSED the key would still yield a monitor report.
+    That ordering costs nothing when it works -- and when it does not, it
+    leaves an obvious hypothesis untested: that this chip will not read the
+    monitor's DDC until its channel is open.
+
+    So ask again.  Which ask succeeds is itself the finding, and it is
+    cheap: 128 control transfers.  If the second one works where the first
+    did not, the ordering rationale above is wrong for this hardware and
+    the header should say so. }
+  if (EdidWant > 0) and (not GotEdid) and Unlocked then
+  begin
+    Head('MONITOR, SECOND ASK  (after the channel unlock)');
+    WriteLn('  The first ask came back with nothing.  Testing whether this');
+    WriteLn('  chip simply will not read the monitor until its channel is');
+    WriteLn('  open -- if this one works, the ordering above is wrong.');
+    WriteLn;
+    if EdidPass then
+    begin
+      WriteLn;
+      WriteLn('  >> SO THE UNLOCK IS A PREREQUISITE FOR READING THE');
+      WriteLn('  >> MONITOR on this hardware.  Worth recording: the first');
+      WriteLn('  >> ask is not merely cautious, it is useless.');
+      GotEdid := True;
     end;
   end;
 
