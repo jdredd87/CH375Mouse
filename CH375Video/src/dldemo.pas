@@ -31,13 +31,21 @@ program dldemo;
   makes a demo look better and the bytes-per-frame go up, it got slower,
   and the number is printed so that is visible rather than argued about.
 
-  NO COPROCESSOR, AND IT WOULD NOT HELP. This machine has no x87 fitted --
-  BENCH reports the coprocessor rows as skipped -- so every demo here is
-  integer fixed point with a 64-entry quarter sine table. That is not a
-  compromise: at 19 KB/s over the USB path the geometry is free and the
-  transfer is everything, so faster maths would move nothing. The same
-  holds on the 486 this is eventually meant for -- it would raise the
-  frame rate not at all until the adapter got faster.
+  INTEGER MATHS, AND A COPROCESSOR WOULD NOT HELP -- though not for the
+  reason first written here. This file used to claim the machine had no
+  x87 fitted. It has: an 8087, which answers the probe and passes every
+  arithmetic test. The claim came from a stale note rather than from
+  asking the hardware.
+
+  The conclusion survives the correction, and DLFRACT measured it: Q8
+  integer beats the 8087 two to one on this machine, because an FMUL is of
+  the order of a hundred clocks against roughly 25 for a 16-bit IMUL. On
+  top of that, everything in THIS file is transfer-bound anyway -- at
+  19 KB/s the geometry is free and the wire is the whole cost -- so the
+  arithmetic could be free and the frame rate would not move.
+
+  So every demo here is integer fixed point with a 64-entry quarter sine
+  table, and that is a measured choice rather than a limitation.
 
   NOR ANY 186-CLASS TRICK, for the same measured reason. REP OUTSB is an
   80186 instruction that a plain 8086 lacks, and DLBENCH says the byte loop

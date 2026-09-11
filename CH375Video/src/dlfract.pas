@@ -2,7 +2,7 @@ program dlfract;
 { DLFRACT -- compute a Mandelbrot set in fixed point and show it over USB.
   CH375Video, StevenC.  Public domain (the Unlicense).
 
-    DLFRACT [/P=260] [/M=n] [/W=n] [/I=n] [/S=secs] [/R]
+    DLFRACT [/P=260] [/M=n] [/W=n] [/I=n] [/S=secs] [/R] [/8] [/Z=n]
 
       /P=hex   I/O base, default 260
       /M=dec   video mode index, default 0 (640x480@60)
@@ -12,6 +12,10 @@ program dlfract;
       /S=dec   seconds to hold the finished picture, default 5
       /R       draw the rows as they are computed, instead of computing
                the whole picture and then sending it
+      /8       force the 8087 path
+      /Q       force the Q8 integer path
+               (with neither, the right one is CHOSEN -- see below)
+      /Z=dec   zoom in on the seahorse valley by this factor, default 1
 
   WHY THIS IS HERE, AND WHAT IT MEASURES
 
@@ -40,6 +44,46 @@ program dlfract;
   zr and zi stay inside +/-512, so their products fit the 16-bit result
   the shift produces.
 
+  AND THERE IS A COPROCESSOR, so /8 runs the same picture through it and
+  the two can be compared instead of argued about. Two things are worth
+  separating in that comparison:
+
+  SPEED is not the coprocessor's advantage here, and that is MEASURED on
+  this machine, not assumed:
+
+      Q8 integer   compute 20.4 s
+      8087 double  compute 40.7 s
+
+  Two to one to the integer path, because an 8087 FMUL is of the order of
+  a hundred clocks plus the handshake against roughly 25 for a 16-bit
+  IMUL. So "there is a coprocessor, use it" is the wrong rule here.
+
+  PRECISION is. Q8 has EIGHT fractional bits, so its whole grid is 1/256
+  apart. The default view spans 3.0 across the picture, which is already
+  only a few Q8 steps per pixel, and zooming past about 8x leaves Q8 with
+  less than one step per pixel: the picture goes blocky and then wrong.
+  The 8087's 64-bit mantissa does not care. /Z zooms, and the difference
+  shows up immediately.
+
+  SO THE CHOICE IS AUTOMATIC, and made on whether Q8 can resolve the view
+  rather than on what hardware happens to be fitted. Q8's grid is 1/256,
+  so the question is how many of those steps fall across one pixel:
+
+      steps per pixel = (768 / zoom) / computed width
+
+  Below about two, Q8 is quantising the picture rather than drawing it,
+  and the coprocessor is used IF ONE ANSWERED THE PROBE. Above that the
+  integer path runs, because it is twice as fast and loses nothing. /8
+  and /Q override in either direction.
+
+  With no coprocessor fitted the integer path is simply used throughout
+  and the tool says so -- a deep zoom then comes out visibly blocky, which
+  is an honest picture of what the machine can do rather than a refusal.
+
+  The probe itself is FNINIT then FNSTCW, both NO-WAIT forms and safe with
+  nothing socketed. The arithmetic after them is not safe, so it is never
+  reached unless the probe answered.
+
   Exit codes: 0 ok, 9 out of heap, otherwise the DlOpen reason (all <= 20) }
 
 {$MODE OBJFPC}{$H-}
@@ -59,6 +103,13 @@ type
   TRow  = array[0..1023] of Word;
 
 var
+  FpuCw:    Word;
+  UseFpu:   Boolean = False;
+  ForceFpu: Boolean = False;
+  ForceInt: Boolean = False;
+  FpuThere: Boolean = False;
+  StepsPP:  LongInt = 0;
+  Zoom:    Integer = 1;
   T:       TDlTiming;
   ModeIx:  Integer = 0;
   CW:      Integer = 160;     { computed width  }
@@ -92,6 +143,48 @@ asm
     imul word ptr [B]
     mov  al, ah
     mov  ah, dl
+end;
+
+{ FNINIT then read the control word back.  Both are NO-WAIT forms, so
+  this is safe with nothing socketed -- which is the whole reason the
+  probe is written this way rather than just doing a multiply and seeing
+  what happens. 03FF is an 8087, 037F a 287 or later. }
+function HasFpu: Boolean; assembler;
+asm
+    fninit
+    mov   word ptr [FpuCw], $5A5A
+    fnstcw word ptr [FpuCw]
+    mov   ax, [FpuCw]
+    and   ax, $103F
+    cmp   ax, $003F
+    mov   al, 0
+    jne   @nofpu
+    mov   al, 1
+@nofpu:
+end;
+
+{ The same escape-time loop in double precision.  Deliberately a separate
+  function rather than a flag inside the integer one: mixing them would
+  put a branch in the inner loop and make the comparison meaningless. }
+function EscapeFpu(Cr, Ci: Double): Byte;
+var
+  Zr, Zi, Zr2, Zi2: Double;
+  N: Integer;
+begin
+  Zr := 0.0; Zi := 0.0;
+  for N := 1 to MaxIt do
+  begin
+    Zr2 := Zr * Zr;
+    Zi2 := Zi * Zi;
+    if Zr2 + Zi2 > 4.0 then
+    begin
+      EscapeFpu := Byte(N);
+      Exit;
+    end;
+    Zi := 2.0 * Zr * Zi + Ci;
+    Zr := Zr2 - Zi2 + Cr;
+  end;
+  EscapeFpu := 0;
 end;
 
 procedure BuildPal;
@@ -148,7 +241,11 @@ begin
 
   for X := 0 to CW - 1 do
   begin
-    C := Pal[Iter^[Cy * CW + X] and 31];
+    { 0 means it never escaped -- the interior, and the only black.
+      Everything else cycles through 1..31 so a high iteration count
+      bands rather than saturating. }
+    I := Iter^[Cy * CW + X];
+    if I = 0 then C := Pal[0] else C := Pal[((I - 1) mod 31) + 1];
     for I := 0 to BW - 1 do
       if X * BW + I < SizeOf(Row) div 2 then Row[X * BW + I] := C;
   end;
@@ -174,6 +271,9 @@ begin
   WriteLn('    /I=dec  iteration limit, default 16');
   WriteLn('    /S=dec  seconds to hold the picture, default 5');
   WriteLn('    /R      draw rows as they are computed');
+  WriteLn('    /8      force the 8087 path');
+  WriteLn('    /Q      force the Q8 integer path');
+  WriteLn('    /Z=dec  zoom on the seahorse valley, default 1');
   WriteLn('    /M=dec  mode, default 0:');
   for I := 0 to NDLMODES - 1 do
     WriteLn('              ', I, ' = ', DlModes[I].Name);
@@ -212,6 +312,7 @@ var
   S:           ShortString;
   Cr, Ci:      Integer;
   X0, X1, Y0, Y1: Integer;
+  FCx, FCy, FSpanX, FSpanY, FCr, FCi: Double;
   TComp, TSend, T0, TAll: LongInt;
   B0:          LongInt;
 
@@ -230,6 +331,9 @@ begin
         'I': MaxIt := DecArg(S, 4);
         'S': Secs := DecArg(S, 4);
         'R': AsYouGo := True;
+        'Z': Zoom := DecArg(S, 4);
+        '8': ForceFpu := True;
+        'Q': ForceInt := True;
       end;
   end;
   if HelpWanted then begin Usage; Halt(0); end;
@@ -237,8 +341,13 @@ begin
   if CW < 40 then CW := 40;
   if CW > MAXW then CW := MAXW;
   if MaxIt < 2 then MaxIt := 2;
-  if MaxIt > 31 then MaxIt := 31;       { the palette has 32 entries }
+  { A deep zoom needs iterations, not just precision: at 16x most of the
+    view either escapes at once or survives the limit, and a low cap
+    paints all of the latter black.  The palette CYCLES instead of
+    clamping, so the count is free to go high. }
+  if MaxIt > 250 then MaxIt := 250;
   if Secs < 0 then Secs := 0;
+  if Zoom < 1 then Zoom := 1;
   T := DlModes[ModeIx];
 
   { Keep the aspect roughly right for the mode rather than assuming 4:3. }
@@ -257,6 +366,41 @@ begin
   ExitProc := @Quieten;
   Rc := DlOpen;
   if Rc <> DL_OK then begin WriteLn(DlWhy(Rc)); Halt(Rc); end;
+
+  { How many Q8 steps fall across one pixel at this zoom.  Scaled by 10 so
+    a fractional answer survives integer division. }
+  FpuThere := HasFpu;
+  StepsPP := (7680 div Zoom) div CW;
+
+  if ForceInt then UseFpu := False
+  else if ForceFpu then UseFpu := True
+  else UseFpu := FpuThere and (StepsPP < 20);
+
+  if UseFpu and not FpuThere then
+  begin
+    WriteLn('/8 given but no coprocessor answered the probe.');
+    WriteLn('Refusing to run x87 arithmetic -- the WAIT would hang the');
+    WriteLn('machine, which needs hands on it to clear.');
+    Halt(12);
+  end;
+
+  Write('coproc    ');
+  if FpuThere then WriteLn('8087 present (control word ', Hex4(FpuCw), ')')
+              else WriteLn('none -- integer path throughout');
+  WriteLn('Q8 steps  ', StepsPP div 10, '.', StepsPP mod 10,
+          ' per pixel  (under 2.0 and Q8 is quantising, not drawing)');
+  if UseFpu then
+    WriteLn('maths     8087 double precision -- chosen for RANGE, and it is')
+  else
+    WriteLn('maths     Q8 fixed point, 16-bit IMUL -- 2x faster than the');
+  if UseFpu then
+    WriteLn('          about half the speed of the integer path')
+  else
+    WriteLn('          8087 on this machine, and enough bits for this view');
+  if Zoom > 1 then
+    WriteLn('view      seahorse valley, zoom ', Zoom, 'x')
+  else
+    WriteLn('view      the classic one');
 
   WriteLn('mode      ', T.Name);
   WriteLn('computed  ', CW, ' x ', CH_, ', ', MaxIt, ' iterations max');
@@ -279,18 +423,44 @@ begin
   TComp := 0;
   TSend := 0;
 
-  { The classic view: real -2.2..0.8, imaginary -1.2..1.2, in Q8. }
+  { The classic view: real -2.2..0.8, imaginary -1.2..1.2, in Q8, and the
+    seahorse valley to zoom into. }
   X0 := -563; X1 := 205;
   Y0 := -307; Y1 := 307;
+  FCx := -0.743643887; FCy := 0.131825904;
+  FSpanX := 3.0 / Zoom;
+  FSpanY := FSpanX * CH_ / CW;
+  if Zoom > 1 then
+  begin
+    { Same window for the integer path, so the two are comparable -- and
+      so the point at which Q8 runs out of bits is visible rather than
+      hidden by quietly using a different view. }
+    X0 := Round((FCx - FSpanX / 2) * 256);
+    X1 := Round((FCx + FSpanX / 2) * 256);
+    Y0 := Round((FCy - FSpanY / 2) * 256);
+    Y1 := Round((FCy + FSpanY / 2) * 256);
+  end;
 
   for Y := 0 to CH_ - 1 do
   begin
     T0 := Ticks;
-    Ci := Y0 + (LongInt(Y1 - Y0) * Y) div CH_;
-    for X := 0 to CW - 1 do
+    if UseFpu then
     begin
-      Cr := X0 + (LongInt(X1 - X0) * X) div CW;
-      Iter^[Y * CW + X] := Escape(Cr, Ci);
+      FCi := (FCy - FSpanY / 2) + FSpanY * Y / CH_;
+      for X := 0 to CW - 1 do
+      begin
+        FCr := (FCx - FSpanX / 2) + FSpanX * X / CW;
+        Iter^[Y * CW + X] := EscapeFpu(FCr, FCi);
+      end;
+    end
+    else
+    begin
+      Ci := Y0 + (LongInt(Y1 - Y0) * Y) div CH_;
+      for X := 0 to CW - 1 do
+      begin
+        Cr := X0 + (LongInt(X1 - X0) * X) div CW;
+        Iter^[Y * CW + X] := Escape(Cr, Ci);
+      end;
     end;
     TComp := TComp + (Ticks - T0);
 

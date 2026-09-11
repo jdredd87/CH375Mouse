@@ -187,10 +187,12 @@ about 6%. `CLAUDE.md`'s rule applies: do not write a gated fast path when
 the gate costs more than the win buys. One path, runs everywhere, and it
 will still be right on a 486.
 
-**Coprocessor maths.** This machine has no x87 fitted, and it would not
-help if it did: at 19 KB/s the geometry is free and the transfer is
-everything. Everything here is integer fixed point with a 64-entry
-quarter sine table.
+**Coprocessor maths — for the demos.** There *is* an 8087 fitted (an
+earlier version of this file said otherwise; that was a stale note, not a
+measurement). It does not help the demos: they are transfer-bound, so at
+19 KB/s the geometry is free and the arithmetic could cost nothing without
+moving the frame rate. See `DLFRACT` below for where it does earn its
+place, and where it does not.
 
 ## Moving graphics
 
@@ -414,6 +416,48 @@ it to Q8 with one `IMUL` was worth more than everything else combined.
 
 (The thin black line on the left spike is the set's own needle along the
 real axis between −2 and −1.4, not an artifact.)
+
+### The 8087: measured, not assumed
+
+The machine has an **Intel 8087** (control word `03FF`; 7 of 7 arithmetic
+tests pass, including the FDIV round-trip). So "there's a coprocessor,
+use it" — and the measurement says that would be the wrong rule:
+
+| path | compute |
+|---|---|
+| Q8 integer, 16-bit `IMUL` | **20.4 s** |
+| 8087, double precision | 40.7 s |
+
+**Two to one to the integer path**, because an 8087 `FMUL` is of the order
+of a hundred clocks against roughly 25 for a 16-bit `IMUL`.
+
+**Where the 8087 does earn its place is precision, not speed.** Q8 has
+eight fractional bits, so its grid is 1/256 and a zoom runs out of it
+fast. `DLFRACT` therefore chooses on whether Q8 can resolve the view:
+
+```
+steps per pixel = (768 / zoom) / computed width
+```
+
+Below about two, Q8 is quantising rather than drawing, and the
+coprocessor is used **if one answered the probe**:
+
+| zoom | Q8 steps/pixel | chosen |
+|---|---|---|
+| 1× | 4.8 | integer — faster, and enough bits |
+| 16× | 0.3 | **8087** — the only one with the range |
+
+![16x zoom on the 8087](doc/zoom8087.png)
+
+*Seahorse valley at 16×, 120 iterations, computed in double precision —
+490 s, **97% of it compute**. Q8 cannot draw this at all.*
+
+With no coprocessor fitted the integer path runs throughout and a deep
+zoom comes out visibly blocky, which is an honest picture of what the
+machine can do rather than a refusal. The probe is `FNINIT` then
+`FNSTCW`, both no-wait forms and safe with nothing socketed; the
+arithmetic after them is not, so it is never reached unless the probe
+answered. `/8` and `/Q` override in either direction.
 
 ## Orientation costs more than it looks like it should
 
