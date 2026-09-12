@@ -56,7 +56,7 @@ program daiso;
 uses ch375, chtool, daudio;
 
 const
-  VER = '1.0.1';
+  VER = '1.0.2';
   RT_SET_IF = $01;              { host->device, standard, interface }
 
 var
@@ -70,6 +70,12 @@ var
   Armed   : Boolean;
   Packets : Integer;
   Go      : Boolean;
+  Hammer  : Integer;
+  Zero    : Boolean;
+  Fast    : Boolean;
+  PktLen  : Byte;
+  Spins   : LongInt;
+  Elapsed2: LongInt;
   I       : Integer;
   S       : ShortString;
   Rc      : Integer;
@@ -159,6 +165,31 @@ begin
   end;
 end;
 
+{ Issue an OUT token and DO NOT wait for the handshake.
+
+  EpOut waits (WaitInt) for an acknowledgement that an isochronous endpoint
+  never sends, so every packet costs a full timeout and the measured rate --
+  131 packets a second -- is the cost of waiting, not the cost of sending.
+  The endpoint needs 1000 a second. This is the honest ceiling test: shove
+  the bytes at the chip, issue the token, and move on.
+
+  It is deliberately NOT in ch375.pas. Every other transfer in this
+  collection wants its status, and a fire-and-forget send that silently
+  loses errors is the wrong default for a bulk or control transfer. Here it
+  is the only thing that matches the semantics of the endpoint. }
+procedure FireOut(Ep: Byte; var Tog: Byte; const B; Len: Byte);
+var
+  P: PByte;
+  I: Byte;
+begin
+  P := @B;
+  WrCmd(CMD_WR_USB_DATA7); WrDat(Len);
+  for I := 0 to Len - 1 do WrDat(P[I]);
+  WrCmd(CMD_SET_ENDP7); WrDat(Tog);
+  WrCmd(CMD_ISSUE_TOKEN); WrDat((Ep shl 4) or PID_OUT);
+  Tog := Tog xor $40;
+end;
+
 function SetAlt(Alt: Integer): Integer;
 begin
   SetAlt := CtrlNoData(RT_SET_IF, REQ_SET_IFACE, Word(Alt), Word(StreamIf));
@@ -204,6 +235,54 @@ begin
   end;
 end;
 
+{ UAC1 endpoint control: the SAMPLING FREQUENCY.
+
+  Worth trying even though bSamFreqType says one discrete rate, because
+  that field describes what the device ADVERTISES and a few implementations
+  accept more than they advertise. If a lower rate were accepted the whole
+  arithmetic changes: 8 kHz 16-bit stereo is 32 bytes a frame, which fits
+  in the chip's 64-byte buffer, and 8 kHz MONO is 16,000 bytes/s, which is
+  under the 19,055 this chip has been measured at. That would turn a wall
+  into a merely difficult problem, so it is the first thing to rule out.
+
+  Note the recipient is the ENDPOINT (22h), not the interface -- sampling
+  frequency is an endpoint control in UAC1, and sending it to the interface
+  is a stall that looks like a refusal of the rate rather than of the
+  address. }
+function TrySampleRate(Hz: LongInt): Boolean;
+var
+  B  : array[0..3] of Byte;
+  Got: Word;
+  R  : Integer;
+  RB : LongInt;
+begin
+  B[0] := Byte(Hz and $FF);
+  B[1] := Byte((Hz shr 8) and $FF);
+  B[2] := Byte((Hz shr 16) and $FF);
+  R := CtrlOut($22, $01, $0100, Word(IsoEp), B, 3);
+  Write('  SET_CUR sample rate ', Hz, ' Hz -> ', StatusName(R));
+  if R <> INT_SUCCESS then
+  begin
+    WriteLn;
+    TrySampleRate := False;
+    Exit;
+  end;
+  { Accepting the write is not the same as honouring it. Read it back. }
+  B[0] := 0; B[1] := 0; B[2] := 0;
+  R := CtrlIn($A2, $81, $0100, Word(IsoEp), 3, B, SizeOf(B), Got);
+  if (R = INT_SUCCESS) and (Got >= 3) then
+  begin
+    RB := LongInt(B[0]) or (LongInt(B[1]) shl 8) or (LongInt(B[2]) shl 16);
+    WriteLn('   reads back ', RB, ' Hz');
+    TrySampleRate := RB = Hz;
+  end
+  else
+  begin
+    WriteLn('   (cannot read it back: ', StatusName(R), ')');
+    TrySampleRate := False;
+  end;
+end;
+
 var
   Buf  : array[0..255] of Byte;
   Tog  : Byte;
@@ -224,7 +303,8 @@ begin
     Halt(0);
   end;
 
-  Packets := 200; Go := False; Armed := False;
+  Packets := 200; Go := False; Armed := False; Hammer := 0;
+  Zero := False; PktLen := 64; Fast := False;
   for I := 1 to ParamCount do
   begin
     S := ParamStr(I);
@@ -233,6 +313,14 @@ begin
     if UpCase(S[2]) = 'P' then Base := HexArg(S, 4)
     else if UpCase(S[2]) = 'N' then Packets := NumArg(S, 4)
     else if UpCase(S[2]) = 'T' then CtrlTrace := True
+    else if Copy(UpCase(S), 2, 4) = 'ZERO' then Zero := True
+    else if Copy(UpCase(S), 2, 4) = 'FAST' then Fast := True
+    else if Copy(UpCase(S), 2, 4) = 'LEN=' then PktLen := Byte(NumArg(S, 6))
+    else if Copy(UpCase(S), 2, 7) = 'HAMMER=' then
+    begin
+      Hammer := NumArg(S, 9);
+      Go := True;
+    end
     else if (Length(S) >= 3) and (UpCase(S[2]) = 'G')
             and (UpCase(S[3]) = 'O') then Go := True;
   end;
@@ -310,8 +398,28 @@ begin
   end;
   Armed := True;
 
-  FillTone(Buf, 64);
-  Tog := 0;
+  { Before sending a byte: will it take a slower rate? This is the only
+    thing that could move the arithmetic, so it is asked first. }
+  WriteLn;
+  WriteLn('  asking for a slower rate (the only thing that could help):');
+  if TrySampleRate(8000) then
+    WriteLn('  *** 8000 Hz ACCEPTED -- re-read the verdict above, it is wrong')
+  else if TrySampleRate(16000) then
+    WriteLn('  *** 16000 Hz ACCEPTED -- re-read the verdict above')
+  else
+  begin
+    TrySampleRate(48000);
+    WriteLn('  no slower rate is honoured; 48 kHz stereo is the only format.');
+  end;
+  WriteLn;
+
+  if PktLen < 4 then PktLen := 4;
+  if PktLen > 64 then PktLen := 64;
+  FillTone(Buf, PktLen);
+  { $80 like every other polling tool here; BringUp has already put the
+    retry count back to 0 so a refusal comes straight back instead of the
+    chip grinding on it. }
+  Tog := $80;
   Ok := 0; Fail := 0;
   T0 := Ticks;
   for I := 1 to Packets do
@@ -342,9 +450,21 @@ begin
   WriteLn;
   if Ok = 0 then
   begin
-    WriteLn('  Nothing was accepted, which is the expected answer: an');
+    WriteLn('  Nothing was ACCEPTED, which is the expected answer: an');
     WriteLn('  isochronous endpoint does not hand back the handshake the');
     WriteLn('  chip is waiting for, so every transfer times out.');
+    WriteLn;
+    WriteLn('  That is NOT the same as nothing arriving. An OUT token puts');
+    WriteLn('  its packet on the wire before any handshake is due, and');
+    WriteLn('  measurement at the speaker says the bytes do land: recorded');
+    WriteLn('  from the headphone jack, the noise floor is -44 dB, silent');
+    WriteLn('  packets give -30 dB and a full-scale square wave -20 dB. The');
+    WriteLn('  content changes the output by 10 dB, so it is being carried.');
+    WriteLn;
+    WriteLn('  What comes out is a broadband click-train at the PACKET rate,');
+    WriteLn('  not the waveform -- the device is starved 95% of the time and');
+    WriteLn('  what you hear is it reacting to that. Controllable noise, not');
+    WriteLn('  playback. /HAMMER and /ZERO are how that was measured.');
   end
   else
   begin
@@ -353,6 +473,62 @@ begin
             '-byte frames on');
     WriteLn('  a 1 ms clock, so the device receives malformed audio at a');
     WriteLn('  fraction of the rate. Worth recording, not worth building on.');
+  end;
+
+  { ---- the listening test ------------------------------------------
+    The counters above say the CHIP was not satisfied. They do NOT say
+    nothing reached the speaker: an OUT token puts its packet on the wire
+    before any handshake is due, so the device may well be receiving
+    malformed audio while the chip reports a timeout. The only way to
+    settle that is to make a noise and listen, which is what /HAMMER is
+    for -- it sends flat out for long enough to record from the other end
+    of the speaker's headphone jack. A square wave at full scale, because
+    the question is "is there ANY sound", not "is it accurate". }
+  if Hammer > 0 then
+  begin
+    WriteLn;
+    WriteLn('HAMMERING FOR ', Hammer, 's -- record the speaker now');
+    WriteLn('----------------------------------------------------------------');
+    { /ZERO fills the packet with silence instead of a square wave. It is
+      the control for the whole listening test: if the speaker is loud for
+      a tone and quiet for zeros, then the CONTENT is getting through and
+      we are genuinely driving it. If both are equally loud, the noise is
+      the device reacting to a broken stream and nothing is being carried. }
+    if Zero then
+    begin
+      for I := 0 to 255 do Buf[I] := 0;
+      WriteLn('  sending SILENCE (all zero packets)');
+    end
+    else
+      WriteLn('  sending a full-scale square wave');
+    Ok := 0; Fail := 0;
+    T0 := Ticks;
+    Spins := 0;
+    while True do
+    begin
+      Elapsed := Ticks - T0;
+      if Elapsed < 0 then begin T0 := Ticks; Elapsed := 0; end;
+      if Elapsed >= LongInt(Hammer) * 182 div 10 then Break;
+      Inc(Spins);
+      if Spins > 2000000 then Break;
+      if KeyWaiting then begin EatKey; Break; end;
+      if Fast then
+      begin
+        FireOut(IsoEp, Tog, Buf, PktLen);
+        Inc(Fail);              { no status to have; counted as un-acked }
+      end
+      else if EpOut(IsoEp, Tog, Buf, PktLen) = INT_SUCCESS then Inc(Ok)
+                                                           else Inc(Fail);
+    end;
+    Elapsed := Ticks - T0;
+    if Elapsed < 1 then Elapsed := 1;
+    WriteLn('  packets attempted : ', Ok + Fail);
+    WriteLn('  accepted          : ', Ok);
+    WriteLn('  attempts/second   : ', (LongInt(Ok + Fail) * 182) div
+            (Elapsed * 10));
+    WriteLn('  bytes/s if all landed: ',
+            ((LongInt(Ok + Fail) * 64) * 182) div (Elapsed * 10));
+    WriteLn('  needed            : ', LongInt(IsoMax) * 1000, ' bytes/s');
   end;
 
   Disarm;

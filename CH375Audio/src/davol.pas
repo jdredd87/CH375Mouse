@@ -68,7 +68,7 @@ program davol;
 uses ch375, chtool, daudio;
 
 const
-  VER = '1.0.1';
+  VER = '1.0.2';
 
   CS_INTERFACE  = $24;
   AC_SUBCLASS   = $01;

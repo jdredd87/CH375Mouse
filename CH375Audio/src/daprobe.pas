@@ -89,7 +89,7 @@ program daprobe;
 uses ch375, chtool, daudio;
 
 const
-  VER = '1.0.1';
+  VER = '1.0.2';
 
   { Audio Class 1.0, from the spec's Appendix A. }
   AC_SUBCLASS   = $01;          { bInterfaceSubClass: AudioControl }

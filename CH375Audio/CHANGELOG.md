@@ -5,6 +5,48 @@ CH375Audio -- StevenC -- https://github.com/jdredd87/CH375USBTools
 The version lives in the `VER` constant of each tool in `src/`. A release
 is: bump it, add an entry here, `build.cmd`, commit, `git tag -a`.
 
+## 1.0.2 -- 2026-09-12
+
+**Bytes do reach the speaker, and 1.0.0 said they did not.** The claim was an
+inference from the chip's counters, and the counters answer a different
+question: a CH375 OUT token puts its packet on the wire *before* any handshake
+is due, so "0 accepted" means no acknowledgement came back, not that the
+device heard nothing. Recorded from the speaker's headphone jack:
+
+| DOS box doing | mean |
+|---|---|
+| nothing | -44.1 dB |
+| enumerating only, no packets | -44.6 dB |
+| hammering with SILENT packets | -30.2 dB |
+| hammering with a full-scale square wave | -19.8 dB |
+
+Enumeration alone is indistinguishable from silence, so it is not a bus-reset
+pop; the noise appears only when the stream is armed and packets sent, and the
+content moves the level by 10 dB. The data is being carried.
+
+It is still not playback. The spectrum is a broadband click-train at the
+PACKET cadence rather than the waveform: the device wants 1000 packets a
+second and gets 138, so it is starved 95% of the time. A controllable noise
+source, and a worse one than the PC speaker already in the machine.
+
+**The ceiling is the port interface, not the handshake timeout.** The obvious
+objection was that EpOut waits for an acknowledgement that never comes, so the
+rate measures waiting rather than sending. /FAST issues the token and moves on:
+138 packets/s against 131 with the wait. No difference. The limit is the cost
+of pushing bytes through the CH375 on an 8086 -- 8,844 bytes/s against 192,000
+needed, 4.6%, and not improvable by better transfer handling.
+
+**A slower rate was asked for and refused.** SET_CUR of the endpoint's
+sampling-frequency control at 8000 and 16000 Hz returns success, but GET_CUR
+stalls and the descriptor declares one discrete rate, so there is no evidence
+any of it took effect. Had 8 kHz been honoured the arithmetic would have
+changed -- 8 kHz stereo is 32 bytes a frame, inside the chip's buffer -- which
+is why it is asked before a byte of audio is sent.
+
+New in DAISO: /HAMMER=secs (send flat out, long enough to record), /ZERO (send
+silence -- the control that makes the comparison mean anything), /FAST (issue
+tokens without waiting), /LEN=n (packet size).
+
 ## 1.0.1 -- 2026-09-12
 
 **A freeze, and the one line that caused it.** `DAKEYS` run at the keyboard

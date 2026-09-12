@@ -3,7 +3,10 @@
 USB audio devices on an 8086-class DOS machine, through a CH375 USB host card.
 
 **Playback is not possible, and this project says so with measurements rather
-than with a shrug.** What *is* possible turns out to be worth having: the
+than with a shrug** — including the measurement that proves bytes *do* reach
+the speaker and make an audible noise, which is not the same thing as playing
+audio. See "Bytes DO reach the speaker" below; the first draft of this file
+got that wrong. What *is* possible turns out to be worth having: the
 speaker's mixer and its buttons are both reachable, so DOS can set the volume,
 mute it, and watch somebody press play — it simply cannot be the thing that
 feeds it audio.
@@ -75,6 +78,56 @@ Arming the interface works, because that is an ordinary control transfer. Every
 single data packet then times out, because the endpoint never sends the
 handshake the chip is waiting for. The tool puts the interface back to alt 0 on
 the way out.
+
+### Bytes DO reach the speaker. Measured, after this was first written wrong.
+
+The first version of this file said flatly that nothing gets through. That was
+an inference from the chip's own counters, and the counters answer a different
+question: a CH375 OUT token puts its packet **on the wire before any handshake
+is due**, so "0 accepted" means the chip never got an acknowledgement, not that
+the device heard nothing.
+
+Recorded from the speaker's own headphone jack, with its volume at maximum:
+
+| what the DOS box was doing | mean level |
+|---|---|
+| nothing | **−44.1 dB** |
+| enumerating only — bus reset, descriptors, SET_CONFIG, **no packets** | **−44.6 dB** |
+| hammering the endpoint with **silent** packets | **−30.2 dB** |
+| hammering it with a **full-scale square wave** | **−19.8 dB** |
+
+Enumeration alone is indistinguishable from silence, so the noise is not a
+bus-reset pop. It appears only when the stream is armed and packets are sent,
+and the **content changes the level by 10 dB** — so the data is genuinely
+being carried, not merely rattling the device.
+
+**But it is not playback.** The spectrum is a broadband click-train at the
+*packet* cadence rather than the waveform we sent: the device wants 1000
+packets a second and gets 138, so it is starved 95% of the time and what you
+hear is it reacting to that. It is a controllable noise source — and a worse
+one than the PC speaker this machine already has, so it is a curiosity rather
+than a feature.
+
+`DAISO /HAMMER=secs` sends flat out for long enough to record; `/ZERO` sends
+silence instead of a tone, which is the control that makes the comparison
+mean anything.
+
+### The ceiling is the port interface, not the timeout
+
+The obvious objection to the numbers above is that `EpOut` waits for a
+handshake that will never come, so the measured rate is the cost of *waiting*.
+It isn't. `/FAST` issues the token and moves on without waiting at all:
+
+| | packets/s | bytes/s |
+|---|---|---|
+| waiting for the handshake | 131 | 8,437 |
+| **fire-and-forget** | **138** | **8,844** |
+| **needed** | **1000** | **192,000** |
+
+Removing the wait entirely changed nothing, which means the limit is the cost
+of pushing bytes through the CH375's port interface on an 8086 — the same wall
+`DLBENCH` measures at ~19 KB/s for larger transfers. **4.6% of what the stream
+needs**, and not improvable by being cleverer about transfers.
 
 ### Would a different speaker help?
 

@@ -61,7 +61,7 @@ program dakeys;
 uses ch375, chtool, daudio;
 
 const
-  VER = '1.0.1';
+  VER = '1.0.2';
   CLASS_HID = $03;
   MAXUSE    = 64;
 
