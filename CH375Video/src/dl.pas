@@ -167,9 +167,15 @@ var
     two can be measured against each other rather than argued about --
     DLBENCH /O turns it on. }
   DlSlow:    Boolean = False;
+  { Why the last send gave up, for callers to report rather than leaving
+    somebody guessing at a stopped picture. }
+  DlStuck:   Boolean = False;   { gave up on unending NAKs }
+  DlLastErr: Integer = 0;       { the status that ended it, if not a NAK }
 
 function  DlOpen: Integer;
 function  DlWhy(Code: Integer): ShortString;
+{ What stopped the last transfer, in words. }
+function  DlWhyStuck: ShortString;
 procedure DlZeroStats;
 
 procedure DlEmit(B: Byte);
@@ -222,6 +228,9 @@ implementation
 
 const
   DL_REQ_CHANNEL = $12;
+  { Two seconds of NAKs is not a busy endpoint, it is a broken one. }
+  DL_GIVEUP      = 36;          { ticks, about 2 s at 18.2 Hz }
+  DL_ACKWAIT     = 10;          { per attempt; a bulk OUT ACKs at once }
   DL_CMDMAX      = 2048;
   { Flush this far short of the end: one RLE command can reach ~775 bytes
     in the worst case, and PadTail still has to fit after it. }
@@ -359,13 +368,33 @@ end;
   success, so re-issuing the identical token is correct rather than merely
   harmless. The payload is re-loaded on a retry because the chip's buffer
   is not guaranteed to have survived the failed attempt. }
+{ BOUNDED BY THE CLOCK, not by a retry count -- and the difference is the
+  whole reason this is written out at length.
+
+  A count is not a bound. The first version retried a NAK 600 times, and
+  each attempt calls WaitInt, which polls 24,000 times before giving up
+  when the device has stopped answering at all -- about a second. Six
+  hundred of those is TEN MINUTES for one 64-byte packet, and a dashboard
+  frame is some three hundred packets.
+
+  That is not a slow program, it is one indistinguishable from a hung
+  machine, which is precisely the failure CLAUDE.md keeps warning about:
+  DLDASH run from the keyboard looked frozen and cost a power cycle.
+
+  So the retry is limited by elapsed TICKS. A bulk endpoint that is
+  working ACKs in microseconds; one that is merely busy clears in
+  milliseconds; anything still NAKing after two seconds is not busy, it is
+  broken, and saying so immediately is worth far more than continuing to
+  hope. The timeout per attempt comes down too -- 60 was inherited from
+  the control path, where a device is entitled to think about it. }
 function SendPacket(Ofs: Word; Len: Byte): Boolean;
 var
   R: Integer;
-  Tries: Word;
+  T0: LongInt;
 begin
   SendPacket := False;
-  for Tries := 1 to 600 do
+  T0 := Ticks;
+  while True do
   begin
     if DlSlow then
       R := EpOut(DlEpBulk, TogOut, Cmd[Ofs], Len)
@@ -374,7 +403,7 @@ begin
       WrPacket(Ofs, Len);
       WrCmd(CMD_SET_ENDP7);   WrDat(TogOut);
       WrCmd(CMD_ISSUE_TOKEN); WrDat((DlEpBulk shl 4) or PID_OUT);
-      R := WaitInt(60);
+      R := WaitInt(DL_ACKWAIT);
       if R = INT_SUCCESS then TogOut := TogOut xor $40;
     end;
     Inc(DlPackets);
@@ -384,8 +413,21 @@ begin
       SendPacket := True;
       Exit;
     end;
-    if R = INT_RET_NAK then begin Inc(DlNaks); Continue; end;
+
+    if R = INT_RET_NAK then
+    begin
+      Inc(DlNaks);
+      if Ticks < T0 then Exit;                { midnight rollover }
+      if Ticks - T0 > DL_GIVEUP then
+      begin
+        DlStuck := True;
+        Exit;
+      end;
+      Continue;
+    end;
+
     if R = INT_RET_STALL then ClrStall(DlEpBulk);
+    DlLastErr := R;
     Exit;
   end;
 end;
@@ -632,6 +674,17 @@ begin
   else
     DlWhy := 'unknown';
   end;
+end;
+
+function DlWhyStuck: ShortString;
+begin
+  if DlStuck then
+    DlWhyStuck := 'the adapter NAKed every attempt for two seconds -- it '
+                + 'is not busy, it has stopped accepting the stream'
+  else if DlLastErr <> 0 then
+    DlWhyStuck := 'the adapter answered ' + StatusStr(DlLastErr)
+  else
+    DlWhyStuck := 'no fault recorded';
 end;
 
 { A chip left wedged by an earlier program fails CHECK_EXIST, and BusUp
