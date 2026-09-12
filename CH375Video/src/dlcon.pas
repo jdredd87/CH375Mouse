@@ -343,6 +343,8 @@ begin
 
   for I := 0 to NLines - 1 do
   begin
+    DlTick;
+    if DlEscaped then Break;
     if I >= Rows then Break;
     if Lines[I] = '' then Continue;        { paper is already paper }
     if not DrawRow(I, Lines[I]) then

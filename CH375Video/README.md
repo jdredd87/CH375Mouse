@@ -653,6 +653,48 @@ logs, `R` forces a full repaint, Esc quits. **That path is written but
 not yet verified by a human at the keyboard**, which is the only
 instrument that can check it.
 
+## Proving the machine is alive, and getting out
+
+Every tool here runs for tens of seconds with all its output buffered to
+the end, and **none of them proved they were alive**. Run from the bridge
+that is merely unhelpful. Run from the machine's own prompt it is
+indistinguishable from a lockup — `DLDASH` cost a power cycle for exactly
+that reason. Nothing printed, and nothing answered the keyboard either,
+because a loop doing port I/O never calls DOS, so Ctrl-Break is never
+seen.
+
+`CLAUDE.md` states the rule and this project broke it in six places:
+
+> A program that runs for more than a few seconds must prove it is alive,
+> and the proof has to be driven by the CLOCK.
+
+So `DlTick` writes a spinner and `DlEscaped` watches for Esc, in every
+long-running loop — `DLDASH`, `DLDEMO`, `DLFRACT`, `DLIMG`, `DLCON`.
+Three parts, each load-bearing:
+
+* **stderr, not stdout.** A job's stdout is redirected into a file and
+  reaches nobody until the job ends; DOS cannot redirect handle 2 at all,
+  so this lands on the real screen where somebody is looking.
+* **driven by the tick, not the work.** It stops when the *machine* stops,
+  not when the work merely pauses — which are the two cases most worth
+  telling apart.
+* **in place**, so it scrolls nothing.
+
+`DLFRACT` was the worst of them: up to **490 seconds** of complete silence.
+
+### What the display is left showing
+
+The adapter has its **own framebuffer**, so it keeps the last thing it was
+sent after the program exits. There is nothing to "close" — that is what
+lets a dashboard stay up after the tool that drew it has gone. But it
+surprises anyone expecting a program to tidy its screen away, so the tools
+now say so on exit, and `/B` blanks it instead.
+
+The chip itself *is* closed down properly and always was: an `ExitProc`
+retires any stranded token with `ABORT_NAK` and restores the retry policy,
+which is what stops the next program reporting "no CH375 at 0260" on a
+card that is plainly fitted.
+
 ## Traps, all of them paid for here
 
 **Every transfer must be padded with `AF`.** The parser does not act on

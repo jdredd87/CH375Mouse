@@ -736,6 +736,8 @@ begin
   begin
     if Ticks < T0 then Break;                  { midnight rollover }
     if Ticks >= Deadline then Break;
+    DlTick;
+    if DlEscaped then Break;
 
     if Which = 'stars' then
     begin

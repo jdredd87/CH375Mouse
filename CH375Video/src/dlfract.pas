@@ -443,6 +443,12 @@ begin
 
   for Y := 0 to CH_ - 1 do
   begin
+    DlTick;
+    if DlEscaped then
+    begin
+      WriteLn('stopped at row ', Y, ' of ', CH_, ' -- Esc');
+      Break;
+    end;
     T0 := Ticks;
     if UseFpu then
     begin

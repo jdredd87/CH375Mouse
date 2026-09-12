@@ -401,6 +401,12 @@ begin
 
   for Y := 0 to DH - 1 do
   begin
+    DlTick;
+    if DlEscaped then
+    begin
+      WriteLn('stopped at row ', Y, ' of ', DH, ' -- Esc');
+      Break;
+    end;
     if OY + Y < 0 then Continue;
     if OY + Y >= T.YRes then Break;
 

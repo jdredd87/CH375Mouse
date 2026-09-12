@@ -195,6 +195,29 @@ function  DlRleRun(Addr: LongInt; P: PWord; NPix: Word): Boolean;
 { Address of a pixel, for callers building their own runs. }
 function  DlAddr(const T: TDlTiming; X, Y: Word): LongInt;
 
+{ ---- proving the machine is alive, and letting somebody out ----
+
+  CLAUDE.md's rule, and every tool here broke it: a program that runs for
+  more than a few seconds must prove it is alive, and the proof has to be
+  driven by the CLOCK.
+
+  Run from the bridge, a silent 45-second tool is merely unhelpful. Run
+  from the machine's own prompt it is indistinguishable from a lockup, and
+  DLDASH cost a power cycle for exactly that reason -- nothing printed,
+  and nothing answered the keyboard either, because a loop doing port I/O
+  never calls DOS so Ctrl-Break is never seen.
+
+  DlTick writes to STDERR, because a job's stdout is redirected into a
+  file and reaches nobody until the job ends, while DOS cannot redirect
+  handle 2 at all -- so this lands on the real screen where somebody is
+  looking. It writes in place and scrolls nothing, and it takes its phase
+  from the BIOS tick rather than from the work, so it stops when the
+  MACHINE stops and not when the work merely pauses.
+
+  DlEscaped is the way out: Esc, checked cheaply, every loop. }
+procedure DlTick;
+function  DlEscaped: Boolean;
+
 implementation
 
 const
@@ -218,6 +241,41 @@ var
 procedure DlZeroStats;
 begin
   DlBytes := 0; DlPackets := 0; DlNaks := 0; DlPad := 0;
+end;
+
+const
+  { #92 is a backslash.  Written as a code because Pascal has no
+    escape character, so a literal one inside quotes is fine in
+    Pascal and a minefield in every tool that edits this file. }
+  Spin: array[0..3] of Char = ('|', '/', '-', #92);
+
+var
+  LastSpin: LongInt = -1;
+
+procedure DlTick;
+var T: LongInt;
+begin
+  T := Ticks shr 2;                    { about four a second }
+  if T = LastSpin then Exit;
+  LastSpin := T;
+  Write(ErrOutput, Spin[T and 3], #8);
+end;
+
+function GetKeyRaw: Char; assembler;
+asm
+  mov ah, 0
+  int 16h
+end;
+
+{ Drains whatever is waiting, so a held key cannot build a backlog that
+  outlives the loop.  Esc anywhere in it means stop. }
+function DlEscaped: Boolean;
+var Hit: Boolean;
+begin
+  Hit := False;
+  while KeyWaiting do
+    if GetKeyRaw = #27 then Hit := True;
+  DlEscaped := Hit;
 end;
 
 function DlRgb(R, G, B: Byte): Word;

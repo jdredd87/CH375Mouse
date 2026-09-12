@@ -11,6 +11,7 @@ program dldash;
       /K       INTERACTIVE: read the machine's keyboard.  Keys change the
                readings, Tab moves the highlight, Esc quits
       /R=dec   redraw everything every n frames, as a cost comparison
+      /B       blank the adapter's output on the way out
       /T=dec   scroll the ticker every n frames; 0 turns it off.
                The ticker changes a WHOLE ROW every time it moves, which
                is about half of everything this screen sends -- so this
@@ -71,6 +72,7 @@ var
   Secs:     Integer = 45;
   Live:     Boolean = False;
   FullEvery: Integer = 0;
+  BlankOut: Boolean = False;
   TickEvery: Integer = 1;
 
   Val:      array[0..NGAUGE - 1] of Integer;
@@ -285,6 +287,7 @@ begin
   WriteLn('    /K      interactive: TAB select, +/- adjust, L log,');
   WriteLn('            R redraw everything, ESC quit');
   WriteLn('    /R=dec  force a full repaint every n frames, to compare');
+  WriteLn('    /B      blank the adapter''s output on the way out');
   WriteLn('    /T=dec  scroll the ticker every n frames, 0 to stop it');
   WriteLn('    /M=dec  mode, default 0:');
   for I := 0 to NDLMODES - 1 do
@@ -343,6 +346,7 @@ begin
         'S': Secs := DecArg(S, 4);
         'K': Live := True;
         'R': FullEvery := DecArg(S, 4);
+        'B': BlankOut := True;
         'T': TickEvery := DecArg(S, 4);
       end;
   end;
@@ -394,6 +398,14 @@ begin
   begin
     if Ticks < T0 then Break;                 { midnight rollover }
     if Ticks >= Dead then Break;
+    DlTick;                                   { the machine is alive }
+
+    { Esc gets you out whether or not /K was given.  Without this the
+      tool ran silently for its whole duration and answered nothing --
+      which from the machine's own prompt is indistinguishable from a
+      lockup, and cost a power cycle to find out otherwise. }
+    if not Live then
+      if DlEscaped then Break;
 
     StepReadings;
     DrawGauges;
@@ -451,5 +463,26 @@ begin
   WriteLn('A full repaint of this screen is about ',
           LongInt(ScrCols) * ScrRows * 80, ' bytes.  The figure above is');
   WriteLn('what sending only the difference actually cost.');
+
+  { What the display is left showing, said out loud.
+
+    The adapter has its OWN framebuffer, so it keeps the last thing it was
+    sent after this program has exited -- there is nothing to "close". That
+    is deliberate and it is what lets a dashboard stay up after the tool
+    that drew it has gone, but it surprises anybody expecting a program to
+    tidy its screen away, so it is now stated rather than left to be
+    discovered. /B blanks it instead. }
+  WriteLn;
+  if BlankOut then
+  begin
+    DlBlank(True);
+    WriteLn('Display BLANKED (/B).');
+  end
+  else
+  begin
+    WriteLn('The adapter keeps its own framebuffer, so the last frame is');
+    WriteLn('still on the screen and will stay there until something else');
+    WriteLn('writes to it.  Nothing is left running.  /B blanks it.');
+  end;
   Halt(0);
 end.
