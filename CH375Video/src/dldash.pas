@@ -7,7 +7,7 @@ program dldash;
 
       /P=hex   I/O base, default 260
       /M=dec   video mode index, default 0
-      /S=dec   seconds to run, default 45
+      /S=dec   seconds to run, default 20
       /K       INTERACTIVE: read the machine's keyboard.  Keys change the
                readings, Tab moves the highlight, Esc quits
       /R=dec   redraw everything every n frames, as a cost comparison
@@ -69,7 +69,7 @@ const
 var
   T:        TDlTiming;
   ModeIx:   Integer = 0;
-  Secs:     Integer = 45;
+  Secs:     Integer = 20;
   Live:     Boolean = False;
   FullEvery: Integer = 0;
   BlankOut: Boolean = False;
@@ -283,11 +283,13 @@ var I: Integer;
 begin
   WriteLn('  DLDASH [/P=260] [/M=n] [/S=secs] [/K] [/R=n]');
   WriteLn;
-  WriteLn('    /S=dec  seconds to run, default 45');
+  WriteLn('    /S=dec  seconds to run, default 20');
   WriteLn('    /K      interactive: TAB select, +/- adjust, L log,');
   WriteLn('            R redraw everything, ESC quit');
   WriteLn('    /R=dec  force a full repaint every n frames, to compare');
   WriteLn('    /B      blank the adapter''s output on the way out');
+  WriteLn('    /L      log each start-up stage to C:\WORK\DLDASH.LOG,');
+  WriteLn('            which survives a hang when the screen does not');
   WriteLn('    /T=dec  scroll the ticker every n frames, 0 to stop it');
   WriteLn('    /M=dec  mode, default 0:');
   for I := 0 to NDLMODES - 1 do
@@ -347,6 +349,7 @@ begin
         'K': Live := True;
         'R': FullEvery := DecArg(S, 4);
         'B': BlankOut := True;
+        'L': DlMarkTo := 'C:\WORK\DLDASH.LOG';
         'T': TickEvery := DecArg(S, 4);
       end;
   end;
@@ -363,23 +366,48 @@ begin
   for I := 0 to 5 do Logs[I] := '';
   AddLog('boot  dlscr up, ROM font located');
 
+  { Breadcrumbs across the whole start-up, because this is the span that
+    freezes and nothing about it reaches the screen: the banner is the
+    last thing printed and the next WriteLn is after all four stages
+    below. Whatever the log ends on is where it stopped. }
+  DlSay('bringing the adapter up...');
+  DlMark('--- start, mode ' + T.Name);
+
   ExitProc := @Quieten;
+  DlMark('DlOpen: begin');
   Rc := DlOpen;
+  DlMark('DlOpen: returned ' + Dec1(Rc));
+  DlSay('adapter open, setting the mode...');
   if Rc <> DL_OK then begin WriteLn(DlWhy(Rc)); Halt(Rc); end;
 
+  DlMark('DlSetMode: begin');
   if not DlSetMode(T) then
   begin
+    DlMark('DlSetMode: REFUSED');
     WriteLn('the adapter stopped accepting the command stream');
     Halt(DL_REFUSED);
   end;
+  DlMark('DlSetMode: ok');
+  DlSay('mode set, clearing the screen...');
+
+  DlMark('clear: begin');
   DlFillRun(0, DlRgb(0, 0, 0), LongInt(T.XRes) * T.YRes);
   DlSend;
+  DlMark('clear: ok, ' + Dec1(DlBytes) + ' bytes, '
+         + Dec1(DlPackets) + ' packets, ' + Dec1(DlNaks) + ' NAKs');
 
+  DlSay('screen cleared, locating the ROM font...');
+  DlMark('ScrInit: begin');
   if not ScrInit(T) then
   begin
     WriteLn('the BIOS would not hand over a font pointer (INT 10h 1130h)');
     Halt(9);
   end;
+  { The framebuffer was just filled with black, so say so -- otherwise
+    the first flush repaints 2,400 cells to put spaces where spaces
+    already are, which is most of the delay before anything appears. }
+  ScrAssumeCleared(clBlack or (clBlack shl 4));
+  DlMark('ScrInit: ok, ' + Dec1(ScrCols) + 'x' + Dec1(ScrRows));
   WriteLn('mode      ', T.Name);
   WriteLn('screen    ', ScrCols, ' x ', ScrRows, ' cells, 8x16 ROM font');
   if Live then WriteLn('keyboard  live -- TAB / +- / L / R / ESC')
@@ -392,7 +420,10 @@ begin
   Dead := T0 + (LongInt(Secs) * 182) div 10;
   Quit := False;
 
+  DlMark('DrawFrame: begin');
   DrawFrame;                                  { once -- see the note there }
+  DlMark('DrawFrame: ok -- entering the loop');
+  DlSay('running -- Esc stops it.');
 
   while not Quit do
   begin
@@ -428,6 +459,8 @@ begin
     end;
     CellsTot := CellsTot + ScrCellsSent;
     Inc(Frames);
+    if (DlMarkTo <> '') and (Frames mod 5 = 0) then
+      DlMark('frame ' + Dec1(Frames) + ', ' + Dec1(DlBytes) + ' bytes');
     if (TickEvery > 0) and (Frames mod TickEvery = 0) then
       TickPos := (TickPos mod Length(TICKER)) + 1;
 

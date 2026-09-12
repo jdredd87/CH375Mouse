@@ -95,6 +95,19 @@ function  ScrFlush: Boolean;
   anything else that invalidates the glass. }
 procedure ScrInvalidate;
 
+{ Tell the screen what is ALREADY on the glass, when you know.
+
+  Callers clear the framebuffer to a colour before they start, and without
+  this the first flush does not know that: it assumes nothing is on the
+  screen and redraws all 2,400 cells, which on this path is about eleven
+  seconds of apparently doing nothing. Almost every one of those cells is
+  a space on the colour that was just written -- so almost all of that
+  work produces no change at all.
+
+  Saying so afterwards drops the first frame to the cells that actually
+  have something in them. }
+procedure ScrAssumeCleared(At: Byte);
+
 implementation
 
 var
@@ -164,6 +177,17 @@ begin
     begin
       Shown[Y, X].Ch := #1;
       Shown[Y, X].At := $FF;
+    end;
+end;
+
+procedure ScrAssumeCleared(At: Byte);
+var X, Y: Integer;
+begin
+  for Y := 0 to SCR_MAXROW - 1 do
+    for X := 0 to SCR_MAXCOL - 1 do
+    begin
+      Shown[Y, X].Ch := ' ';
+      Shown[Y, X].At := At;
     end;
 end;
 

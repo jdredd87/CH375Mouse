@@ -224,6 +224,29 @@ function  DlAddr(const T: TDlTiming; X, Y: Word): LongInt;
 procedure DlTick;
 function  DlEscaped: Boolean;
 
+{ ---- a breadcrumb that survives a hang ----
+
+  When a program stops dead, the only evidence left is what it managed to
+  get onto DISK before it stopped. Console output is gone the moment the
+  machine is power-cycled, and a job's captured stdout never arrives at
+  all -- so a tool that freezes tells you nothing about WHERE it froze.
+
+  The agent loop already solves this for boot phases with
+  C:\AGENT\PHASE.LOG. This is the same trick for the display tools.
+
+  The file is opened, written and CLOSED for every line. That is slow, and
+  it is the entire point: a line still sitting in a DOS buffer when the
+  machine stops is a line that was never written, and this exists only for
+  the case where the next thing to happen is a power cycle.
+
+  Set DlMarkTo to a filename to turn it on; empty is off and costs
+  nothing. }
+var
+  DlMarkTo: ShortString;
+
+procedure DlSay(const S: ShortString);
+procedure DlMark(const S: ShortString);
+
 implementation
 
 const
@@ -260,6 +283,30 @@ const
 
 var
   LastSpin: LongInt = -1;
+
+{ Says what is happening, on STDERR so it lands on the real screen
+  whether or not stdout has been redirected into a job's capture file.
+  Unconditional: the cost is a few lines and the benefit is that a tool
+  which stops is a tool you can see the last step of. }
+procedure DlSay(const S: ShortString);
+begin
+  WriteLn(ErrOutput, S);
+end;
+
+procedure DlMark(const S: ShortString);
+var F: Text;
+begin
+  if DlMarkTo = '' then Exit;
+  Assign(F, DlMarkTo);
+  {$I-}
+  Append(F);
+  if IOResult <> 0 then Rewrite(F);
+  if IOResult <> 0 then Exit;
+  WriteLn(F, S);
+  Close(F);
+  {$I+}
+  if IOResult <> 0 then ;
+end;
 
 procedure DlTick;
 var T: LongInt;
@@ -453,6 +500,19 @@ var
 begin
   DlSend := True;
   if CmdLen = 0 then Exit;
+
+  { The heartbeat lives HERE, not in each tool's main loop, and that
+    placement is the fix rather than a tidy-up.
+
+    Put in the loops, it proved the tool alive only once the loop was
+    running -- so DLOPEN, the mode set and the first full-screen clear,
+    several seconds between the banner and any output, showed nothing at
+    all. That is precisely the window somebody reported as a freeze.
+
+    Every tool reaches the adapter through this one function, so one call
+    covers all of them and every phase of them, start-up included. It is
+    gated on the BIOS tick, so it costs a comparison per flush. }
+  DlTick;
   PadTail;
   I := 0;
   while I < CmdLen do
