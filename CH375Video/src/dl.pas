@@ -172,6 +172,40 @@ var
   DlStuck:   Boolean = False;   { gave up on unending NAKs }
   DlLastErr: Integer = 0;       { the status that ended it, if not a NAK }
 
+{ ---- which chip is this, and can it ever work here ----
+
+  One table, in the shared unit, because every tool needs the same answer
+  and a second copy of it would start disagreeing the first time one was
+  updated.
+
+  DlOpen identifies before it does anything else and leaves the answer in
+  DlDevFamily, so a tool can branch on the family rather than on a vendor
+  ID it has to know about itself. That is the dispatch point a second
+  backend would hook into.
+
+  There is exactly one backend behind it today, and the honest reason is
+  worth stating: a USB display chip is usable over a link this slow ONLY
+  if it has a framebuffer of its own and takes a compressed stream.
+  DisplayLink does. Fresco Logic's FL2000 does neither and is out by three
+  orders of magnitude -- so it is not an unwritten driver, it is an
+  impossible one. See DlFamilyVerdict. }
+const
+  DLF_UNKNOWN     = 0;
+  DLF_DISPLAYLINK = 1;
+  DLF_FRESCO      = 2;
+  DLF_MCT         = 3;
+  DLF_SMSC        = 4;
+
+var
+  DlDevFamily: Integer = DLF_UNKNOWN;
+  DlDevVID:    Word = 0;
+  DlDevPID:    Word = 0;
+
+function  DlFamily(VID: Word): Integer;
+function  DlFamilyName(F: Integer): ShortString;
+{ Prints why, at length, for the families where "no" needs a reason. }
+procedure DlFamilyVerdict(F: Integer);
+
 function  DlOpen: Integer;
 function  DlWhy(Code: Integer): ShortString;
 { What stopped the last transfer, in words. }
@@ -804,6 +838,82 @@ end;
 
 { ------------------------------------------------------------- bring-up }
 
+function DlFamily(VID: Word): Integer;
+begin
+  case VID of
+    $17E9: DlFamily := DLF_DISPLAYLINK;
+    $1D5C: DlFamily := DLF_FRESCO;
+    $0711: DlFamily := DLF_MCT;
+    $0424: DlFamily := DLF_SMSC;
+  else
+    DlFamily := DLF_UNKNOWN;
+  end;
+end;
+
+function DlFamilyName(F: Integer): ShortString;
+begin
+  case F of
+    DLF_DISPLAYLINK: DlFamilyName := 'DisplayLink';
+    DLF_FRESCO:      DlFamilyName := 'Fresco Logic (FL2000 family)';
+    DLF_MCT:         DlFamilyName := 'Magic Control Technology (Trigger)';
+    DLF_SMSC:        DlFamilyName := 'Microchip / SMSC';
+  else
+    DlFamilyName := 'unrecognised';
+  end;
+end;
+
+procedure DlFamilyVerdict(F: Integer);
+begin
+  case F of
+    DLF_DISPLAYLINK:
+      WriteLn('  Driven by this code.');
+
+    DLF_FRESCO:
+      begin
+        WriteLn('  An FL2000 or FL2000DX -- a USB-to-VGA/HDMI bridge,');
+        WriteLn('  usually paired with an ITE IT66121 HDMI transmitter.');
+        WriteLn;
+        WriteLn('  IT CANNOT WORK ON A CH375, and that is architecture');
+        WriteLn('  rather than a driver nobody has written yet.');
+        WriteLn;
+        WriteLn('    DisplayLink has a framebuffer in the chip and takes a');
+        WriteLn('    COMPRESSED command stream: send a change once and the');
+        WriteLn('    picture holds indefinitely.');
+        WriteLn;
+        WriteLn('    FL2000 has no framebuffer at all.  It bridges USB to');
+        WriteLn('    parallel RGB, so the whole frame must arrive RAW and');
+        WriteLn('    keep arriving, at the pixel clock, forever.');
+        WriteLn;
+        WriteLn('  640x480 at 16bpp and 60 Hz is 36.9 MB a second.  This');
+        WriteLn('  path measures 19 KB/s: short by about 1,900 times, and');
+        WriteLn('  still 25 times short of what full-speed USB could carry');
+        WriteLn('  at its theoretical best.  There is no slow path either,');
+        WriteLn('  because a slow path presumes something holding the');
+        WriteLn('  picture between frames, and nothing does.');
+      end;
+
+    DLF_MCT, DLF_SMSC:
+      begin
+        WriteLn('  A display chip family this code does not drive.');
+        WriteLn('  UNTRIED rather than ruled out: both are said to');
+        WriteLn('  compress, which is the property that decides whether');
+        WriteLn('  anything is possible over a link this slow.  Whether');
+        WriteLn('  either holds a framebuffer is the question to answer');
+        WriteLn('  first, and USBINFO is where to start.');
+      end;
+  else
+    begin
+      WriteLn('  Not a display chip family this code knows about.');
+      WriteLn('  USBINFO dumps every descriptor the device will give up.');
+      WriteLn;
+      WriteLn('  What makes one of these usable here is narrow: it needs a');
+      WriteLn('  FRAMEBUFFER of its own, so a picture holds once sent, and');
+      WriteLn('  a COMPRESSED command stream, so sending it is affordable.');
+      WriteLn('  A chip missing either is not a driver away from working.');
+    end;
+  end;
+end;
+
 function DlWhy(Code: Integer): ShortString;
 begin
   case Code of
@@ -865,7 +975,10 @@ begin
   end;
 
   VID := DevDesc[8] or (Word(DevDesc[9]) shl 8);
-  if VID <> DL_VID then begin DlOpen := DL_NOTDL; Exit; end;
+  DlDevVID := VID;
+  DlDevPID := DevDesc[10] or (Word(DevDesc[11]) shl 8);
+  DlDevFamily := DlFamily(VID);
+  if DlDevFamily <> DLF_DISPLAYLINK then begin DlOpen := DL_NOTDL; Exit; end;
 
   St := CtrlIn($80, REQ_GET_DESCR, Word(DT_CONFIG) shl 8, 0,
                CfgWant, Cfg, SizeOf(Cfg), CfgGot);

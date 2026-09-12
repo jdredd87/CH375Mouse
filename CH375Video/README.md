@@ -18,7 +18,7 @@ output, taken through a capture card.
 | `DLPROBE` | identify the adapter, decode its limits, read the monitor's EDID |
 | `DLTEST` | draw test patterns and ask a human whether each appeared |
 | `DLBENCH` | measure throughput, so optimisation is aimed rather than guessed |
-| `DLDEMO` | moving graphics: `balls`, `stars`, `cube`, `bars`, `raster` |
+| `DLDEMO` | moving graphics: `balls`, `stars`, `cube`, `bars`, `raster`, `life` |
 | `DLCON` | a text console, which is what this hardware is actually good at |
 | `DLFRACT` | a Mandelbrot in fixed point — the one COMPUTE-bound tool |
 | `DLIMG` | load a BMP from disk and scale it to fit any mode |
@@ -181,16 +181,55 @@ the image, and nothing does.
 pixel data is "raw, uncompressed framebuffer data streamed continuously
 at video rate", triple-buffered, on endpoint 1 bulk OUT.)
 
-**So `DLPROBE` now names the family and gives the reason.** "Not a
+**So the tools name the family and give the reason.** The identification
+is one table in `dl.pas` — `DlFamily`, `DlFamilyName`, `DlFamilyVerdict` —
+and `DlOpen` records the answer in `DlDevFamily` before it does anything
+else. `DLPROBE` and `DLTEST` both print it from there rather than each
+keeping a vendor-ID list of their own, which is the dispatch point a
+second backend would hook into if one ever became possible. "Not a
 DisplayLink device" is true and useless — it leaves somebody holding a
 dongle unsure whether they have the wrong tool or the wrong hardware.
 Both `DLPROBE` and `DLTEST` refuse it before sending a single byte, which
 is the "identify first, separately" split earning its keep.
 
-**What this means for buying one:** the adapter has to have a framebuffer
-and a compressed protocol. DisplayLink does; Fresco Logic does not. A
-USB 3.0 dongle is not automatically better here — FL2000 is the newer,
-faster chip and it is the one that cannot work.
+### So which adapter should you buy?
+
+**Two properties decide it, and neither is on the box:**
+
+1. a **framebuffer in the chip**, so a picture holds once sent
+2. a **compressed** command stream, so sending it is affordable
+
+DisplayLink has both. Fresco Logic has neither. Everything else follows
+from that, including the counter-intuitive part: **a USB 3.0 dongle is not
+the better choice here.** FL2000 is the newer, faster chip, and it is the
+one that cannot work at all — because its speed is exactly what let its
+designers dispense with the framebuffer and the compression.
+
+**If you want HDMI, do not buy a USB-to-HDMI dongle.** Buy a **DisplayLink
+USB-to-DVI** adapter and put a passive **DVI-to-HDMI** adapter on the end.
+DVI-D and HDMI carry the same TMDS signalling, so the converter is wire
+and costs nothing.
+
+That is not a suggestion, it is the **tested configuration**: the
+`17E9:028F` DVI adapter above was driven through exactly such a converter
+into the capture card for every measurement in this file, including
+1024×768. The HDMI-native dongle sitting beside it does nothing at all.
+
+| you want | buy | why |
+|---|---|---|
+| VGA | DisplayLink USB-to-VGA | verified — `17E9:0058` |
+| DVI | DisplayLink USB-to-DVI | verified — `17E9:028F` |
+| **HDMI** | **DisplayLink USB-to-DVI + passive DVI-to-HDMI** | **verified — same signalling** |
+| — | any Fresco Logic / FL2000 dongle | cannot work, see above |
+
+### And this is as far as FL2000 goes
+
+No FL2000 support is written, and none is planned. It is not a matter of
+effort: a perfectly implemented backend would still need 1,900 times the
+bandwidth available, and there is nothing in the chip to hold a picture
+while it waited. Recording *why* is worth more than an attempt that could
+only fail, so the reasoning lives in `DlFamilyVerdict` where the tools can
+print it to whoever plugs one in.
 
 ## The monitor, and why the intersection is the answer
 

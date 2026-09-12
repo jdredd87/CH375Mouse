@@ -351,7 +351,21 @@ begin
 
   ExitProc := @Quieten;
   Rc := DlOpen;
-  if Rc <> DL_OK then begin WriteLn(DlWhy(Rc)); Halt(Rc); end;
+  if Rc <> DL_OK then
+  begin
+    WriteLn(DlWhy(Rc));
+    { When it is the wrong CHIP rather than a fault, say which chip and
+      why -- the same words every other tool uses, from the same table. }
+    if Rc = DL_NOTDL then
+    begin
+      WriteLn;
+      WriteLn('  ', Hex4(DlDevVID), ':', Hex4(DlDevPID), '  ',
+              DlFamilyName(DlDevFamily));
+      WriteLn;
+      DlFamilyVerdict(DlDevFamily);
+    end;
+    Halt(Rc);
+  end;
   WriteLn('bulk OUT endpoint ', Hex2(DlEpBulk));
   WriteLn;
 

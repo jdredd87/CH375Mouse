@@ -743,59 +743,6 @@ end;
 
 { ------------------------------------------------------------------ main }
 
-{ Say what the thing actually IS, and whether it could ever work here.
-
-  "Not a DisplayLink device" is true and useless: it leaves somebody
-  holding a dongle with no idea whether they have the wrong tool or the
-  wrong hardware. These are the families that turn up in USB display
-  adapters, and each verdict below is a property of the ARCHITECTURE, not
-  of effort not yet spent. }
-procedure WhoIsThis(VID: Word);
-begin
-  case VID of
-    $17E9:
-      WriteLn('  DisplayLink -- which is what this tool drives.');
-
-    $1D5C:
-      begin
-        WriteLn('  Fresco Logic, almost certainly an FL2000 or FL2000DX: a');
-        WriteLn('  USB-to-VGA/HDMI bridge, usually paired with an ITE');
-        WriteLn('  IT66121 HDMI transmitter.');
-        WriteLn;
-        WriteLn('  IT CANNOT WORK ON A CH375, and not for want of trying.');
-        WriteLn('  The architecture is the opposite of DisplayLink''s:');
-        WriteLn;
-        WriteLn('    DisplayLink has a framebuffer in the chip and takes a');
-        WriteLn('    COMPRESSED command stream.  Send a change once and it');
-        WriteLn('    holds the picture indefinitely.');
-        WriteLn;
-        WriteLn('    FL2000 has no framebuffer at all.  It bridges USB to');
-        WriteLn('    parallel RGB, so the whole frame has to be sent RAW');
-        WriteLn('    and CONTINUOUSLY, at the pixel clock, forever.');
-        WriteLn;
-        WriteLn('  640x480 at 16bpp and 60 Hz is 36.9 MB a second.  This');
-        WriteLn('  path measures 19 KB/s: short by about 1,900 times, and');
-        WriteLn('  still 25 times short of what full-speed USB could carry');
-        WriteLn('  at its theoretical best.  Nor is there a slow path --');
-        WriteLn('  nothing in the chip would hold the picture between');
-        WriteLn('  frames.');
-      end;
-
-    $0711:
-      WriteLn('  Magic Control Technology -- a "Trigger" display chip.'
-              + '  Vendor protocol, untried here.');
-    $0424:
-      WriteLn('  Microchip/SMSC -- possibly a UFX display bridge.'
-              + '  Untried here.');
-  else
-    begin
-      WriteLn('  Not a display chip family this tool knows about.');
-      WriteLn('  USBINFO dumps every descriptor the device will give up,');
-      WriteLn('  which is where to start.');
-    end;
-  end;
-end;
-
 procedure Usage;
 begin
   WriteLn('  DLPROBE [/P=260] [/E=n] [/K] [/I=n] [/V] [/T]');
@@ -932,7 +879,9 @@ begin
             '), so none of');
     WriteLn('the command stream below applies and none of it is attempted.');
     WriteLn;
-    WhoIsThis(VID);
+    WriteLn('  ', DlFamilyName(DlFamily(VID)));
+    WriteLn;
+    DlFamilyVerdict(DlFamily(VID));
     Halt(6);
   end;
   Fld('', 'DisplayLink (idVendor 17E9)');
