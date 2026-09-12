@@ -1,12 +1,13 @@
 # CH375USBTools — DOS tools for a WCH CH375 in USB host mode
 
-Five projects, one ISA card, and no storage anywhere in sight.
+Six projects, one ISA card, and no storage anywhere in sight.
 
 The WCH **CH375** is usually sold as a way to read a USB stick from an old
 machine, and every driver you can find for it does exactly that. This
 repository is what the chip can do *instead*: talk to arbitrary USB devices
-from real-mode DOS, and present them — a mouse, a keyboard, or both at
-once — to DOS as though they had always been there.
+from real-mode DOS, and present them — a mouse, a keyboard, both at once, an
+Ethernet adapter, or a **display** — to DOS as though they had always been
+there.
 
 Everything here has been written for, and run on, one specific computer: an
 **IBM PS/2 Model 30** — the original 8086 model, not one of the 286 or 386
@@ -28,6 +29,7 @@ which is rather the point.
 | **[CH375Keyboard](CH375Keyboard/)** | `USBKBD.COM`, a resident keyboard driver, plus six diagnostics. Enumerates a USB HID keyboard, translates usages to PC scancodes, and writes them into the BIOS keyboard buffer where DOS expects to find them |
 | **[CH375Combo](CH375Combo/)** | `USBCOMBO.COM`, both of the above in one image, for a **USB-to-PS/2 adapter** — one USB device with a keyboard interface and a mouse interface on it. About 5.3 KB resident |
 | **[CH375Net](CH375Net/)** | **1.0.0 — it is on the internet.** `USBPKT.COM`, a Crynwr packet driver for a USB Ethernet adapter. One command, like `NE2000.COM`. Pings 8.8.8.8, resolves DNS, fetches web pages, telnets to a BBS, and has moved 10 MB byte-exact. [INSTALL.md](CH375Net/INSTALL.md) · [ADAPTERS.md](CH375Net/ADAPTERS.md) |
+| **[CH375Video](CH375Video/)** | **A second screen over USB.** Eight tools driving a **DisplayLink** USB-to-VGA/DVI adapter: a text console, a colour dashboard with gauges, a 3D wireframe cube, Conway's Life, a Mandelbrot, and a BMP loader that scales to fit. 640×480 to 1280×1024. Every screenshot in its README is a photograph of the real output |
 
 Each project has its own `README.md`, `CHANGELOG.md`, `build.cmd` and
 `bin\`. The binaries are committed deliberately: the machine this targets
@@ -41,7 +43,29 @@ they actually want.
 | USB mouse | **yes**, INT 33h | **yes**, via `/W` | **untested** |
 | USB keyboard | **yes**, BIOS buffer | **no** | **untested** |
 | USB Ethernet | **yes**, packet driver at INT 65h | n/a | **untested** |
+| USB display | **yes**, DisplayLink only — see below | no | **untested** |
 | USB storage, hubs | no — out of scope | no | no |
+
+### A USB display works, but only if the chip has a framebuffer
+
+`CH375Video` drives **DisplayLink** adapters and nothing else, and that is
+not a gap waiting to be filled. Two properties decide whether a USB display
+chip can work over a link this slow:
+
+* a **framebuffer in the chip**, so a picture holds once sent
+* a **compressed** command stream, so sending it is affordable
+
+DisplayLink has both. **Fresco Logic's FL2000** — the chip in most cheap
+USB-to-HDMI dongles — has neither: it bridges USB to parallel RGB, so the
+whole frame must arrive raw and keep arriving at the pixel clock. That is
+36.9 MB/s for 640×480, against about 19 KB/s available. Out by three orders
+of magnitude, with nothing in the chip to hold the picture while it waited.
+
+The counter-intuitive consequence: **a USB 3.0 dongle is the wrong choice
+here.** Its speed is precisely what let its designers dispense with the
+framebuffer. **If you want HDMI, buy a DisplayLink USB-to-DVI adapter and a
+passive DVI-to-HDMI converter** — DVI-D and HDMI carry the same signalling,
+and that is the tested configuration.
 
 Two limits are worth knowing before you start. Neither is a missing feature,
 and neither can be fixed in software — both are facts about the Model 30, and

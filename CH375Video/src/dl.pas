@@ -80,7 +80,7 @@ const
     800x600 quite happily, so those stay the dependable choices; 848x480
     is the one worth trying for a native-aspect picture. DLPROBE's
     intersection will say whether a given monitor lists it. }
-  NDLMODES = 10;
+  NDLMODES = 11;
   DlModes: array[0..NDLMODES - 1] of TDlTiming = (
     (Name: '640x480@60';  XRes: 640; YRes: 480;
      LeftM: 48;  RightM: 16; HSync: 96;
@@ -155,7 +155,17 @@ const
       DLPROBE's adapter column is what says which. }
     (Name: '1024x768@60'; XRes: 1024; YRes: 768;
      LeftM: 160; RightM: 24; HSync: 136;
-     UpperM: 29; LowerM: 3;  VSync: 6;  PixClk: 15385));
+     UpperM: 29; LowerM: 3;  VSync: 6;  PixClk: 15385),
+
+    { 1280x1024@60 at 108 MHz -- 1,310,720 pixels against the DVI part's
+      2,360,000 area limit, and it states no clock limit at all.  This is
+      what DLPROBE's intersection recommends against a television that
+      advertises it: the largest mode BOTH ends accept.  A frame is
+      2,621,440 bytes, so nothing full-screen is quick here -- it is a
+      mode for a dashboard that changes a little, not for animation. }
+    (Name: '1280x1024@60'; XRes: 1280; YRes: 1024;
+     LeftM: 248; RightM: 48; HSync: 112;
+     UpperM: 38; LowerM: 1;  VSync: 3;  PixClk: 9259));
 
 var
   DlEpBulk:  Byte = 0;
@@ -258,8 +268,17 @@ function  DlAddr(const T: TDlTiming; X, Y: Word): LongInt;
   auto-adjust. False is returned for a block that is not a timing at all
   (pixel clock zero means it is a text or range descriptor) or one whose
   numbers do not add up. }
+{ Results, because "it did not work" covers three different facts and
+  only one of them is a problem with the descriptor. }
+const
+  DLT_OK       = 0;   { decoded, and T is usable }
+  DLT_NOTIMING = 1;   { a text or range block, not a timing at all }
+  DLT_BAD      = 2;   { a timing whose numbers do not add up }
+  DLT_TOOBIG   = 3;   { decoded perfectly, and far beyond this hardware }
+
 function  DlTimingFromEdid(const Edid; Blk: Integer;
-                           var T: TDlTiming): Boolean;
+                           var T: TDlTiming): Integer;
+function  DlTimingWhy(Code: Integer): ShortString;
 
 { ---- proving the machine is alive, and letting somebody out ----
 
@@ -405,8 +424,20 @@ begin
 end;
 
 { EDID detailed timing descriptors are 18 bytes each, starting at 54. }
+function DlTimingWhy(Code: Integer): ShortString;
+begin
+  case Code of
+    DLT_OK:       DlTimingWhy := 'ok';
+    DLT_NOTIMING: DlTimingWhy := 'not a timing block';
+    DLT_BAD:      DlTimingWhy := 'the numbers do not add up';
+    DLT_TOOBIG:   DlTimingWhy := 'decoded, but far beyond this hardware';
+  else
+    DlTimingWhy := 'unknown';
+  end;
+end;
+
 function DlTimingFromEdid(const Edid; Blk: Integer;
-                          var T: TDlTiming): Boolean;
+                          var T: TDlTiming): Integer;
 var
   E: PByte;
   O: Integer;
@@ -416,13 +447,17 @@ var
   Up: Byte;
   S: ShortString;
 begin
-  DlTimingFromEdid := False;
+  DlTimingFromEdid := DLT_BAD;
   if (Blk < 0) or (Blk > 3) then Exit;
   E := @Edid;
   O := 54 + Blk * 18;
 
   Clk := LongInt(E[O]) or (LongInt(E[O + 1]) shl 8);
-  if Clk = 0 then Exit;                 { a text or range block, not timing }
+  if Clk = 0 then
+  begin
+    DlTimingFromEdid := DLT_NOTIMING;
+    Exit;
+  end;
 
   HA := E[O + 2] or ((Word(E[O + 4] and $F0)) shl 4);
   HB := E[O + 3] or ((Word(E[O + 4] and $0F)) shl 8);
@@ -440,8 +475,20 @@ begin
   if (HA = 0) or (VA = 0) then Exit;
   if HB <= HFp + HSy then Exit;
   if VB <= VFp + VSy then Exit;
-  if HA > 2048 then Exit;
-  if VA > 1536 then Exit;
+
+  { Out of range is NOT a decode failure, and saying so matters: a 4K
+    television states 3840x2160 as its preferred mode, which parses
+    perfectly and is simply beyond anything reachable here. Reporting that
+    as "did not decode" blames the descriptor for a limit of ours, which
+    is the same mistake the CH375's GET_DESCR shortcut made. }
+  if (HA > 2048) or (VA > 1536) then
+  begin
+    T.XRes := HA;
+    T.YRes := VA;
+    T.PixClk := 100000000 div Clk;
+    DlTimingFromEdid := DLT_TOOBIG;
+    Exit;
+  end;
 
   T.XRes   := HA;
   T.YRes   := VA;
@@ -459,7 +506,7 @@ begin
 
   Str(HA, S);      T.Name := S + 'x';
   Str(VA, S);      T.Name := T.Name + S + ' (from EDID)';
-  DlTimingFromEdid := True;
+  DlTimingFromEdid := DLT_OK;
 end;
 
 { ------------------------------------------------------------ the stream }

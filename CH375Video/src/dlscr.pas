@@ -44,8 +44,11 @@ interface
 uses ch375, dl;
 
 const
-  SCR_MAXCOL = 128;           { 1024 / 8, the widest mode here }
-  SCR_MAXROW = 48;            { 768 / 16 }
+  { 1280 / 8 and 1024 / 16 -- the largest mode in DlModes.  Two cell
+    buffers at 160x64 is 40,960 bytes, which is most of a 64K data
+    segment; anything larger would have to go on the heap. }
+  SCR_MAXCOL = 160;
+  SCR_MAXROW = 64;
   GW = 8;
   GH = 16;
 
@@ -340,6 +343,26 @@ begin
   LayRun := AnyInk;
 end;
 
+{ Does this cell already look right on the glass?
+
+  Not simply "same character and same attribute", because A SPACE RENDERS
+  AS SOLID PAPER and its ink colour cannot be seen. Comparing the whole
+  attribute byte treats a grey-on-black space as different from a
+  black-on-black one and redraws it for no visible reason.
+
+  That is not a corner case. A panel padded out with spaces in the
+  foreground colour of its text covered 6,776 cells of an otherwise
+  unchanged 160x64 screen -- two thirds of a full repaint, to draw nothing
+  anybody could see. }
+function Same(Y, X: Integer): Boolean;
+begin
+  if (Scr[Y, X].Ch = ' ') and (Shown[Y, X].Ch = ' ') then
+    Same := (Scr[Y, X].At and $F0) = (Shown[Y, X].At and $F0)
+  else
+    Same := (Scr[Y, X].Ch = Shown[Y, X].Ch)
+            and (Scr[Y, X].At = Shown[Y, X].At);
+end;
+
 function ScrFlush: Boolean;
 var
   X, Y, Scan: Integer;
@@ -353,8 +376,7 @@ begin
     X := 0;
     while X < ScrCols do
     begin
-      if (Scr[Y, X].Ch = Shown[Y, X].Ch)
-         and (Scr[Y, X].At = Shown[Y, X].At) then
+      if Same(Y, X) then
       begin
         Inc(X);
         Continue;
@@ -365,9 +387,7 @@ begin
         the same pixels. }
       X1 := X;
       X2 := X;
-      while (X2 + 1 < ScrCols)
-            and ((Scr[Y, X2 + 1].Ch <> Shown[Y, X2 + 1].Ch)
-                 or (Scr[Y, X2 + 1].At <> Shown[Y, X2 + 1].At)) do Inc(X2);
+      while (X2 + 1 < ScrCols) and not Same(Y, X2 + 1) do Inc(X2);
 
       for Scan := 0 to GH - 1 do
       begin

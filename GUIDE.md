@@ -29,7 +29,8 @@ The WCH **CH375** is usually sold as a way to read a USB stick from an old
 machine, and nearly every driver you can find for it does exactly that.
 This repository is what the chip can do *instead*: act as a USB **host** on
 a real-mode DOS machine, talk to arbitrary USB devices, and present a
-keyboard and a mouse to DOS as though they had always been there.
+keyboard and a mouse to DOS as though they had always been there — plus an
+Ethernet adapter as a packet driver, and a **display** as a second screen.
 
 Four projects:
 
@@ -96,7 +97,14 @@ reset it out from under each other.
 | a USB keyboard | `USBKBD.COM` |
 | a USB-to-PS/2 adapter with both, or a combo dongle | `USBCOMBO.COM` |
 | a mouse, and you want Windows 3.x | `USBMOUSE /W` or `USBCOMBO /W` |
+| a USB Ethernet adapter | `USBPKT.COM` — see CH375Net |
+| a USB display adapter | nothing resident; the CH375Video tools drive it directly |
 | no idea what you have | `USBINFO` first — it drives nothing |
+
+A **display** adapter is the odd one out: there is no resident driver for
+it and no `INT` to hook, because DOS has no notion of a second screen. The
+CH375Video tools open the adapter, draw, and close — see
+[CH375Video/README.md](CH375Video/README.md).
 
 ---
 
@@ -314,9 +322,27 @@ actually run at; the rest is correct by inspection.
 |---|---|---|---|
 | USB mouse | **yes**, INT 33h | **yes**, via `/W` | **untested** |
 | USB keyboard | **yes**, BIOS buffer | **no**, and unfixable here | **untested** |
+| USB Ethernet | **yes**, packet driver at INT 65h | n/a | **untested** |
+| USB display | **yes**, DisplayLink only | no | **untested** |
 | USB storage | no — out of scope | no | no |
 | USB hubs | no | no | no |
 | WiFi dongles, speakers, serial adapters | enumerated and dumped only | — | — |
+
+**A USB display works, and only on DisplayLink.** That is not a gap
+waiting to be filled — it follows from what the link can carry. A chip is
+usable here only if it has a **framebuffer of its own**, so a picture
+holds once sent, and a **compressed** command stream, so sending it is
+affordable. DisplayLink has both.
+
+Fresco Logic's **FL2000**, the chip in most cheap USB-to-HDMI dongles, has
+neither: it bridges USB to parallel RGB, so the whole frame must arrive
+raw and keep arriving at the pixel clock — 36.9 MB/s for 640×480, against
+about 19 KB/s available. The tools identify it by vendor ID and say so
+rather than failing silently.
+
+So **if you want HDMI, buy a DisplayLink USB-to-DVI adapter and a passive
+DVI-to-HDMI converter.** DVI-D and HDMI carry the same signalling, and
+that is the configuration everything in CH375Video was measured on.
 
 **Programs that read the keyboard through `INT 09h` never see anything from
 `USBKBD` or `USBCOMBO`.** DOS EDIT and QBASIC are both such programs; so are

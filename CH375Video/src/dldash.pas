@@ -54,6 +54,7 @@ uses ch375, chtool, dl, dlscr;
 const
   VER = '1.0.0';
   NGAUGE = 4;
+  MAXLOG = 44;                 { a 64-row screen leaves room for this many }
   GaugeName: array[0..NGAUGE - 1] of ShortString =
     ('THROUGHPUT', 'PACKET RATE', 'BUFFER USE', 'ERROR RATE');
   GaugeUnit: array[0..NGAUGE - 1] of ShortString =
@@ -65,6 +66,10 @@ const
          + 'font.  Only what CHANGES is sent: a moving gauge costs about '
          + '80 bytes where a full repaint costs 85,000.  Boxes and colour '
          + 'are free -- CP437 is in the font.  ***  ';
+
+
+type
+  TLogLine = string[110];
 
 var
   T:        TDlTiming;
@@ -83,7 +88,21 @@ var
   Frames:   LongInt = 0;
   LogTop:   Integer = 0;
   LogDrawn: Integer = -1;
-  Logs:     array[0..5] of ShortString;
+  { TLogLine, not ShortString.  A ShortString is 256 bytes whatever is in
+    it, so 44 of them is 11 KB of data segment for lines that can never be
+    wider than the screen -- and at 160x64 dlscr's cell buffers already
+    take 40 KB of the 64 K available, which is what pushed this over.
+
+    That is the cheap half of the problem. The expensive half is those two
+    cell buffers, and they are the thing to move onto the heap if a mode
+    larger than 1280x1024 is ever wanted. }
+  Logs:     array[0..MAXLOG - 1] of TLogLine;
+  { Worked out from the screen size at start-up rather than assumed, so a
+    160x64 mode does not draw an 80x30 dashboard in its top corner and
+    leave two thirds of the screen empty. }
+  LogY:     Integer = 15;
+  LogH:     Integer = 9;
+  LogN:     Integer = 6;
 
 function Dec1(V: LongInt): ShortString;
 var S: ShortString;
@@ -122,8 +141,8 @@ end;
 procedure AddLog(const S: ShortString);
 var I: Integer;
 begin
-  for I := 0 to 4 do Logs[I] := Logs[I + 1];
-  Logs[5] := S;
+  for I := 0 to LogN - 2 do Logs[I] := Logs[I + 1];
+  Logs[LogN - 1] := S;
   Inc(LogTop);
 end;
 
@@ -152,9 +171,10 @@ begin
   ScrBox(48, 2, ScrCols - 49, 12, clLightBlue, False);
   ScrTitle(48, 2, ScrCols - 49, 'LINK', clWhite);
 
-  { Log panel. }
-  ScrBox(1, 15, ScrCols - 2, 9, clDarkGrey, False);
-  ScrTitle(1, 15, ScrCols - 2, 'EVENTS', clLightGrey);
+  { Log panel -- fills whatever is left above the ticker, so a tall mode
+    gets a tall log rather than a band of empty screen. }
+  ScrBox(1, LogY, ScrCols - 2, LogH, clDarkGrey, False);
+  ScrTitle(1, LogY, ScrCols - 2, 'EVENTS', clLightGrey);
 
   { Ticker rail. }
   ScrFill(0, ScrRows - 2, ScrCols, 1, ' ', clBlack or (clBlue shl 4));
@@ -231,8 +251,8 @@ var I: Integer;
 begin
   if LogTop = LogDrawn then Exit;
   LogDrawn := LogTop;
-  for I := 0 to 5 do
-    ScrWrite(3, 17 + I, Pad(Logs[I], ScrCols - 6), clLightGrey);
+  for I := 0 to LogN - 1 do
+    ScrWrite(3, LogY + 1 + I, Pad(Logs[I], ScrCols - 6), clLightGrey);
 end;
 
 { Straight into the cells.  The first version built an 80-character
@@ -363,7 +383,7 @@ begin
     Val[I] := 20 + Integer(Rnd(60));
     Vel[I] := Integer(Rnd(7)) - 3;
   end;
-  for I := 0 to 5 do Logs[I] := '';
+  for I := 0 to MAXLOG - 1 do Logs[I] := '';
   AddLog('boot  dlscr up, ROM font located');
 
   { Breadcrumbs across the whole start-up, because this is the span that
@@ -406,6 +426,15 @@ begin
   { The framebuffer was just filled with black, so say so -- otherwise
     the first flush repaints 2,400 cells to put spaces where spaces
     already are, which is most of the delay before anything appears. }
+  { Size the layout now the screen size is known.  Two rows at the
+    bottom are the ticker and the key help. }
+  LogY := 15;
+  LogH := ScrRows - LogY - 3;
+  if LogH < 4 then LogH := 4;
+  LogN := LogH - 2;
+  if LogN < 1 then LogN := 1;
+  if LogN > MAXLOG then LogN := MAXLOG;
+
   ScrAssumeCleared(clBlack or (clBlack shl 4));
   DlMark('ScrInit: ok, ' + Dec1(ScrCols) + 'x' + Dec1(ScrRows));
   WriteLn('mode      ', T.Name);

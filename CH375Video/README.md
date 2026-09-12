@@ -733,6 +733,57 @@ logs, `R` forces a full repaint, Esc quits. **That path is written but
 not yet verified by a human at the keyboard**, which is the only
 instrument that can check it.
 
+## 1280x1024, and a television
+
+Driven against a 4K TV through the DVI adapter and a passive DVI-to-HDMI
+converter. Its *preferred* mode is 3840x2160 at 297 MHz, which is far out
+of reach — so this is the case the intersection was built for: the display
+also advertises 640x480, 800x600, 1024x768 and 1280x1024, and `DLPROBE`
+picks the largest the adapter allows. **1280x1024 works**, at 160x64 cells.
+
+`DLPROBE` now derives the full timing from the EDID rather than matching
+against a table — actives, blanking, sync offsets and widths, and the
+clock. The porches have to be *derived* rather than read, which is the
+only subtle part:
+
+```
+front porch = sync offset
+sync        = sync pulse width
+back porch  = blanking - offset - width
+```
+
+Getting that subtraction backwards shifts the picture sideways and still
+syncs, which looks exactly like a monitor needing its auto-adjust.
+
+**A timing that is out of range is not a timing that failed to decode**,
+and the tool used to report both the same way. 3840x2160 parses perfectly
+and is simply beyond this hardware; calling that "did not decode" blames
+the descriptor for a limit of ours — the same mistake the CH375's
+`GET_DESCR` shortcut made. It now says which.
+
+### Two things that made a wide screen affordable
+
+A 160x64 screen is 10,240 cells, and the first dashboard frame was sending
+**8,214** of them. Two fixes, both about not sending what cannot be seen:
+
+**A space renders as solid paper, so its ink colour is invisible.** The
+dirty check compared the whole attribute byte, so a grey-on-black space
+counted as different from a black-on-black one. A log panel padded out
+with spaces in its text colour therefore covered 6,776 unchanged cells —
+two thirds of a full repaint, to draw nothing anybody could see. Spaces
+are now compared on their **paper** only: **8,214 cells a frame to 297**.
+
+**The layout is sized to the screen.** The panels were fixed at 80x30, so
+a 160x64 mode drew a small dashboard in the corner and left two thirds of
+the screen empty. The log panel now fills whatever is left above the
+ticker.
+
+One memory note for anyone going further: at 160x64 `dlscr`'s two cell
+buffers are 40 KB of a 64 KB data segment. The log lines had to drop from
+`ShortString` (256 bytes each, whatever is in them) to `string[110]` just
+to fit. **A mode larger than 1280x1024 means moving those cell buffers to
+the heap.**
+
 ## Proving the machine is alive, and getting out
 
 Every tool here runs for tens of seconds with all its output buffered to

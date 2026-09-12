@@ -420,6 +420,7 @@ var
   S:       ShortString;
   ET:      TDlTiming;
   HzWhole: LongInt;
+  TRc:     Integer;
 begin
   for I := 0 to 3 do
   begin
@@ -441,7 +442,17 @@ begin
         blanking and the sync OFFSET, and the back porch is the
         remainder, which is easy to get backwards in a way that still
         syncs and looks wrong. }
-      if DlTimingFromEdid(Edid, I, ET) then
+      TRc := DlTimingFromEdid(Edid, I, ET);
+      if TRc = DLT_TOOBIG then
+      begin
+        Fld('', 'beyond this hardware -- ' + Dec1(ET.XRes) + 'x'
+            + Dec1(ET.YRes) + ' needs '
+            + Mhz(1000000 div ET.PixClk * 1000) + ', and the encoder');
+        Fld('', 'would be sending ' + Dec1(LongInt(ET.XRes) * ET.YRes)
+            + ' pixels a frame.  The descriptor is fine;');
+        Fld('', 'it is simply asking for more than this can do.');
+      end
+      else if TRc = DLT_OK then
       begin
         Fld('', 'h: ' + Dec1(ET.LeftM) + ' back, ' + Dec1(ET.HSync)
             + ' sync, ' + Dec1(ET.RightM) + ' front   total '
@@ -457,7 +468,7 @@ begin
             + 'DLTEST /M=E and DLDASH /M=E drive it');
       end
       else if I = 0 then
-        Fld('', 'the timing did not decode -- built-in modes only');
+        Fld('', 'timing not usable: ' + DlTimingWhy(TRc));
     end
     else
     begin
