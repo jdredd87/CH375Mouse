@@ -31,6 +31,7 @@ which is rather the point.
 | **[CH375Net](CH375Net/)** | **1.0.0 — it is on the internet.** `USBPKT.COM`, a Crynwr packet driver for a USB Ethernet adapter. One command, like `NE2000.COM`. Pings 8.8.8.8, resolves DNS, fetches web pages, telnets to a BBS, and has moved 10 MB byte-exact. [INSTALL.md](CH375Net/INSTALL.md) · [ADAPTERS.md](CH375Net/ADAPTERS.md) |
 | **[CH375Video](CH375Video/)** | **A second screen over USB.** Eight tools driving a **DisplayLink** USB-to-VGA/DVI adapter: a text console, a colour dashboard with gauges, a 3D wireframe cube, Conway's Life, a Mandelbrot, and a BMP loader that scales to fit. 640×480 to 1280×1024. Every screenshot in its README is a photograph of the real output |
 | **[CH375Audio](CH375Audio/)** | **A USB speaker as a mixer and a button panel.** Four tools for USB Audio Class devices: decode the topology, set volume and mute over control transfers, and read the transport buttons off the HID interface. **Playing audio is impossible** and the project measures why rather than asserting it — the stream is isochronous, wants 192-byte packets, and needs 192 KB/s against 19 KB/s measured |
+| **[CH375Serial](CH375Serial/)** | **Early.** USB-to-serial adapters. The probe identifies the chipset family, decodes every configuration and maps the endpoints; nothing drives a port yet. Unlike the audio case there is no architectural obstacle — bulk endpoints, 64-byte packets, and 11.5 KB/s at 115200 baud against ~19 KB/s available |
 
 Each project has its own `README.md`, `CHANGELOG.md`, `build.cmd` and
 `bin\`. The binaries are committed deliberately: the machine this targets
@@ -46,6 +47,7 @@ they actually want.
 | USB Ethernet | **yes**, packet driver at INT 65h | n/a | **untested** |
 | USB display | **yes**, DisplayLink only — see below | no | **untested** |
 | USB audio | **mixer and buttons yes; playback no** — see below | no | **untested** |
+| USB serial | **identified, not yet driven** — see CH375Serial | no | **untested** |
 | USB storage, hubs | no — out of scope | no | no |
 
 ### A USB display works, but only if the chip has a framebuffer

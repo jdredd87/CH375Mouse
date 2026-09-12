@@ -975,6 +975,7 @@ begin
     $062A: VendorName := 'MosArt';
     $0644: VendorName := 'TEAC';
     $066F: VendorName := 'SigmaTel';
+    $06CD: VendorName := 'Keyspan / InnoSys';
     $067B: VendorName := 'Prolific';
     $0781: VendorName := 'SanDisk';
     $0787: VendorName := 'Kingston';
