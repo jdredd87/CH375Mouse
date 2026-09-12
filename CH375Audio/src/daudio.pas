@@ -64,6 +64,24 @@ procedure Quieten;
 function GetConfigFull(var Buf: TBigCfg; var Len: Word;
                        var Why: ShortString): Boolean;
 
+{ Name the stage we are entering, on STDERR.
+
+  Everything between the banner and the first real output is USB work and
+  is silent, which breaks the rule this whole project runs on: a program
+  that takes more than a moment has to prove it is alive, or a hang and a
+  slow bring-up are the same thing to whoever is watching. Stderr because
+  DOS 6.22 cannot redirect handle 2 -- so it reaches the real screen even
+  when the bridge is capturing stdout into a file. }
+procedure Stage(const S: ShortString);
+
+{ The whole bring-up, once, so no tool can do it half.
+
+  Returns BU_OK, or a BusUp code the caller can pass to BusUpReason. On
+  BU_OK the device is configured, Cfg holds the FULL configuration
+  descriptor, and the retry mode is safe for polling. }
+function BringUp(var Cfg: TBigCfg; var Len: Word;
+                 var Why: ShortString): Integer;
+
 implementation
 
 function ChipThere: Boolean;
@@ -83,6 +101,11 @@ procedure Quieten;
 begin
   WrCmd(CMD_ABORT_NAK);
   SetRetry($00);
+end;
+
+procedure Stage(const S: ShortString);
+begin
+  Write(StdErr, '  [', S, ']'#13#10);
 end;
 
 function GetConfigFull(var Buf: TBigCfg; var Len: Word;
@@ -112,6 +135,77 @@ begin
     Exit;
   end;
   GetConfigFull := True;
+end;
+
+function BringUp(var Cfg: TBigCfg; var Len: Word;
+                 var Why: ShortString): Integer;
+var R: Integer;
+begin
+  Why := '';
+  Stage('chip');
+  if not ChipThere then
+  begin
+    BringUp := BU_NO_CHIP;
+    Exit;
+  end;
+
+  Stage('enumerate');
+  R := BusUp;
+  if R <> BU_OK then
+  begin
+    BringUp := R;
+    Exit;
+  end;
+
+  { SET_RETRY 00: A NAK MUST COME STRAIGHT BACK.
+
+    This is the line whose absence froze DAKEYS on the real machine, and
+    every other polling tool in this collection has it -- chdiag, kbdraw
+    and usbpoll all call it immediately before their poll loop, and
+    usbpoll's comment says why in one sentence: an idle device would
+    otherwise block the poll for as long as it stayed idle.
+
+    BusUp sets SET_RETRY 8F -- retry NAKs indefinitely -- because that is
+    right for ENUMERATION, where a device that is still waking up should
+    be waited for rather than given up on. It is exactly wrong afterwards.
+    An interrupt endpoint with no news NAKs by design, and with infinite
+    retry armed the chip keeps retrying it and never raises the interrupt
+    the driver is waiting for. WaitInt gives up on its own count, the
+    caller loops and issues another token at a chip still grinding on the
+    last one, and the chip stops answering anything -- including
+    CHECK_EXIST, which is where "no CH375 at 0260" on a fitted card comes
+    from.
+
+    Undone HERE, at the end of the bring-up that armed it, rather than in
+    each tool: putting it next to the poll loop is what let the one tool
+    without a poll loop -- and then the one with a poll loop nobody
+    remembered -- get it wrong. Cleaning it up in an ExitProc, which is
+    what this project did first, is far too late: by then the damage is
+    done and the machine is already wedged. }
+  SetRetry($00);
+
+  Stage('descriptors');
+  if not GetConfigFull(Cfg, Len, Why) then
+  begin
+    BringUp := BU_NO_CONFIG;
+    Exit;
+  end;
+
+  { A device answers class requests on an interface only once it has been
+    configured. BusUp stops short of that -- it is a bring-up, not a
+    driver -- so a tool that skips this gets a stall from every request
+    and no hint as to why. }
+  Stage('set config');
+  R := SetConfig(Cfg[5]);
+  if R <> INT_SUCCESS then
+  begin
+    Why := 'SET_CONFIGURATION ' + StatusName(R);
+    BringUp := BU_NO_CONFIG;
+    Exit;
+  end;
+
+  Stage('ready');
+  BringUp := BU_OK;
 end;
 
 end.

@@ -56,7 +56,7 @@ program daiso;
 uses ch375, chtool, daudio;
 
 const
-  VER = '1.0.0';
+  VER = '1.0.1';
   RT_SET_IF = $01;              { host->device, standard, interface }
 
 var
@@ -242,28 +242,13 @@ begin
   WriteLn('I/O base ', Hex4(Base), 'h');
 
   ExitProc := @CleanUp;
-  if not ChipThere then
-  begin
-    WriteLn(BusUpReason(BU_NO_CHIP));
-    Halt(BU_NO_CHIP);
-  end;
-  Rc := BusUp;
+  Rc := BringUp(Big, BigLen, Why);
   if Rc <> BU_OK then
   begin
     WriteLn(BusUpReason(Rc));
+    if Why <> '' then WriteLn('  ', Why);
     if Rc >= BU_NOTHING then WhyNoAnswer;
     Halt(Rc);
-  end;
-  if not GetConfigFull(Big, BigLen, Why) then
-  begin
-    WriteLn('  ', Why);
-    Halt(5);
-  end;
-  Rc := SetConfig(Big[5]);
-  if Rc <> INT_SUCCESS then
-  begin
-    WriteLn('  SET_CONFIGURATION -> ', StatusName(Rc));
-    Halt(5);
   end;
 
   FindIso;

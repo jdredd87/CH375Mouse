@@ -89,7 +89,7 @@ program daprobe;
 uses ch375, chtool, daudio;
 
 const
-  VER = '1.0.0';
+  VER = '1.0.1';
 
   { Audio Class 1.0, from the spec's Appendix A. }
   AC_SUBCLASS   = $01;          { bInterfaceSubClass: AudioControl }
@@ -595,34 +595,13 @@ begin
   WriteLn;
 
   ExitProc := @Quieten;
-  if not ChipThere then
-  begin
-    WriteLn(BusUpReason(BU_NO_CHIP));
-    Halt(BU_NO_CHIP);
-  end;
-
-  Rc := BusUp;
+  Rc := BringUp(Big, BigLen, Why);
   if Rc <> BU_OK then
   begin
     WriteLn(BusUpReason(Rc));
+    if Why <> '' then WriteLn('  ', Why);
     if Rc >= BU_NOTHING then WhyNoAnswer;
     Halt(Rc);
-  end;
-
-  VID := DevDesc[8] or (Word(DevDesc[9]) shl 8);
-  PID := DevDesc[10] or (Word(DevDesc[11]) shl 8);
-
-  Fld('chip', 'CH375 rev ' + Hex2(IcVer));
-  Fld('ep0 max', Dec1(Ep0Max) + ' bytes');
-  Fld('device', Hex4(VID) + ':' + Hex4(PID));
-  { Two fetches, the same way USBINFO does it: nine bytes for wTotalLength,
-    then exactly that many. Asking for a fixed large number in one go works
-    on most devices and hangs a few, which is not worth one saved round
-    trip on a bus this slow. }
-  if not GetConfigFull(Big, BigLen, Why) then
-  begin
-    WriteLn('  ', Why);
-    Halt(5);
   end;
 
   WriteLn;

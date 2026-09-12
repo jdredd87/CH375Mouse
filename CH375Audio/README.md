@@ -8,6 +8,13 @@ speaker's mixer and its buttons are both reachable, so DOS can set the volume,
 mute it, and watch somebody press play — it simply cannot be the thing that
 feeds it audio.
 
+A note on the last of those: the speaker this was developed against turned out
+to have **no buttons at all**, just an analogue volume knob. The HID interface
+and its report descriptor are real and decode correctly — the Jieli firmware
+advertises the buttons its chip could have — but this enclosure wires none of
+them, so the press path is written and unexercised. `DAKEYS` and the table at
+the bottom of this file both say so plainly.
+
 If you want a DOS machine to make noise, the PC speaker and an AdLib/OPL2 are
 still the answer. This project is about what a USB audio device can be *used
 for* on hardware that cannot stream to it.
@@ -20,7 +27,7 @@ for* on hardware that cannot stream to it.
 |---|---|
 | Read the device out | **works** — `DAPROBE` |
 | Volume and mute | **works** — `DAVOL`, over control transfers |
-| The speaker's buttons | **works** — `DAKEYS`, over an interrupt endpoint |
+| The speaker's buttons | **works** — `DAKEYS`, over an interrupt endpoint. The unit tested has none wired, so the press path is untested; see below |
 | Playing audio | **impossible** — `DAISO` measures why |
 
 Tested against a Jieli Technology `UACDemoV1.0` (`4C4A:4155`), a common cheap
@@ -120,6 +127,7 @@ DAVOL [/P=260] [/U=n] [/C=n] [actions...] [/T]
   /V=pct      volume as a percentage of the device's own min..max
   /DB=n       volume in dB, negatives allowed
   /W=secs     wait      /RAMP  sweep      /R  re-read
+  /WATCH=secs poll the mixer and report anything that moves
 ```
 
 Actions run **left to right**, so a command line is a little script:
@@ -244,17 +252,33 @@ Being explicit, because "it compiled" is not evidence:
 | Volume write | **verified** — set to 100% and 0%, read back as −0.9 and −28.3 dB |
 | Mute / toggle | **verified** — set, read back ON, toggled, read back off |
 | Button *map* | **verified** — decoded from the device's report descriptor |
-| Button *press* | **not observed.** The poll loop runs and the endpoint NAKs cleanly, but nobody has pressed a button on this speaker while `DAKEYS` was watching |
+| Button *press* | **cannot be tested on this unit — it has no buttons.** Just a volume knob, and a 40 s `DAVOL /WATCH` saw the mixer never move, so that knob is analogue: it moves the amplifier and the USB side never hears about it. The HID interface is real and its report descriptor decodes correctly; the Jieli firmware advertises the buttons its chip *could* have, and this enclosure wires none of them |
 | Playback | **verified impossible** — 0 of 100 packets accepted |
 
-The button-press path is the one gap. `DAKEYS` says so itself rather than
-implying that silence means the hardware is fine:
+The button-press path is the one gap, and it is the *device* that closes it
+rather than the tool: this speaker has no buttons. `DAKEYS` says so carefully
+rather than implying that silence means the hardware is fine:
 
 ```
   no button was pressed.
   Nothing here can tell that apart from a device that does not
   report, so this is not by itself evidence of a fault.
 ```
+
+`DAVOL /WATCH=secs` is the other half of that question, and it needs no HID
+interface at all: it polls `GET_CUR` and reports anything that moves. A knob
+that is a digital encoder moves the Feature Unit and shows up; an analogue one
+never reaches USB. On this unit, nothing moved.
+
+### One thing worth knowing before buying a speaker to test with
+
+**This speaker will never make a sound on this machine**, and that is not a
+limitation of these tools — its only input is USB, and USB audio cannot be
+streamed from a CH375. Controlling its volume works, and it is the volume of
+silence. Another USB speaker will behave the same way; the three walls are
+properties of the *host*, not of the device. A speaker with a 3.5 mm input is
+a different matter: feed it from the PC's own sound hardware and `DAVOL` then
+controls something audible.
 
 ---
 

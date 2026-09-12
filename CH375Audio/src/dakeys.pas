@@ -61,7 +61,7 @@ program dakeys;
 uses ch375, chtool, daudio;
 
 const
-  VER = '1.0.0';
+  VER = '1.0.1';
   CLASS_HID = $03;
   MAXUSE    = 64;
 
@@ -290,24 +290,49 @@ var
   Got    : Byte;
   R      : Integer;
   Prev   : array[0..7] of Byte;
-  Deadline, T0: LongInt;
+  T0, Elapsed: LongInt;
+  Spins  : LongInt;
   B, K   : Integer;
   Now, Was: Byte;
   Changed: Boolean;
   Any    : Boolean;
 begin
-  Tog := 0;
+  { $80, not 0 -- chdiag, kbdraw and usbpoll all start the toggle here and
+    they are the tools that work. }
+  Tog := $80;
   Any := False;
   for K := 0 to 7 do Prev[K] := 0;
   T0 := Ticks;
-  Deadline := T0 + LongInt(Secs) * 18;
   WriteLn;
   WriteLn('  watching for ', Secs, 's -- press the speaker''s buttons.');
   WriteLn('  (a key on the DOS keyboard stops early)');
   WriteLn;
 
-  while (Ticks < Deadline) and (Ticks >= T0) do
+  { Elapsed, with the BIOS counter's midnight wrap RESET rather than
+    treated as "time is up" -- the way every other poll loop here does it.
+    Spins is a second, independent bound: if the tick counter ever stops
+    advancing, a purely time-based loop never ends, and "the machine is
+    frozen" is exactly the report this is being fixed for. }
+  { Drain anything already in the BIOS keyboard buffer BEFORE watching.
+
+    A keystroke left over from the command line -- or from whatever ran
+    before -- makes the very first KeyWaiting true, so the loop announces
+    that it stopped at the keyboard and exits before it has looked at
+    anything once. That is indistinguishable from a watch that ran and saw
+    nothing, which is the one answer this is meant to produce. }
+  while KeyWaiting do EatKey;
+  Spins := 0;
+  while True do
   begin
+    Elapsed := Ticks - T0;
+    if Elapsed < 0 then begin T0 := Ticks; Elapsed := 0; end;
+    if Elapsed >= LongInt(Secs) * 182 div 10 then Break;
+    Inc(Spins);
+    if Spins > 400000 then
+    begin
+      WriteLn('  stopping: ', Spins, ' polls without the clock advancing.');
+      Break;
+    end;
     if KeyWaiting then
     begin
       EatKey;
@@ -405,30 +430,13 @@ begin
   WriteLn('I/O base ', Hex4(Base), 'h');
 
   ExitProc := @Quieten;
-  if not ChipThere then
-  begin
-    WriteLn(BusUpReason(BU_NO_CHIP));
-    Halt(BU_NO_CHIP);
-  end;
-  Rc := BusUp;
+  Rc := BringUp(Big, BigLen, Why);
   if Rc <> BU_OK then
   begin
     WriteLn(BusUpReason(Rc));
+    if Why <> '' then WriteLn('  ', Why);
     if Rc >= BU_NOTHING then WhyNoAnswer;
     Halt(Rc);
-  end;
-
-  if not GetConfigFull(Big, BigLen, Why) then
-  begin
-    WriteLn('  ', Why);
-    Halt(5);
-  end;
-
-  Rc := SetConfig(Big[5]);
-  if Rc <> INT_SUCCESS then
-  begin
-    WriteLn('  SET_CONFIGURATION ', Big[5], ' -> ', StatusName(Rc));
-    Halt(5);
   end;
 
   FindHid;

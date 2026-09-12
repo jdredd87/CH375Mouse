@@ -5,6 +5,66 @@ CH375Audio -- StevenC -- https://github.com/jdredd87/CH375USBTools
 The version lives in the `VER` constant of each tool in `src/`. A release
 is: bump it, add an entry here, `build.cmd`, commit, `git tag -a`.
 
+## 1.0.1 -- 2026-09-12
+
+**A freeze, and the one line that caused it.** `DAKEYS` run at the keyboard
+locked the machine after the banner and needed a power cycle. The cause is
+in this project, not in the CH375 layer, and every other polling tool in the
+collection already guards against it:
+
+`BusUp` arms `SET_RETRY 8F` -- retry NAKs indefinitely -- which is correct
+for **enumeration**, where a device still waking up should be waited for. It
+is exactly wrong afterwards. An interrupt endpoint with no news NAKs by
+design, so with infinite retry still armed the chip retries it forever and
+never raises the interrupt the driver waits on; `WaitInt` gives up on its own
+count, the loop fires another token at a chip still grinding on the last one,
+and the chip stops answering anything at all -- including `CHECK_EXIST`,
+which is where "no CH375 at 0260" on a fitted card comes from. That wedge had
+already been seen once during development and was misdiagnosed as a stranded
+token on exit.
+
+`chdiag`, `kbdraw` and `usbpoll` all call `SetRetry($00)` immediately before
+their poll loop, and `usbpoll` states the reason in one sentence: *an idle
+device would otherwise block the poll for as long as it stayed idle.*
+`DAKEYS` called it only from its `ExitProc`, which is far too late -- by then
+the machine is already wedged.
+
+Fixed by moving the whole bring-up into `daudio.BringUp`, which ends with
+`SetRetry($00)`, so no tool here can arm infinite retry and then poll. Five
+consecutive `DAKEYS` runs with no wedge.
+
+Three other things came out of the same report:
+
+* **The toggle now starts at `$80`**, matching every working polling tool in
+  the collection rather than 0.
+* **The watch loops are bounded by a spin count as well as by the clock.** A
+  loop that can only end when the tick counter advances never ends if the
+  tick counter stops -- which is precisely the "machine is frozen" case being
+  fixed.
+* **Stale keystrokes are drained before watching.** A key left in the BIOS
+  buffer made the first `KeyWaiting` true, so the watch announced that it had
+  stopped at the keyboard and exited before looking at anything once --
+  indistinguishable from a watch that ran and saw nothing, which is the one
+  answer it exists to produce. It happened on the first real knob test.
+
+**Stage breadcrumbs on stderr.** Everything between the banner and the first
+output was silent USB work, which broke this project's own rule that a
+program taking more than a moment must prove it is alive. `BringUp` now names
+each stage (`chip`, `enumerate`, `descriptors`, `set config`, `ready`) on
+handle 2 -- which DOS 6.22 cannot redirect, so it reaches the real screen even
+while the bridge captures stdout. A recurrence now names the stage instead of
+being a mystery.
+
+**`DAVOL /WATCH=secs`** added: poll the mixer and report anything that moves.
+It answers a question `DAKEYS` cannot when a device has no buttons -- whether
+a volume knob is a digital encoder (it moves the Feature Unit and USB sees it)
+or analogue (it moves the amplifier and USB never hears about it). On the
+speaker tested, 40 seconds saw nothing move.
+
+**The test device has no buttons.** Just a knob. The HID interface decodes
+correctly and the press path is written, but it cannot be exercised on this
+hardware, and the README now says that rather than leaving it as an open gap.
+
 ## 1.0.0 -- 2026-09-12
 
 First release. Four tools for USB Audio Class devices over a CH375, and a

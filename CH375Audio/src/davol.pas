@@ -68,7 +68,7 @@ program davol;
 uses ch375, chtool, daudio;
 
 const
-  VER = '1.0.0';
+  VER = '1.0.1';
 
   CS_INTERFACE  = $24;
   AC_SUBCLASS   = $01;
@@ -448,6 +448,97 @@ begin
     WriteLn('  nothing accepted a volume (does any channel claim it?)');
 end;
 
+{ Poll the mixer and report anything that moves.
+
+  This exists because the speaker tested here turned out to have no
+  buttons at all -- just a volume knob -- so DAKEYS has nothing to watch on
+  it. A knob is either analogue (it moves the amplifier and USB never hears
+  about it) or a digital encoder (it moves the Feature Unit, and the host
+  can see it). Reading GET_CUR in a loop tells the two apart without
+  needing the HID interface at all, and it is the only way to find out
+  short of opening the case.
+
+  Bounded by a spin count as well as by the clock, for the same reason
+  DAKEYS is: a loop that can only end when the tick counter advances never
+  ends if the tick counter stops. }
+procedure WatchMixer(Secs: Integer);
+var
+  C, V, M: Integer;
+  LastV, LastM: array[0..8] of Integer;
+  T0, Elapsed, Spins: LongInt;
+  F, Shown: Integer;
+begin
+  if UseFu < 0 then Exit;
+  F := UseFu;
+  for C := 0 to 8 do begin LastV[C] := $7FFF; LastM[C] := -1; end;
+  WriteLn;
+  WriteLn('  watching unit ', Fu[F].Id, ' for ', Secs,
+          's -- turn the knob, press the buttons.');
+  WriteLn('  (a key on the DOS keyboard stops early)');
+  WriteLn;
+  { Drain anything already in the BIOS keyboard buffer BEFORE watching.
+
+    A keystroke left over from the command line -- or from whatever ran
+    before -- makes the very first KeyWaiting true, so the loop announces
+    that it stopped at the keyboard and exits before it has looked at
+    anything once. That is indistinguishable from a watch that ran and saw
+    nothing, which is the one answer this is meant to produce. }
+  while KeyWaiting do EatKey;
+  Shown := 0;
+  T0 := Ticks; Spins := 0;
+  while True do
+  begin
+    Elapsed := Ticks - T0;
+    if Elapsed < 0 then begin T0 := Ticks; Elapsed := 0; end;
+    if Elapsed >= LongInt(Secs) * 182 div 10 then Break;
+    Inc(Spins);
+    if Spins > 200000 then
+    begin
+      WriteLn('  stopping: the clock is not advancing.');
+      Break;
+    end;
+    if KeyWaiting then begin EatKey; WriteLn('  stopped.'); Break; end;
+
+    for C := 0 to Fu[F].Nch do
+    begin
+      if HasCtl(F, C, FU_VOLUME) then
+        if GetCtl(GET_CUR, FU_VOLUME, C, Fu[F].Id, 2, V) then
+          if V <> LastV[C] then
+          begin
+            if LastV[C] <> $7FFF then
+            begin
+              WriteLn('  ch ', C, ' volume now ', DbStr(V),
+                      '  (', Hex4(Word(V)), 'h)');
+              Inc(Shown);
+            end;
+            LastV[C] := V;
+          end;
+      if HasCtl(F, C, FU_MUTE) then
+        if GetCtl(GET_CUR, FU_MUTE, C, Fu[F].Id, 1, M) then
+          if M <> LastM[C] then
+          begin
+            if LastM[C] >= 0 then
+            begin
+              if M = 0 then WriteLn('  ch ', C, ' unmuted')
+                       else WriteLn('  ch ', C, ' MUTED');
+              Inc(Shown);
+            end;
+            LastM[C] := M;
+          end;
+    end;
+  end;
+  WriteLn;
+  if Shown = 0 then
+  begin
+    WriteLn('  nothing moved.');
+    WriteLn('  If the knob was turned during that, it is ANALOGUE: it');
+    WriteLn('  changes the amplifier and the USB side never hears about');
+    WriteLn('  it. That is not a fault, and nothing here can see it.');
+  end
+  else
+    WriteLn('  ', Shown, ' change(s) seen -- the control IS reported over USB.');
+end;
+
 { A sweep, so a change can be HEARD rather than only read back. The steps
   are coarse on purpose: each one is a pair of control transfers and the
   point is an audible staircase, not a smooth fade. }
@@ -483,6 +574,7 @@ begin
     WriteLn('    /V=pct  volume as a percent of the device''s own range');
     WriteLn('    /DB=n   volume in dB, negatives allowed');
     WriteLn('    /W=secs wait            /RAMP  sweep      /R  re-read');
+    WriteLn('    /WATCH=secs  poll the mixer and report anything that moves');
     WriteLn;
     WriteLn('  Actions run left to right, so:');
     WriteLn('    DAVOL /V=100 /W=2 /M=1 /W=2 /M=0');
@@ -509,35 +601,13 @@ begin
   WriteLn('I/O base ', Hex4(Base), 'h');
 
   ExitProc := @Quieten;
-  if not ChipThere then
-  begin
-    WriteLn(BusUpReason(BU_NO_CHIP));
-    Halt(BU_NO_CHIP);
-  end;
-  Rc := BusUp;
+  Rc := BringUp(Big, BigLen, Why);
   if Rc <> BU_OK then
   begin
     WriteLn(BusUpReason(Rc));
+    if Why <> '' then WriteLn('  ', Why);
     if Rc >= BU_NOTHING then WhyNoAnswer;
     Halt(Rc);
-  end;
-
-  if not GetConfigFull(Big, BigLen, Why) then
-  begin
-    WriteLn('  ', Why);
-    Halt(5);
-  end;
-
-  { A device answers class requests on an interface only once it has been
-    configured. BusUp stops short of that -- it is a bring-up, not a
-    driver -- so a tool that skips this gets a stall from every request
-    and no hint as to why. }
-  Rc := SetConfig(Big[5]);
-  if Rc <> INT_SUCCESS then
-  begin
-    WriteLn('  SET_CONFIGURATION ', Big[5], ' -> ', StatusName(Rc));
-    WriteLn('  class requests will not be answered; stopping here.');
-    Halt(5);
   end;
 
   ScanConfig;
@@ -592,6 +662,11 @@ begin
       if Pct < 0 then Pct := 0;
       if Pct > 100 then Pct := 100;
       DoVol(Pct, 0, False);
+    end
+    else if Copy(S, 1, 6) = 'WATCH=' then
+    begin
+      Acted := True;
+      WatchMixer(Integer(NumArg(S, 7)));
     end
     else if S[1] = 'W' then
     begin
