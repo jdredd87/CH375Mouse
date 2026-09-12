@@ -624,6 +624,7 @@ var
   B: Byte;
   St, I: Integer;
   G: Byte;
+  GotW: Word;
 begin
   if not ChipHere(Base) then begin BusUp := BU_NO_CHIP; Exit; end;
   ChipReset;
@@ -687,7 +688,35 @@ begin
 
   St := GetDescrQuick(DT_CONFIG, CfgDesc, SizeOf(CfgDesc), G);
   Say('  GET_DESCR config -> ' + StatusStr(St));
-  if St <> INT_SUCCESS then begin BusUp := BU_NO_CONFIG; Exit; end;
+
+  { The chip's GET_DESCR shortcut reads into the CHIP's own buffer, and
+    that buffer is 64 bytes.  A device whose configuration descriptor is
+    longer than that overflows it and reports 17 -- and this used to end
+    enumeration outright, which reads as "the device answered, then
+    stopped" and blames the device for a limit of ours.
+
+    It is not rare.  A USB-to-DVI adapter met here has one, and anything
+    with several interfaces or a long class-specific block will too.
+
+    So ask again as a real control transfer.  That is possible HERE and
+    was not possible earlier: the device descriptor has already come back
+    and told us Ep0Max, which is what CtrlIn needs in order to know when a
+    data stage has ended.  Nine bytes is all that is wanted at this point
+    -- bConfigurationValue and wTotalLength -- and callers fetch the whole
+    descriptor themselves once wTotalLength has told them how long it is. }
+  if St <> INT_SUCCESS then
+  begin
+    St := CtrlIn($80, REQ_GET_DESCR, Word(DT_CONFIG) shl 8, 0, 9,
+                 CfgDesc, SizeOf(CfgDesc), GotW);
+    Say('  config retried as a control transfer -> ' + StatusStr(St));
+    if (St = INT_SUCCESS) and (GotW >= 4) then
+      G := Byte(GotW)
+    else
+    begin
+      BusUp := BU_NO_CONFIG;
+      Exit;
+    end;
+  end;
   CfgLen := G;
   CfgWant := G;
   if G >= 4 then CfgWant := CfgDesc[2] or (Word(CfgDesc[3]) shl 8);

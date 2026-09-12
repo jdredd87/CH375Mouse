@@ -243,8 +243,16 @@ begin
       $0204: begin Note := 'pixel-clock limit, Hz'; ClkLimit := Val; end;
     end;
 
-    WriteLn('  key ', Hex4(Key), '  len ', Ln, '  ', Pad(Raw, 13),
-            '= ', Pad(Dec1(Val), 11), Note);
+    { Printed as hex when the top bit is set: these are unsigned fields
+      and Dec1 takes a LongInt, so key 0400 came out as -1073545215,
+      which is a plausible-looking number and the wrong one. }
+    if (Ln = 4) and (Val < 0) then
+      WriteLn('  key ', Hex4(Key), '  len ', Ln, '  ', Pad(Raw, 13),
+              '= ', Pad('$' + Hex4(Word(Val shr 16)) + Hex4(Word(Val)), 11),
+              Note)
+    else
+      WriteLn('  key ', Hex4(Key), '  len ', Ln, '  ', Pad(Raw, 13),
+              '= ', Pad(Dec1(Val), 11), Note);
     Inc(I, 3 + Ln);
   end;
 
@@ -283,8 +291,10 @@ begin
       DT_ENDPOINT:
         if L >= 6 then
         begin
-          if (Cfg[I + 3] and $03) = $02 then            { bulk }
-            if (Cfg[I + 2] and $80) = 0 then
+          { First bulk OUT wins -- see dl.pas.  A device with two of them
+            renders to the first. }
+          if (Cfg[I + 3] and $03) = $02 then
+            if ((Cfg[I + 2] and $80) = 0) and (EpBulk = 0) then
               EpBulk := Cfg[I + 2] and $0F;
           if (Cfg[I + 3] and $03) = $03 then            { interrupt }
             if (Cfg[I + 2] and $80) <> 0 then

@@ -80,7 +80,7 @@ const
     800x600 quite happily, so those stay the dependable choices; 848x480
     is the one worth trying for a native-aspect picture. DLPROBE's
     intersection will say whether a given monitor lists it. }
-  NDLMODES = 9;
+  NDLMODES = 10;
   DlModes: array[0..NDLMODES - 1] of TDlTiming = (
     (Name: '640x480@60';  XRes: 640; YRes: 480;
      LeftM: 48;  RightM: 16; HSync: 96;
@@ -146,7 +146,16 @@ const
       528 x 314 x 60 is 18.9 kHz of hsync. }
     (Name: '400x300@60 (half SVGA)'; XRes: 400; YRes: 300;
      LeftM: 44;  RightM: 20; HSync: 64;
-     UpperM: 11; LowerM: 1;  VSync: 2;  PixClk: 100502));
+     UpperM: 11; LowerM: 1;  VSync: 2;  PixClk: 100502),
+
+    { 1024x768@60 at 65 MHz -- out of reach of an adapter that caps its
+      pixel clock at 40 MHz, which is why it was not here before. The
+      USB-to-DVI part advertises NO clock limit at all and a 2,360,000
+      pixel area against 786,432 needed, so it is reachable there.
+      DLPROBE's adapter column is what says which. }
+    (Name: '1024x768@60'; XRes: 1024; YRes: 768;
+     LeftM: 160; RightM: 24; HSync: 136;
+     UpperM: 29; LowerM: 3;  VSync: 6;  PixClk: 15385));
 
 var
   DlEpBulk:  Byte = 0;
@@ -618,7 +627,11 @@ begin
   begin
     L := Cfg[I];
     if L < 2 then Break;
-    if (Cfg[I + 1] = DT_ENDPOINT) and (L >= 6) then
+    { The FIRST bulk OUT, not the last.  A device may offer more than
+      one -- the USB-to-DVI part here has both 01 and 0A -- and udlfb
+      renders to endpoint 1, so taking whichever came last picked the
+      wrong pipe and would have sent a command stream into silence. }
+    if (Cfg[I + 1] = DT_ENDPOINT) and (L >= 6) and (DlEpBulk = 0) then
       if ((Cfg[I + 3] and $03) = $02) and ((Cfg[I + 2] and $80) = 0) then
         DlEpBulk := Cfg[I + 2] and $0F;
     Inc(I, L);

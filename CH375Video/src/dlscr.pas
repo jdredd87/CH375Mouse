@@ -44,8 +44,8 @@ interface
 uses ch375, dl;
 
 const
-  SCR_MAXCOL = 106;           { 848 / 8, the widest mode here }
-  SCR_MAXROW = 37;            { 600 / 16 }
+  SCR_MAXCOL = 128;           { 1024 / 8, the widest mode here }
+  SCR_MAXROW = 48;            { 768 / 16 }
   GW = 8;
   GH = 16;
 

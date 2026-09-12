@@ -105,6 +105,52 @@ A modern panel will usually letterbox or stretch 640×480 and 800×600
 happily, so those stay the dependable choices; 848×480 is the one worth
 trying for a native-aspect picture.
 
+## A second adapter, and what it took
+
+A **USB-to-DVI** part was tried next: also DisplayLink, `17E9:028F`,
+"AN2440D3". It did not work at first, and the reason was ours.
+
+```
+GET_DESCR device  -> 14  success
+SET_ADDRESS       -> 14  success
+GET_DESCR config  -> 17  buffer overflow
+the device answered, then stopped
+```
+
+**The CH375's `GET_DESCR` shortcut reads into the chip's own 64-byte
+buffer**, and this adapter's configuration descriptor is 73 bytes. So
+enumeration ended with a message blaming the device for a limit of ours.
+`BusUp` now falls back to a real control transfer when the shortcut
+overflows — possible at that point and not earlier, because the device
+descriptor has already supplied `Ep0Max`. Nine bytes is all it needs
+there; callers fetch the rest once `wTotalLength` tells them how long it
+is. The fix is in the shared `ch375.pas`, so every CH375 project gets it.
+
+It also has **two** bulk OUT endpoints, `01` and `0A`. The endpoint scan
+kept whichever came last, which picked `0A` — `udlfb` renders to endpoint
+1, so a command stream would have gone into the wrong pipe. First bulk
+OUT wins now.
+
+| | VGA adapter `0058` | DVI adapter `028F` |
+|---|---|---|
+| capability descriptor | 30 bytes | 34 bytes |
+| pixel-area limit | 1,500,000 | **2,360,000** |
+| pixel-clock limit | 39,999,999 Hz | **not advertised** |
+| bulk OUT endpoints | 1 | 2 |
+| config descriptor | 62 bytes | **73** — over the shortcut |
+
+![1024x768 on the DVI adapter](doc/hires.png)
+
+*1024×768, 128×48 cells — **65 MHz**, so flatly out of reach of the VGA
+adapter's 40 MHz cap, and reachable here because this part advertises no
+clock limit at all. The panels are laid out for 80 columns, which is why
+they do not fill the width; that is layout, not capability.*
+
+Everything else worked unchanged: the same command stream, the same LFSR
+mode registers, the same RLE encoder, the same dashboard. Which is the
+useful result — the protocol work generalises across DisplayLink parts,
+and what did not generalise was two assumptions in this code.
+
 ## The monitor, and why the intersection is the answer
 
 `DLPROBE` reads the attached monitor's EDID **through** the adapter and
