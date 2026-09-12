@@ -99,12 +99,28 @@ reset it out from under each other.
 | a mouse, and you want Windows 3.x | `USBMOUSE /W` or `USBCOMBO /W` |
 | a USB Ethernet adapter | `USBPKT.COM` — see CH375Net |
 | a USB display adapter | nothing resident; the CH375Video tools drive it directly |
+| a USB speaker or headset | nothing resident; the CH375Audio tools set its volume and read its buttons. It cannot be played through — see below |
 | no idea what you have | `USBINFO` first — it drives nothing |
 
 A **display** adapter is the odd one out: there is no resident driver for
 it and no `INT` to hook, because DOS has no notion of a second screen. The
 CH375Video tools open the adapter, draw, and close — see
 [CH375Video/README.md](CH375Video/README.md).
+
+An **audio** device is the odd one out in the other direction: it is
+beautifully described by its own descriptors and still cannot be driven.
+Audio is a continuous isochronous stream — 192-byte packets, one every
+millisecond, 192 KB/s, with no framebuffer to hide behind — against about
+19 KB/s available and a chip that has no isochronous mode. What *is*
+reachable is everything that is not the stream: volume and mute over
+control transfers, and the transport buttons over an interrupt endpoint.
+See [CH375Audio/README.md](CH375Audio/README.md).
+
+The rule that generalises, and the one to apply before attempting any new
+class on this bus: **ask whether the device can buffer.** A device that
+holds state you update is reachable from a slow host however exotic its
+protocol; a device that must be fed continuously at line rate is not,
+however well documented it is.
 
 ---
 

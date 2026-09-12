@@ -30,6 +30,7 @@ which is rather the point.
 | **[CH375Combo](CH375Combo/)** | `USBCOMBO.COM`, both of the above in one image, for a **USB-to-PS/2 adapter** — one USB device with a keyboard interface and a mouse interface on it. About 5.3 KB resident |
 | **[CH375Net](CH375Net/)** | **1.0.0 — it is on the internet.** `USBPKT.COM`, a Crynwr packet driver for a USB Ethernet adapter. One command, like `NE2000.COM`. Pings 8.8.8.8, resolves DNS, fetches web pages, telnets to a BBS, and has moved 10 MB byte-exact. [INSTALL.md](CH375Net/INSTALL.md) · [ADAPTERS.md](CH375Net/ADAPTERS.md) |
 | **[CH375Video](CH375Video/)** | **A second screen over USB.** Eight tools driving a **DisplayLink** USB-to-VGA/DVI adapter: a text console, a colour dashboard with gauges, a 3D wireframe cube, Conway's Life, a Mandelbrot, and a BMP loader that scales to fit. 640×480 to 1280×1024. Every screenshot in its README is a photograph of the real output |
+| **[CH375Audio](CH375Audio/)** | **A USB speaker as a mixer and a button panel.** Four tools for USB Audio Class devices: decode the topology, set volume and mute over control transfers, and read the transport buttons off the HID interface. **Playing audio is impossible** and the project measures why rather than asserting it — the stream is isochronous, wants 192-byte packets, and needs 192 KB/s against 19 KB/s measured |
 
 Each project has its own `README.md`, `CHANGELOG.md`, `build.cmd` and
 `bin\`. The binaries are committed deliberately: the machine this targets
@@ -44,6 +45,7 @@ they actually want.
 | USB keyboard | **yes**, BIOS buffer | **no** | **untested** |
 | USB Ethernet | **yes**, packet driver at INT 65h | n/a | **untested** |
 | USB display | **yes**, DisplayLink only — see below | no | **untested** |
+| USB audio | **mixer and buttons yes; playback no** — see below | no | **untested** |
 | USB storage, hubs | no — out of scope | no | no |
 
 ### A USB display works, but only if the chip has a framebuffer
@@ -66,6 +68,32 @@ here.** Its speed is precisely what let its designers dispense with the
 framebuffer. **If you want HDMI, buy a DisplayLink USB-to-DVI adapter and a
 passive DVI-to-HDMI converter** — DVI-D and HDMI carry the same signalling,
 and that is the tested configuration.
+
+### USB audio: the controls work, the sound does not
+
+`CH375Audio` is the same lesson arriving from the opposite direction, and it
+is worth reading together with the display case above.
+
+USB Audio Class is *superbly* documented — the device describes its whole
+topology in standard descriptors, so one decoder handles every speaker ever
+made. It does not help. Audio is a continuous real-time stream with no
+framebuffer to hide behind, and three separate walls each end it on their own:
+the endpoint is **isochronous** (no handshake, which is the one thing a CH375's
+transfer engine always waits for), it wants **192-byte packets** (the chip
+transmits from a 64-byte buffer), and it wants **192,000 bytes/second** on a
+hard 1 ms deadline (against 19,055 measured). `DAISO /GO` arms the stream and
+tries anyway: 0 of 100 packets accepted.
+
+But the *controls* are not on the stream. Volume and mute live on a Feature
+Unit reached by ordinary **control transfers**, and the transport buttons live
+on a separate HID interface with an **interrupt** endpoint — both of which the
+CH375 does well. So a DOS machine can set the volume of a USB speaker, mute it,
+and watch somebody press play; it just cannot be the thing feeding it.
+
+**The general rule for anything else attempted on this bus: ask whether the
+device can buffer.** A device that holds state you update is reachable from a
+slow host, however exotic its protocol. A device that must be fed continuously
+at line rate is not, however well documented it is.
 
 Two limits are worth knowing before you start. Neither is a missing feature,
 and neither can be fixed in software — both are facts about the Model 30, and
