@@ -201,6 +201,32 @@ function  DlRleRun(Addr: LongInt; P: PWord; NPix: Word): Boolean;
 { Address of a pixel, for callers building their own runs. }
 function  DlAddr(const T: TDlTiming; X, Y: Word): LongInt;
 
+{ ---- a mode the MONITOR asked for, rather than one of ours ----
+
+  DlModes above is a table of standard timings, and a table can only ever
+  contain what somebody thought to put in it. A display states its own
+  preferred timing in its EDID, in full -- pixel clock, actives, blanking,
+  sync offsets and widths -- which is everything TDlTiming needs.
+
+  So this builds a mode from an EDID detailed timing descriptor. Blk is 0
+  to 3; block 0 is by definition the monitor's PREFERRED mode.
+
+  The porches have to be derived rather than read, and that is the only
+  subtle part. EDID gives total blanking, the sync OFFSET (which is the
+  front porch) and the sync WIDTH; the back porch is what is left:
+
+      front porch = sync offset
+      sync        = sync pulse width
+      back porch  = blanking - offset - width
+
+  Getting that subtraction backwards shifts the picture sideways and still
+  syncs, which is the kind of wrong that looks like a monitor needing its
+  auto-adjust. False is returned for a block that is not a timing at all
+  (pixel clock zero means it is a text or range descriptor) or one whose
+  numbers do not add up. }
+function  DlTimingFromEdid(const Edid; Blk: Integer;
+                           var T: TDlTiming): Boolean;
+
 { ---- proving the machine is alive, and letting somebody out ----
 
   CLAUDE.md's rule, and every tool here broke it: a program that runs for
@@ -342,6 +368,64 @@ end;
 function DlAddr(const T: TDlTiming; X, Y: Word): LongInt;
 begin
   DlAddr := (LongInt(Y) * T.XRes + X) * 2;
+end;
+
+{ EDID detailed timing descriptors are 18 bytes each, starting at 54. }
+function DlTimingFromEdid(const Edid; Blk: Integer;
+                          var T: TDlTiming): Boolean;
+var
+  E: PByte;
+  O: Integer;
+  Clk: LongInt;
+  HA, HB, VA, VB: Word;
+  HFp, HSy, VFp, VSy: Word;
+  Up: Byte;
+  S: ShortString;
+begin
+  DlTimingFromEdid := False;
+  if (Blk < 0) or (Blk > 3) then Exit;
+  E := @Edid;
+  O := 54 + Blk * 18;
+
+  Clk := LongInt(E[O]) or (LongInt(E[O + 1]) shl 8);
+  if Clk = 0 then Exit;                 { a text or range block, not timing }
+
+  HA := E[O + 2] or ((Word(E[O + 4] and $F0)) shl 4);
+  HB := E[O + 3] or ((Word(E[O + 4] and $0F)) shl 8);
+  VA := E[O + 5] or ((Word(E[O + 7] and $F0)) shl 4);
+  VB := E[O + 6] or ((Word(E[O + 7] and $0F)) shl 8);
+
+  Up  := E[O + 11];
+  HFp := E[O + 8] or ((Word(Up and $C0)) shl 2);
+  HSy := E[O + 9] or ((Word(Up and $30)) shl 4);
+  VFp := (E[O + 10] shr 4) or ((Word(Up and $0C)) shl 2);
+  VSy := (E[O + 10] and $0F) or ((Word(Up and $03)) shl 4);
+
+  { Everything has to add up, or the descriptor is not one we understand
+    and guessing at it would produce a mode that syncs and looks wrong. }
+  if (HA = 0) or (VA = 0) then Exit;
+  if HB <= HFp + HSy then Exit;
+  if VB <= VFp + VSy then Exit;
+  if HA > 2048 then Exit;
+  if VA > 1536 then Exit;
+
+  T.XRes   := HA;
+  T.YRes   := VA;
+  T.RightM := HFp;                      { front porch }
+  T.HSync  := HSy;
+  T.LeftM  := HB - HFp - HSy;           { back porch is the remainder }
+  T.LowerM := VFp;
+  T.VSync  := VSy;
+  T.UpperM := VB - VFp - VSy;
+
+  { EDID states the clock in units of 10 kHz; TDlTiming wants picoseconds
+    per pixel. }
+  T.PixClk := 100000000 div Clk;
+  if T.PixClk <= 0 then Exit;
+
+  Str(HA, S);      T.Name := S + 'x';
+  Str(VA, S);      T.Name := T.Name + S + ' (from EDID)';
+  DlTimingFromEdid := True;
 end;
 
 { ------------------------------------------------------------ the stream }

@@ -151,6 +151,47 @@ mode registers, the same RLE encoder, the same dashboard. Which is the
 useful result — the protocol work generalises across DisplayLink parts,
 and what did not generalise was two assumptions in this code.
 
+## A third adapter, which cannot work — and why that is architecture
+
+A **USB-to-HDMI** dongle was tried next. It is **not DisplayLink**:
+`1D5C:2000`, Fresco Logic, almost certainly an **FL2000/FL2000DX** paired
+with an ITE IT66121 HDMI transmitter. Class `10` (audio/video), three
+interfaces, a 232-byte configuration descriptor — which is another device
+that only enumerates at all because of the control-transfer fallback added
+for the DVI adapter.
+
+It cannot be driven here, and the reason is worth writing down because it
+is the mirror image of what made DisplayLink work:
+
+| | DisplayLink | **FL2000** |
+|---|---|---|
+| framebuffer in the chip | yes | **none** |
+| pixel data | **compressed** command stream | **raw** |
+| delivery | send a change once, it holds | **streamed continuously at the pixel clock** |
+
+FL2000 is a bridge from USB to parallel RGB. There is nothing in it to
+hold a picture between frames, so the whole frame must arrive raw and
+keep arriving. 640×480 at 16bpp and 60 Hz is **36.9 MB/s**; this path
+measures **19 KB/s**. Short by about **1,900×** — and still **25×** short
+of what full-speed USB could carry at its theoretical best. There is no
+slow path to fall back on, because a slow path implies something holding
+the image, and nothing does.
+
+(Confirmed from the reverse-engineered Linux driver rather than guessed:
+pixel data is "raw, uncompressed framebuffer data streamed continuously
+at video rate", triple-buffered, on endpoint 1 bulk OUT.)
+
+**So `DLPROBE` now names the family and gives the reason.** "Not a
+DisplayLink device" is true and useless — it leaves somebody holding a
+dongle unsure whether they have the wrong tool or the wrong hardware.
+Both `DLPROBE` and `DLTEST` refuse it before sending a single byte, which
+is the "identify first, separately" split earning its keep.
+
+**What this means for buying one:** the adapter has to have a framebuffer
+and a compressed protocol. DisplayLink does; Fresco Logic does not. A
+USB 3.0 dongle is not automatically better here — FL2000 is the newer,
+faster chip and it is the one that cannot work.
+
 ## The monitor, and why the intersection is the answer
 
 `DLPROBE` reads the attached monitor's EDID **through** the adapter and
