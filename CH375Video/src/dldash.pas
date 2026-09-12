@@ -384,7 +384,6 @@ begin
     Vel[I] := Integer(Rnd(7)) - 3;
   end;
   for I := 0 to MAXLOG - 1 do Logs[I] := '';
-  AddLog('boot  dlscr up, ROM font located');
 
   { Breadcrumbs across the whole start-up, because this is the span that
     freezes and nothing about it reaches the screen: the banner is the
@@ -434,6 +433,12 @@ begin
   LogN := LogH - 2;
   if LogN < 1 then LogN := 1;
   if LogN > MAXLOG then LogN := MAXLOG;
+
+  { AFTER the layout is sized, not before.  AddLog puts a line at
+    Logs[LogN-1], so anything logged while LogN was still its default of 6
+    lands in slot 5 and stays there -- which showed up as a gap between
+    the boot line and everything after it. }
+  AddLog('boot  dlscr up, ROM font located');
 
   ScrAssumeCleared(clBlack or (clBlack shl 4));
   DlMark('ScrInit: ok, ' + Dec1(ScrCols) + 'x' + Dec1(ScrRows));
